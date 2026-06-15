@@ -8,15 +8,16 @@ use aionui_ai_agent::{
     AcpSessionSyncService, AcpSkillManager, ActiveLeaseRegistry, AgentFactoryDeps, AgentRegistry, IWorkerTaskManager,
     RuntimeTokenService, WorkerTaskManagerImpl, build_agent_factory,
 };
-use aionui_auth::{CookieConfig, JwtService, QrTokenStore, resolve_jwt_secret};
+use aionui_auth::{CookieConfig, JwtService, QrTokenStore, RsmAuthConfig, RsmOidcStateStore, resolve_jwt_secret};
 use aionui_common::OnConversationDelete;
 use aionui_conversation::{ConversationService, runtime_state::ConversationRuntimeStateService};
 use aionui_db::{
-    Database, IAcpSessionRepository, IAgentMetadataRepository, IConversationRepository, IMcpServerRepository,
-    IProjectStore, ISkillRepository, IUserRepository, SqliteAcpSessionRepository, SqliteAgentMetadataRepository,
-    SqliteAssistantDefinitionRepository, SqliteAssistantOverlayRepository, SqliteAssistantPreferenceRepository,
-    SqliteConversationRepository, SqliteMcpServerRepository, SqliteProjectStore, SqliteProviderRepository,
-    SqliteSkillRepository, SqliteUserRepository,
+    Database, IAcpSessionRepository, IAgentMetadataRepository, IConversationRepository, IIamRepository,
+    IMcpServerRepository, IProjectStore, ISkillRepository, IUserRepository, SqliteAcpSessionRepository,
+    SqliteAgentMetadataRepository, SqliteAssistantDefinitionRepository, SqliteAssistantOverlayRepository,
+    SqliteAssistantPreferenceRepository, SqliteConversationRepository, SqliteIamRepository,
+    SqliteMcpServerRepository, SqliteProjectStore, SqliteProviderRepository, SqliteSkillRepository,
+    SqliteUserRepository,
 };
 use aionui_project::ProjectService;
 use aionui_realtime::{BroadcastEventBus, WebSocketManager};
@@ -25,8 +26,12 @@ pub struct AppServices {
     pub database: Database,
     pub jwt_service: Arc<JwtService>,
     pub user_repo: Arc<dyn IUserRepository>,
+    pub iam_repo: Arc<dyn IIamRepository>,
     pub cookie_config: Arc<CookieConfig>,
     pub qr_token_store: Arc<QrTokenStore>,
+    pub rsm_auth_config: Arc<RsmAuthConfig>,
+    pub rsm_oidc_state_store: Arc<RsmOidcStateStore>,
+    pub http_client: reqwest::Client,
     pub ws_manager: Arc<WebSocketManager>,
     pub event_bus: Arc<BroadcastEventBus>,
     pub worker_task_manager: Arc<dyn IWorkerTaskManager>,
@@ -106,6 +111,7 @@ impl AppServices {
         let dump_prompts = config.dump_prompts;
         let app_version = config.app_version.clone();
         let user_repo: Arc<dyn IUserRepository> = Arc::new(SqliteUserRepository::new(database.pool().clone()));
+        let iam_repo: Arc<dyn IIamRepository> = Arc::new(SqliteIamRepository::new(database.pool().clone()));
 
         // Resolve JWT secret: env var → system user db field → random generation
         let env_secret = std::env::var("JWT_SECRET").ok();
@@ -281,8 +287,12 @@ impl AppServices {
             jwt_service: Arc::new(JwtService::new(secret.clone())),
             antigravity_hook_tokens,
             user_repo,
+            iam_repo,
             cookie_config: Arc::new(CookieConfig::from_env()),
             qr_token_store: Arc::new(QrTokenStore::new()),
+            rsm_auth_config: Arc::new(RsmAuthConfig::from_env()),
+            rsm_oidc_state_store: Arc::new(RsmOidcStateStore::new()),
+            http_client: reqwest::Client::new(),
             ws_manager: Arc::new(WebSocketManager::new()),
             event_bus,
             worker_task_manager,

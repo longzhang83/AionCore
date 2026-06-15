@@ -504,6 +504,7 @@ async fn authenticated_action_limit_uses_user_id_key() {
                     username: "admin".into(),
                     user_type: UserType::Local,
                     status: UserStatus::Active,
+                    is_admin: true,
                 });
                 Ok::<_, std::convert::Infallible>(next.run(request).await)
             },

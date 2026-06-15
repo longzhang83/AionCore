@@ -193,10 +193,14 @@ pub fn create_router_with_all_state(services: &AppServices, states: ModuleStates
             skill_paths: services.skill_paths.clone(),
             skill_repo: services.skill_repo.clone(),
         })),
+        iam_repo: services.iam_repo.clone(),
         cookie_config: services.cookie_config.clone(),
         qr_token_store: services.qr_token_store.clone(),
         identity_mode: auth_identity_mode(services.identity_mode),
         bootstrap_secret: services.bootstrap_secret.clone(),
+        rsm_auth_config: services.rsm_auth_config.clone(),
+        rsm_oidc_state_store: services.rsm_oidc_state_store.clone(),
+        http_client: services.http_client.clone(),
         session_revoked_hook: {
             let ws_manager = services.ws_manager.clone();
             let conversation_service = states.conversation.service.clone();

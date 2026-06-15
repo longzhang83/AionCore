@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Public user info returned in API responses.
 ///
@@ -7,6 +7,30 @@ use serde::{Deserialize, Serialize};
 pub struct PublicUser {
     pub id: String,
     pub username: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mobile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub departments: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_source: Option<String>,
+    pub source: String,
+    pub status: String,
+    pub is_admin: bool,
+}
+
+/// Public Auth Center login configuration for renderer clients.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AuthConfigResponse {
+    pub success: bool,
+    pub rsm_auth_enabled: bool,
+    pub rsm_auth_issuer: Option<String>,
+    pub rsm_auth_client_id: Option<String>,
+    pub rsm_auth_app_code: String,
+    pub local_login_enabled: bool,
 }
 
 /// Login request body for `POST /login`.
@@ -56,6 +80,146 @@ pub struct AuthStatusResponse {
     pub needs_setup: bool,
     pub user_count: u64,
     pub is_authenticated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct IamOrganizationSummary {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub name: String,
+    pub source: String,
+    pub external_id: Option<String>,
+    pub status: String,
+    pub sort: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct IamUserSummary {
+    pub id: String,
+    pub username: String,
+    pub display_name: Option<String>,
+    pub email: Option<String>,
+    pub mobile: Option<String>,
+    pub source: String,
+    pub status: String,
+    pub external_status: Option<String>,
+    pub is_admin: bool,
+    pub auth_provider: Option<String>,
+    pub auth_sub: Option<String>,
+    pub auth_source: Option<String>,
+    pub auth_app_code: Option<String>,
+    pub organizations: Vec<IamOrganizationSummary>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub last_login: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct IamDirectorySyncState {
+    pub app_code: String,
+    pub last_synced_at: Option<i64>,
+    pub last_full_synced_at: Option<i64>,
+    pub last_status: String,
+    pub last_message: Option<String>,
+    pub user_count: i64,
+    pub department_count: i64,
+    pub user_created: i64,
+    pub user_updated: i64,
+    pub user_disabled: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct IamDirectorySyncResult {
+    pub app_code: String,
+    pub full: bool,
+    pub user_count: i64,
+    pub department_count: i64,
+    pub user_created: i64,
+    pub user_updated: i64,
+    pub user_disabled: i64,
+    pub synced_at: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IamCreateUserRequest {
+    pub username: String,
+    pub display_name: Option<String>,
+    pub email: Option<String>,
+    pub mobile: Option<String>,
+    pub status: Option<String>,
+    pub is_admin: Option<bool>,
+    pub organization_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct IamCreateUserResponse {
+    pub user: IamUserSummary,
+    pub temporary_password: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IamUpdateUserRequest {
+    pub display_name: Option<String>,
+    pub email: Option<String>,
+    pub mobile: Option<String>,
+    pub status: Option<String>,
+    pub is_admin: Option<bool>,
+    pub organization_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct IamResetPasswordResponse {
+    pub temporary_password: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IamCreateOrganizationRequest {
+    pub parent_id: Option<String>,
+    pub name: String,
+    pub status: Option<String>,
+    pub sort: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IamUpdateOrganizationRequest {
+    #[serde(default)]
+    pub parent_id: NullableStringUpdate,
+    pub name: Option<String>,
+    pub status: Option<String>,
+    pub sort: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NullableStringUpdate {
+    Missing,
+    Null,
+    Value(String),
+}
+
+impl Default for NullableStringUpdate {
+    fn default() -> Self {
+        Self::Missing
+    }
+}
+
+impl<'de> Deserialize<'de> for NullableStringUpdate {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Option::<String>::deserialize(deserializer).map(|value| match value {
+            Some(value) => Self::Value(value),
+            None => Self::Null,
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IamDirectorySyncRequest {
+    pub full: Option<bool>,
 }
 
 /// Refresh token request body for `POST /api/auth/refresh`.
@@ -209,10 +373,19 @@ mod tests {
         let user = PublicUser {
             id: "auth_1712345678_abc".into(),
             username: "admin".into(),
+            display_name: None,
+            email: None,
+            mobile: None,
+            departments: None,
+            auth_source: None,
+            source: "local".into(),
+            status: "active".into(),
+            is_admin: true,
         };
         let json = serde_json::to_value(&user).unwrap();
         assert_eq!(json["id"], "auth_1712345678_abc");
         assert_eq!(json["username"], "admin");
+        assert_eq!(json["is_admin"], true);
     }
 
     #[test]
@@ -235,6 +408,14 @@ mod tests {
         let user = PublicUser {
             id: "user_1".into(),
             username: "admin".into(),
+            display_name: None,
+            email: None,
+            mobile: None,
+            departments: None,
+            auth_source: None,
+            source: "local".into(),
+            status: "active".into(),
+            is_admin: true,
         };
         let resp = LoginResponse::new(user.clone(), "jwt_token".into());
         assert!(resp.success);
@@ -249,6 +430,14 @@ mod tests {
             PublicUser {
                 id: "auth_123".into(),
                 username: "admin".into(),
+                display_name: None,
+                email: None,
+                mobile: None,
+                departments: None,
+                auth_source: None,
+                source: "local".into(),
+                status: "active".into(),
+                is_admin: true,
             },
             "eyJhbGciOi".into(),
         );

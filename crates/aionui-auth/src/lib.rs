@@ -1,6 +1,7 @@
 #![warn(clippy::disallowed_types)]
 
 //! JWT authentication, password hashing, CSRF protection, rate limiting, and auth middleware.
+mod auth_center_client;
 mod cookie;
 mod csrf;
 mod error;
@@ -58,6 +59,13 @@ pub use middleware::{
 
 // QR token store
 pub use qr_token::QrTokenStore;
+
+// RSM Auth Center protocol client
+pub use auth_center_client::{
+    AUTH_CENTER_PROVIDER, AuthCenterLoginIdentity, AuthCenterProtocolClient, DirectoryDepartment, DirectoryUser,
+    RsmAuthConfig, RsmOidcCallbackQuery, RsmOidcLoginQuery, RsmOidcStateStore, directory_status_to_local_status,
+    sanitize_username, timestamp_rfc3339_to_ms,
+};
 
 // Routes
 pub use routes::{AuthRouterState, SessionRevokedHook, auth_routes};

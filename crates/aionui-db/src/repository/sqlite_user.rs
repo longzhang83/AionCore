@@ -81,8 +81,8 @@ impl IUserRepository for SqliteUserRepository {
         let now = aionui_common::now_ms();
 
         sqlx::query(
-            "INSERT INTO users (id, user_type, username, password_hash, status, session_generation, created_at, updated_at) \
-             VALUES (?, 'local', ?, ?, 'active', 0, ?, ?)",
+            "INSERT INTO users (id, user_type, username, password_hash, source, status, is_admin, session_generation, created_at, updated_at) \
+             VALUES (?, 'local', ?, ?, 'local', 'active', 0, 0, ?, ?)",
         )
         .bind(&id)
         .bind(username)
@@ -105,6 +105,17 @@ impl IUserRepository for SqliteUserRepository {
             username: Some(username.to_string()),
             email: None,
             password_hash: Some(password_hash.to_string()),
+            auth_sub: None,
+            auth_provider: None,
+            display_name: None,
+            mobile: None,
+            department_ids: None,
+            auth_source: None,
+            auth_app_code: None,
+            source: "local".to_string(),
+            external_status: None,
+            is_admin: 0,
+            external_updated_at: None,
             avatar_path: None,
             jwt_secret: None,
             status: UserStatus::Active,

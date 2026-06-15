@@ -1,28 +1,41 @@
 #![allow(clippy::disallowed_types)]
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{Json, Path, State};
+use axum::extract::{Json, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::from_fn_with_state;
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post, put};
 use axum::{Extension, Router};
 use serde::{Deserialize, Serialize};
 
 use aionui_api_types::{
-    ApiResponse, AuthStatusResponse, ChangePasswordRequest, EnsureExternalSessionRequest, EnsureExternalUserRequest,
-    EnsureExternalUserResponse, LoginRequest, LoginResponse, PublicUser, QrLoginRequest, RefreshResponse,
+    ApiResponse, AuthConfigResponse, AuthStatusResponse, ChangePasswordRequest, EnsureExternalSessionRequest,
+    EnsureExternalUserRequest, EnsureExternalUserResponse, IamCreateOrganizationRequest, IamCreateUserRequest,
+    IamCreateUserResponse, IamDirectorySyncRequest, IamDirectorySyncResult, IamDirectorySyncState,
+    IamOrganizationSummary, IamResetPasswordResponse, IamUpdateOrganizationRequest, IamUpdateUserRequest,
+    IamUserSummary, LoginRequest, LoginResponse, NullableStringUpdate, PublicUser, QrLoginRequest, RefreshResponse,
     RefreshTokenRequest, RevokeExternalSessionRequest, RevokeExternalSessionResponse, UserInfoResponse,
     WebuiChangePasswordRequest, WebuiChangeUsernameRequest, WebuiChangeUsernameResponse, WebuiGenerateQrTokenResponse,
     WebuiResetPasswordResponse, WsTokenResponse,
 };
 use aionui_common::ApiError;
 use aionui_common::constants::COOKIE_MAX_AGE_DAYS;
-use aionui_db::{DbError, IUserRepository, UserStatus, UserType, models::User};
+use aionui_db::{
+    CreateLocalUserParams, CreateOrganizationParams, DbError, IIamRepository, IUserRepository, SyncCounts,
+    UpdateOrganizationParams, UpdateUserParams, UpsertExternalOrganizationParams, UpsertExternalUserParams, UserStatus,
+    UserType,
+    models::{DirectorySyncStateRow, OrganizationRow, User},
+};
 
+use crate::auth_center_client::{
+    AuthCenterProtocolClient, DirectoryDepartment, DirectoryUser, RsmAuthConfig, RsmOidcCallbackQuery,
+    RsmOidcLoginQuery, RsmOidcStateStore, directory_status_to_local_status, sanitize_username, timestamp_rfc3339_to_ms,
+};
 use crate::error::AuthError;
 use crate::extract::extract_token_from_headers;
 use crate::middleware::{AuthIdentityMode, AuthState, CurrentUser, auth_middleware};
@@ -64,6 +77,107 @@ fn db_error_to_api_error(err: DbError) -> ApiError {
     }
 }
 
+fn public_user_from_user(user: User) -> PublicUser {
+    PublicUser {
+        id: user.id,
+        username: user.username.unwrap_or_else(|| "external_user".to_string()),
+        display_name: user.display_name,
+        email: user.email,
+        mobile: user.mobile,
+        departments: user
+            .department_ids
+            .as_deref()
+            .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok()),
+        auth_source: user.auth_source,
+        source: user.source,
+        status: user.status.as_str().to_owned(),
+        is_admin: user.is_admin != 0,
+    }
+}
+
+fn organization_summary(row: OrganizationRow) -> IamOrganizationSummary {
+    IamOrganizationSummary {
+        id: row.id,
+        parent_id: row.parent_id,
+        name: row.name,
+        source: row.source,
+        external_id: row.external_id,
+        status: row.status,
+        sort: row.sort,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    }
+}
+
+fn directory_sync_state_summary(row: DirectorySyncStateRow) -> IamDirectorySyncState {
+    IamDirectorySyncState {
+        app_code: row.app_code,
+        last_synced_at: row.last_synced_at,
+        last_full_synced_at: row.last_full_synced_at,
+        last_status: row.last_status,
+        last_message: row.last_message,
+        user_count: row.user_count,
+        department_count: row.department_count,
+        user_created: row.user_created,
+        user_updated: row.user_updated,
+        user_disabled: row.user_disabled,
+        updated_at: row.updated_at,
+    }
+}
+
+fn user_summary(user: User, organizations: Vec<IamOrganizationSummary>) -> IamUserSummary {
+    IamUserSummary {
+        id: user.id,
+        username: user.username.unwrap_or_else(|| "external_user".to_string()),
+        display_name: user.display_name,
+        email: user.email,
+        mobile: user.mobile,
+        source: user.source,
+        status: user.status.as_str().to_owned(),
+        external_status: user.external_status,
+        is_admin: user.is_admin != 0,
+        auth_provider: user.auth_provider,
+        auth_sub: user.auth_sub,
+        auth_source: user.auth_source,
+        auth_app_code: user.auth_app_code,
+        organizations,
+        created_at: user.created_at,
+        updated_at: user.updated_at,
+        last_login: user.last_login,
+    }
+}
+
+async fn load_user_summary(iam_repo: &dyn IIamRepository, user: User) -> Result<IamUserSummary, ApiError> {
+    let organizations = iam_repo
+        .list_user_organizations(&user.id)
+        .await
+        .map_err(db_error_to_api_error)?
+        .into_iter()
+        .map(organization_summary)
+        .collect();
+    Ok(user_summary(user, organizations))
+}
+
+fn is_disabled(user: &User) -> bool {
+    user.status == UserStatus::Disabled || user.external_status.as_deref() == Some("disabled")
+}
+
+fn normalize_status(value: Option<&str>) -> Result<Option<&str>, ApiError> {
+    match value.map(str::trim) {
+        None => Ok(None),
+        Some("active") => Ok(Some("active")),
+        Some("disabled") => Ok(Some("disabled")),
+        Some(_) => Err(ApiError::BadRequest("status must be active or disabled".into())),
+    }
+}
+
+fn ensure_admin(current_user: &CurrentUser) -> Result<(), ApiError> {
+    if current_user.is_admin {
+        return Ok(());
+    }
+    Err(ApiError::Forbidden("Admin permission required".into()))
+}
+
 /// Shared state for all auth route handlers.
 #[derive(Clone)]
 pub struct AuthRouterState {
@@ -71,11 +185,15 @@ pub struct AuthRouterState {
     pub user_repo: Arc<dyn IUserRepository>,
     /// Optional on-disk adoption side-effect (AionUi → AionPro upgrade).
     pub fs_adopter: Option<Arc<dyn crate::service::SystemDefaultFilesystemAdopter>>,
+    pub iam_repo: Arc<dyn IIamRepository>,
     pub cookie_config: Arc<CookieConfig>,
     pub qr_token_store: Arc<QrTokenStore>,
     pub identity_mode: AuthIdentityMode,
     pub bootstrap_secret: Option<Arc<str>>,
     pub session_revoked_hook: Option<Arc<SessionRevokedHook>>,
+    pub rsm_auth_config: Arc<RsmAuthConfig>,
+    pub rsm_oidc_state_store: Arc<RsmOidcStateStore>,
+    pub http_client: reqwest::Client,
     pub local: bool,
     pub aionpro_mode: bool,
 }
@@ -224,6 +342,9 @@ fn user_context_required() -> ApiError {
 /// Returns a `Router` with these endpoints:
 /// - `POST /login`
 /// - `POST /logout`
+/// - `GET /api/auth/config`
+/// - `GET /api/auth/oidc/login`
+/// - `GET /api/auth/oidc/callback`
 /// - `GET /api/auth/status`
 /// - `GET /api/auth/user`
 /// - `POST /api/auth/change-password`
@@ -262,12 +383,15 @@ pub fn auth_routes(state: AuthRouterState) -> Router {
     // Auth rate limited routes (login, qr-login)
     let auth_rate_limited = Router::new()
         .route("/login", post(login_handler))
+        .route("/api/auth/oidc/login", get(oidc_login_handler))
+        .route("/api/auth/oidc/callback", get(oidc_callback_handler))
         .route("/api/auth/qr-login", post(qr_login_handler))
         .route_layer(from_fn_with_state(auth_limiter, auth_rate_limit_middleware))
         .with_state(state.clone());
 
     // API rate limited public routes (no auth required)
     let api_public = Router::new()
+        .route("/api/auth/config", get(config_handler))
         .route("/api/auth/status", get(status_handler))
         .route(
             "/api/auth/internal/external-users/{external_user_id}",
@@ -326,6 +450,25 @@ pub fn auth_routes(state: AuthRouterState) -> Router {
         .route("/api/auth/user", get(user_handler))
         .route("/api/auth/change-password", post(change_password_handler))
         .route("/api/ws-token", get(ws_token_handler))
+        .route(
+            "/api/iam/users",
+            get(list_iam_users_handler).post(create_iam_user_handler),
+        )
+        .route("/api/iam/users/{id}", put(update_iam_user_handler))
+        .route(
+            "/api/iam/users/{id}/reset-password",
+            post(reset_iam_user_password_handler),
+        )
+        .route(
+            "/api/iam/organizations",
+            get(list_iam_organizations_handler).post(create_iam_organization_handler),
+        )
+        .route(
+            "/api/iam/organizations/{id}",
+            put(update_iam_organization_handler).delete(delete_iam_organization_handler),
+        )
+        .route("/api/iam/directory-sync/status", get(directory_sync_status_handler))
+        .route("/api/iam/directory-sync", post(directory_sync_handler))
         .route_layer(from_fn_with_state(
             action_limiter.clone(),
             authenticated_action_rate_limit_middleware,
@@ -435,6 +578,86 @@ async fn revoke_external_session_handler(
 }
 
 // ---------------------------------------------------------------------------
+// GET /api/auth/config
+// ---------------------------------------------------------------------------
+
+async fn config_handler(State(state): State<AuthRouterState>) -> Json<AuthConfigResponse> {
+    Json(state.rsm_auth_config.public_response())
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/auth/oidc/login
+// ---------------------------------------------------------------------------
+
+async fn oidc_login_handler(
+    State(state): State<AuthRouterState>,
+    headers: HeaderMap,
+    Query(query): Query<RsmOidcLoginQuery>,
+) -> Result<Redirect, ApiError> {
+    let client = AuthCenterProtocolClient::new(state.http_client.clone());
+    let url = client
+        .build_login_redirect(&state.rsm_auth_config, &state.rsm_oidc_state_store, &headers, query)
+        .await?;
+    Ok(Redirect::temporary(&url))
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/auth/oidc/callback
+// ---------------------------------------------------------------------------
+
+async fn oidc_callback_handler(
+    State(state): State<AuthRouterState>,
+    Query(query): Query<RsmOidcCallbackQuery>,
+) -> Result<Response, ApiError> {
+    let client = AuthCenterProtocolClient::new(state.http_client.clone());
+    let (return_to, identity) = client
+        .exchange_callback(&state.rsm_auth_config, &state.rsm_oidc_state_store, query)
+        .await?;
+    let departments_json = if identity.departments.is_empty() {
+        None
+    } else {
+        Some(
+            serde_json::to_string(&identity.departments)
+                .map_err(|e| ApiError::Internal(format!("Failed to serialize departments: {e}")))?,
+        )
+    };
+    let (user, _) = state
+        .iam_repo
+        .upsert_external_user(UpsertExternalUserParams {
+            external_id: &identity.sub,
+            username: &identity.username,
+            display_name: identity.display_name.as_deref(),
+            email: identity.email.as_deref(),
+            mobile: identity.mobile.as_deref(),
+            departments_json: departments_json.as_deref(),
+            auth_source: Some(&identity.auth_source),
+            app_code: &identity.app_code,
+            external_status: Some("active"),
+            external_updated_at: None,
+        })
+        .await
+        .map_err(db_error_to_api_error)?;
+    state
+        .iam_repo
+        .replace_external_user_organizations(&user.id, &identity.departments)
+        .await
+        .map_err(db_error_to_api_error)?;
+    if is_disabled(&user) {
+        return Err(ApiError::Forbidden("User is disabled".into()));
+    }
+
+    let token = state
+        .jwt_service
+        .sign(&user.id, &user.username)
+        .map_err(|e| ApiError::Internal(format!("Token signing error: {e}")))?;
+    if let Err(e) = state.user_repo.update_last_login(&user.id).await {
+        tracing::warn!("Failed to update last login for {}: {e}", user.id);
+    }
+    let cookie = state.cookie_config.build_session_cookie(&token);
+    Ok(([(header::SET_COOKIE, cookie)], Redirect::temporary(&return_to)).into_response())
+}
+
+// ---------------------------------------------------------------------------
 // POST /login
 // ---------------------------------------------------------------------------
 
@@ -491,6 +714,9 @@ async fn login_handler(
     }
 
     let user = found_user.ok_or_else(|| ApiError::Unauthorized("Invalid username or password".into()))?;
+    if is_disabled(&user) {
+        return Err(ApiError::Unauthorized("Invalid username or password".into()));
+    }
 
     let token = state
         .jwt_service
@@ -507,13 +733,7 @@ async fn login_handler(
     }
 
     let cookie = state.cookie_config.build_session_cookie(&token);
-    let resp = LoginResponse::new(
-        PublicUser {
-            id: user.id,
-            username: user.username.unwrap_or_else(|| "external_user".to_string()),
-        },
-        token,
-    );
+    let resp = LoginResponse::new(public_user_from_user(user), token);
 
     Ok(([(header::SET_COOKIE, cookie)], Json(resp)).into_response())
 }
@@ -700,14 +920,23 @@ async fn update_user_last_login_handler(
 // GET /api/auth/user
 // ---------------------------------------------------------------------------
 
-async fn user_handler(Extension(user): Extension<CurrentUser>) -> Json<UserInfoResponse> {
-    Json(UserInfoResponse {
+async fn user_handler(
+    State(state): State<AuthRouterState>,
+    Extension(user): Extension<CurrentUser>,
+) -> Result<Json<UserInfoResponse>, ApiError> {
+    let user = state
+        .user_repo
+        .find_by_id(&user.id)
+        .await
+        .map_err(db_error_to_api_error)?
+        .ok_or_else(|| ApiError::Unauthorized("Invalid authentication subject".into()))?;
+    if is_disabled(&user) {
+        return Err(ApiError::Forbidden("User is disabled".into()));
+    }
+    Ok(Json(UserInfoResponse {
         success: true,
-        user: PublicUser {
-            id: user.id,
-            username: user.username,
-        },
-    })
+        user: public_user_from_user(user),
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -849,6 +1078,442 @@ async fn ws_token_handler(
 }
 
 // ---------------------------------------------------------------------------
+// IAM admin routes
+// ---------------------------------------------------------------------------
+
+async fn list_iam_users_handler(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+) -> Result<Json<ApiResponse<Vec<IamUserSummary>>>, ApiError> {
+    ensure_admin(&current_user)?;
+    let users = state.iam_repo.list_users().await.map_err(db_error_to_api_error)?;
+    let orgs_by_id: HashMap<String, IamOrganizationSummary> = state
+        .iam_repo
+        .list_organizations()
+        .await
+        .map_err(db_error_to_api_error)?
+        .into_iter()
+        .map(|org| {
+            let summary = organization_summary(org);
+            (summary.id.clone(), summary)
+        })
+        .collect();
+    let mut orgs_by_user: HashMap<String, Vec<IamOrganizationSummary>> = HashMap::new();
+    for relation in state
+        .iam_repo
+        .list_all_user_organizations()
+        .await
+        .map_err(db_error_to_api_error)?
+    {
+        if let Some(org) = orgs_by_id.get(&relation.organization_id) {
+            orgs_by_user.entry(relation.user_id).or_default().push(org.clone());
+        }
+    }
+    let summaries = users
+        .into_iter()
+        .map(|user| {
+            let organizations = orgs_by_user.remove(&user.id).unwrap_or_default();
+            user_summary(user, organizations)
+        })
+        .collect();
+    Ok(Json(ApiResponse::ok(summaries)))
+}
+
+async fn create_iam_user_handler(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    body: Result<Json<IamCreateUserRequest>, JsonRejection>,
+) -> Result<Json<ApiResponse<IamCreateUserResponse>>, ApiError> {
+    ensure_admin(&current_user)?;
+    let Json(req) = body.map_err(ApiError::from)?;
+    let username = req.username.trim().to_owned();
+    validate_username(&username)?;
+    let status = normalize_status(req.status.as_deref())?.unwrap_or("active");
+    let temporary_password = generate_password(RESET_PASSWORD_LEN);
+    let password_for_hash = temporary_password.clone();
+    let password_hash = tokio::task::spawn_blocking(move || hash_password(&password_for_hash))
+        .await
+        .map_err(|e| ApiError::Internal(format!("Task join error: {e}")))??;
+
+    let user = state
+        .iam_repo
+        .create_local_user(CreateLocalUserParams {
+            username: &username,
+            password_hash: &password_hash,
+            display_name: req.display_name.as_deref(),
+            email: req.email.as_deref(),
+            mobile: req.mobile.as_deref(),
+            status,
+            is_admin: req.is_admin.unwrap_or(false),
+        })
+        .await
+        .map_err(db_error_to_api_error)?;
+    if let Some(organization_ids) = req.organization_ids.as_ref() {
+        state
+            .iam_repo
+            .replace_local_user_organizations(&user.id, organization_ids)
+            .await
+            .map_err(db_error_to_api_error)?;
+    }
+    let user = state
+        .iam_repo
+        .get_user(&user.id)
+        .await
+        .map_err(db_error_to_api_error)?
+        .ok_or_else(|| ApiError::NotFound("Created user not found".into()))?;
+    let summary = load_user_summary(&*state.iam_repo, user).await?;
+    Ok(Json(ApiResponse::ok(IamCreateUserResponse {
+        user: summary,
+        temporary_password,
+    })))
+}
+
+async fn update_iam_user_handler(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    Path(id): Path<String>,
+    body: Result<Json<IamUpdateUserRequest>, JsonRejection>,
+) -> Result<Json<ApiResponse<IamUserSummary>>, ApiError> {
+    ensure_admin(&current_user)?;
+    let Json(req) = body.map_err(ApiError::from)?;
+    let existing = state
+        .iam_repo
+        .get_user(&id)
+        .await
+        .map_err(db_error_to_api_error)?
+        .ok_or_else(|| ApiError::NotFound(format!("User '{id}' not found")))?;
+    let status = normalize_status(req.status.as_deref())?;
+
+    if existing.source == "auth_center"
+        && (req.display_name.is_some() || req.email.is_some() || req.mobile.is_some() || req.organization_ids.is_some())
+    {
+        return Err(ApiError::BadRequest(
+            "Auth Center users only allow local policy fields".into(),
+        ));
+    }
+
+    let disables_active_admin = existing.is_admin != 0
+        && existing.status == UserStatus::Active
+        && (status == Some("disabled") || req.is_admin == Some(false));
+    if disables_active_admin
+        && state
+            .iam_repo
+            .count_active_admins_except(Some(&id))
+            .await
+            .map_err(db_error_to_api_error)?
+            == 0
+    {
+        return Err(ApiError::Conflict(
+            "The last active administrator cannot be disabled or demoted".into(),
+        ));
+    }
+
+    let user = state
+        .iam_repo
+        .update_user(
+            &id,
+            UpdateUserParams {
+                display_name: req.display_name.as_deref(),
+                email: req.email.as_deref(),
+                mobile: req.mobile.as_deref(),
+                status,
+                is_admin: req.is_admin,
+            },
+        )
+        .await
+        .map_err(db_error_to_api_error)?;
+    if existing.source == "local"
+        && let Some(organization_ids) = req.organization_ids.as_ref()
+    {
+        state
+            .iam_repo
+            .replace_local_user_organizations(&id, organization_ids)
+            .await
+            .map_err(db_error_to_api_error)?;
+    }
+    let summary = load_user_summary(&*state.iam_repo, user).await?;
+    Ok(Json(ApiResponse::ok(summary)))
+}
+
+async fn reset_iam_user_password_handler(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    Path(id): Path<String>,
+) -> Result<Json<ApiResponse<IamResetPasswordResponse>>, ApiError> {
+    ensure_admin(&current_user)?;
+    let user = state
+        .iam_repo
+        .get_user(&id)
+        .await
+        .map_err(db_error_to_api_error)?
+        .ok_or_else(|| ApiError::NotFound(format!("User '{id}' not found")))?;
+    if user.source != "local" {
+        return Err(ApiError::BadRequest(
+            "Auth Center users do not have local passwords".into(),
+        ));
+    }
+    let temporary_password = generate_password(RESET_PASSWORD_LEN);
+    let password_for_hash = temporary_password.clone();
+    let password_hash = tokio::task::spawn_blocking(move || hash_password(&password_for_hash))
+        .await
+        .map_err(|e| ApiError::Internal(format!("Task join error: {e}")))??;
+    state
+        .iam_repo
+        .reset_user_password(&id, &password_hash)
+        .await
+        .map_err(db_error_to_api_error)?;
+    Ok(Json(ApiResponse::ok(IamResetPasswordResponse { temporary_password })))
+}
+
+async fn list_iam_organizations_handler(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+) -> Result<Json<ApiResponse<Vec<IamOrganizationSummary>>>, ApiError> {
+    ensure_admin(&current_user)?;
+    let organizations = state
+        .iam_repo
+        .list_organizations()
+        .await
+        .map_err(db_error_to_api_error)?
+        .into_iter()
+        .map(organization_summary)
+        .collect();
+    Ok(Json(ApiResponse::ok(organizations)))
+}
+
+async fn create_iam_organization_handler(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    body: Result<Json<IamCreateOrganizationRequest>, JsonRejection>,
+) -> Result<Json<ApiResponse<IamOrganizationSummary>>, ApiError> {
+    ensure_admin(&current_user)?;
+    let Json(req) = body.map_err(ApiError::from)?;
+    let name = req.name.trim();
+    if name.is_empty() {
+        return Err(ApiError::BadRequest("Organization name is required".into()));
+    }
+    let status = normalize_status(req.status.as_deref())?.unwrap_or("active");
+    let organization = state
+        .iam_repo
+        .create_local_organization(CreateOrganizationParams {
+            parent_id: req.parent_id.as_deref().filter(|value| !value.trim().is_empty()),
+            name,
+            status,
+            sort: req.sort.unwrap_or(0),
+        })
+        .await
+        .map_err(db_error_to_api_error)?;
+    Ok(Json(ApiResponse::ok(organization_summary(organization))))
+}
+
+async fn update_iam_organization_handler(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    Path(id): Path<String>,
+    body: Result<Json<IamUpdateOrganizationRequest>, JsonRejection>,
+) -> Result<Json<ApiResponse<IamOrganizationSummary>>, ApiError> {
+    ensure_admin(&current_user)?;
+    let Json(req) = body.map_err(ApiError::from)?;
+    if matches!(&req.parent_id, NullableStringUpdate::Value(parent_id) if parent_id == &id) {
+        return Err(ApiError::BadRequest("Organization cannot be its own parent".into()));
+    }
+    if let Some(name) = req.name.as_deref()
+        && name.trim().is_empty()
+    {
+        return Err(ApiError::BadRequest("Organization name is required".into()));
+    }
+    let organization = state
+        .iam_repo
+        .update_local_organization(
+            &id,
+            UpdateOrganizationParams {
+                parent_id: match &req.parent_id {
+                    NullableStringUpdate::Missing => None,
+                    NullableStringUpdate::Null => Some(None),
+                    NullableStringUpdate::Value(parent_id) => Some(non_empty_trimmed(parent_id)),
+                },
+                name: req.name.as_deref().map(str::trim),
+                status: normalize_status(req.status.as_deref())?,
+                sort: req.sort,
+            },
+        )
+        .await
+        .map_err(db_error_to_api_error)?;
+    Ok(Json(ApiResponse::ok(organization_summary(organization))))
+}
+
+async fn delete_iam_organization_handler(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    Path(id): Path<String>,
+) -> Result<Json<ApiResponse<()>>, ApiError> {
+    ensure_admin(&current_user)?;
+    state
+        .iam_repo
+        .delete_local_organization(&id)
+        .await
+        .map_err(db_error_to_api_error)?;
+    Ok(Json(ApiResponse::ok(())))
+}
+
+async fn directory_sync_status_handler(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+) -> Result<Json<ApiResponse<Option<IamDirectorySyncState>>>, ApiError> {
+    ensure_admin(&current_user)?;
+    let sync_state = state
+        .iam_repo
+        .directory_sync_state(&state.rsm_auth_config.app_code)
+        .await
+        .map_err(db_error_to_api_error)?
+        .map(directory_sync_state_summary);
+    Ok(Json(ApiResponse::ok(sync_state)))
+}
+
+async fn directory_sync_handler(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    body: Result<Json<IamDirectorySyncRequest>, JsonRejection>,
+) -> Result<Json<ApiResponse<IamDirectorySyncResult>>, ApiError> {
+    ensure_admin(&current_user)?;
+    let Json(req) = body.map_err(ApiError::from)?;
+    let full = req.full.unwrap_or(false);
+    let result = run_directory_sync(&state, full).await?;
+    Ok(Json(ApiResponse::ok(result)))
+}
+
+async fn run_directory_sync(state: &AuthRouterState, full: bool) -> Result<IamDirectorySyncResult, ApiError> {
+    let previous = state
+        .iam_repo
+        .directory_sync_state(&state.rsm_auth_config.app_code)
+        .await
+        .map_err(db_error_to_api_error)?;
+    let since = if full {
+        None
+    } else {
+        previous.and_then(|state| state.last_synced_at)
+    };
+    let client = AuthCenterProtocolClient::new(state.http_client.clone());
+    let departments = client.list_directory_departments(&state.rsm_auth_config, since).await?;
+    let users = client.list_directory_users(&state.rsm_auth_config, since).await?;
+
+    let mut counts = SyncCounts {
+        department_count: departments.len() as i64,
+        user_count: users.len() as i64,
+        ..SyncCounts::default()
+    };
+
+    upsert_directory_departments(&*state.iam_repo, &departments).await?;
+
+    let mut seen_external_ids = Vec::new();
+    for directory_user in users {
+        if directory_user.id.trim().is_empty() {
+            continue;
+        }
+        let username = directory_user_username(&directory_user);
+        let departments_json = if directory_user.departments.is_empty() {
+            None
+        } else {
+            Some(
+                serde_json::to_string(&directory_user.departments)
+                    .map_err(|e| ApiError::Internal(format!("Failed to serialize departments: {e}")))?,
+            )
+        };
+        let (user, created) = state
+            .iam_repo
+            .upsert_external_user(UpsertExternalUserParams {
+                external_id: &directory_user.id,
+                username: &username,
+                display_name: directory_user.display_name.as_deref(),
+                email: directory_user.email.as_deref(),
+                mobile: directory_user.mobile.as_deref(),
+                departments_json: departments_json.as_deref(),
+                auth_source: directory_user.source.as_deref().or(Some("auth-center-directory")),
+                app_code: &state.rsm_auth_config.app_code,
+                external_status: Some(directory_status_to_local_status(directory_user.status.as_deref())),
+                external_updated_at: timestamp_rfc3339_to_ms(directory_user.updated_at.as_deref()),
+            })
+            .await
+            .map_err(db_error_to_api_error)?;
+        state
+            .iam_repo
+            .replace_external_user_organizations(&user.id, &directory_user.departments)
+            .await
+            .map_err(db_error_to_api_error)?;
+        if created {
+            counts.user_created += 1;
+        } else {
+            counts.user_updated += 1;
+        }
+        seen_external_ids.push(directory_user.id);
+    }
+
+    if full {
+        counts.user_disabled = state
+            .iam_repo
+            .disable_missing_external_users(&seen_external_ids)
+            .await
+            .map_err(db_error_to_api_error)?;
+    }
+
+    let sync_state = state
+        .iam_repo
+        .save_directory_sync_state(&state.rsm_auth_config.app_code, full, "success", None, counts)
+        .await
+        .map_err(db_error_to_api_error)?;
+
+    Ok(IamDirectorySyncResult {
+        app_code: sync_state.app_code,
+        full,
+        user_count: counts.user_count,
+        department_count: counts.department_count,
+        user_created: counts.user_created,
+        user_updated: counts.user_updated,
+        user_disabled: counts.user_disabled,
+        synced_at: sync_state.updated_at,
+    })
+}
+
+async fn upsert_directory_departments(
+    iam_repo: &dyn IIamRepository,
+    departments: &[DirectoryDepartment],
+) -> Result<(), ApiError> {
+    for _ in 0..2 {
+        for department in departments {
+            if department.id.trim().is_empty() || department.name.trim().is_empty() {
+                continue;
+            }
+            iam_repo
+                .upsert_external_organization(UpsertExternalOrganizationParams {
+                    external_id: &department.id,
+                    parent_external_id: department.parent_id.as_deref().filter(|value| !value.trim().is_empty()),
+                    name: department.name.trim(),
+                    status: directory_status_to_local_status(department.status.as_deref()),
+                    sort: department.sort,
+                })
+                .await
+                .map_err(db_error_to_api_error)?;
+        }
+    }
+    Ok(())
+}
+
+fn directory_user_username(user: &DirectoryUser) -> String {
+    let raw = user
+        .username
+        .as_deref()
+        .or_else(|| user.email.as_deref().and_then(|value| value.split('@').next()))
+        .or(user.display_name.as_deref())
+        .unwrap_or(&user.id);
+    sanitize_username(raw, &user.id)
+}
+
+fn non_empty_trimmed(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() { None } else { Some(trimmed) }
+}
+
+// ---------------------------------------------------------------------------
 // POST /api/auth/qr-login
 // ---------------------------------------------------------------------------
 
@@ -888,13 +1553,7 @@ async fn qr_login_handler(
     }
 
     let cookie = state.cookie_config.build_session_cookie(&token);
-    let resp = LoginResponse::new(
-        PublicUser {
-            id: user.id,
-            username: user.username.unwrap_or_else(|| "external_user".to_string()),
-        },
-        token,
-    );
+    let resp = LoginResponse::new(public_user_from_user(user), token);
 
     Ok(([(header::SET_COOKIE, cookie)], Json(resp)).into_response())
 }

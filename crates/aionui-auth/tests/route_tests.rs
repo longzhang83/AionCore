@@ -13,10 +13,13 @@ use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 use aionui_auth::{
-    AuthIdentityMode, AuthRouterState, CookieConfig, JwtService, QrTokenStore, SessionRevokedHook, auth_routes,
-    hash_password,
+    AuthIdentityMode, AuthRouterState, CookieConfig, JwtService, QrTokenStore, RsmAuthConfig, RsmOidcStateStore,
+    SessionRevokedHook, auth_routes, hash_password,
 };
-use aionui_db::{IUserRepository, SqliteUserRepository, UserStatus, init_database_memory};
+use aionui_db::{
+    IIamRepository, IUserRepository, SqliteIamRepository, SqliteUserRepository, UpsertExternalUserParams, UserStatus,
+    init_database_memory,
+};
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -43,6 +46,7 @@ async fn test_app_with_options_and_hook(
 ) -> (Router, TestContext) {
     let db = init_database_memory().await.unwrap();
     let user_repo = Arc::new(SqliteUserRepository::new(db.pool().clone())) as Arc<dyn IUserRepository>;
+    let iam_repo = Arc::new(SqliteIamRepository::new(db.pool().clone())) as Arc<dyn IIamRepository>;
     let jwt_service = Arc::new(JwtService::new("test_secret_for_routes".into()));
     let cookie_config = Arc::new(CookieConfig {
         secure: false,
@@ -54,6 +58,7 @@ async fn test_app_with_options_and_hook(
         jwt_service: jwt_service.clone(),
         user_repo: user_repo.clone(),
         fs_adopter: None,
+        iam_repo: iam_repo.clone(),
         cookie_config,
         qr_token_store: qr_token_store.clone(),
         identity_mode: if local {
@@ -65,6 +70,9 @@ async fn test_app_with_options_and_hook(
         },
         bootstrap_secret: bootstrap_secret.map(Arc::<str>::from),
         session_revoked_hook,
+        rsm_auth_config: Arc::new(RsmAuthConfig::from_env()),
+        rsm_oidc_state_store: Arc::new(RsmOidcStateStore::new()),
+        http_client: reqwest::Client::new(),
         local,
         aionpro_mode,
     };
@@ -73,6 +81,7 @@ async fn test_app_with_options_and_hook(
     let ctx = TestContext {
         jwt_service,
         user_repo,
+        iam_repo,
         qr_token_store,
         _db: db,
     };
@@ -83,6 +92,7 @@ async fn test_app_with_options_and_hook(
 struct TestContext {
     jwt_service: Arc<JwtService>,
     user_repo: Arc<dyn IUserRepository>,
+    iam_repo: Arc<dyn IIamRepository>,
     qr_token_store: Arc<QrTokenStore>,
     _db: aionui_db::Database,
 }
@@ -148,6 +158,17 @@ fn json_put_anonymous(uri: &str, body: &str) -> Request<Body> {
 fn json_post_with_token(uri: &str, body: &str, token: &str) -> Request<Body> {
     Request::builder()
         .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::from(body.to_owned()))
+        .unwrap()
+}
+
+/// Helper: perform a JSON PUT request with auth token.
+fn json_put_with_token(uri: &str, body: &str, token: &str) -> Request<Body> {
+    Request::builder()
+        .method("PUT")
         .uri(uri)
         .header("content-type", "application/json")
         .header("authorization", format!("Bearer {token}"))
@@ -1107,4 +1128,173 @@ async fn t12_2_internal_user_routes_work_in_local_mode() {
     let renamed_json = body_json(renamed_resp).await;
     assert_eq!(renamed_json["data"]["id"], user_id);
     assert_eq!(renamed_json["data"]["username"], "renamed-admin");
+}
+
+// ===========================================================================
+// T13. IAM admin routes
+// ===========================================================================
+
+#[tokio::test]
+async fn t13_1_iam_routes_reject_non_admin() {
+    let (mut app, ctx) = test_app().await;
+    create_test_user(&ctx, "worker", "StrongP@ss1").await;
+    let (token, _) = login(&mut app, "worker", "StrongP@ss1").await;
+
+    let resp = app.oneshot(get_with_token("/api/iam/users", &token)).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let json = body_json(resp).await;
+    assert_eq!(json["code"], "FORBIDDEN");
+}
+
+#[tokio::test]
+async fn t13_2_auth_user_response_includes_admin_flag() {
+    let (mut app, ctx) = test_app().await;
+    create_test_user(&ctx, "admin", "StrongP@ss1").await;
+    let (token, _) = login(&mut app, "admin", "StrongP@ss1").await;
+
+    let resp = app.oneshot(get_with_token("/api/auth/user", &token)).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["user"]["is_admin"], true);
+}
+
+#[tokio::test]
+async fn t13_3_iam_create_user_returns_temporary_password_once() {
+    let (mut app, ctx) = test_app().await;
+    create_test_user(&ctx, "admin", "StrongP@ss1").await;
+    let (token, _) = login(&mut app, "admin", "StrongP@ss1").await;
+
+    let create_resp = app
+        .clone()
+        .oneshot(json_post_with_token(
+            "/api/iam/users",
+            r#"{"username":"local-user","display_name":"Local User","status":"active"}"#,
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(create_resp.status(), StatusCode::OK);
+    let create_json = body_json(create_resp).await;
+    assert!(
+        create_json["data"]["temporary_password"]
+            .as_str()
+            .is_some_and(|value| value.len() >= 16)
+    );
+    assert_eq!(create_json["data"]["user"]["username"], "local-user");
+
+    let list_resp = app.oneshot(get_with_token("/api/iam/users", &token)).await.unwrap();
+    assert_eq!(list_resp.status(), StatusCode::OK);
+    let list_json = body_json(list_resp).await;
+    assert!(
+        list_json["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|user| { user.get("temporary_password").is_none() })
+    );
+}
+
+#[tokio::test]
+async fn t13_4_last_admin_cannot_be_demoted_or_disabled() {
+    let (mut app, ctx) = test_app().await;
+    create_test_user(&ctx, "admin", "StrongP@ss1").await;
+    let (token, user_id) = login(&mut app, "admin", "StrongP@ss1").await;
+
+    let demote_resp = app
+        .clone()
+        .oneshot(json_put_with_token(
+            &format!("/api/iam/users/{user_id}"),
+            r#"{"is_admin":false}"#,
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(demote_resp.status(), StatusCode::CONFLICT);
+
+    let disable_resp = app
+        .oneshot(json_put_with_token(
+            &format!("/api/iam/users/{user_id}"),
+            r#"{"status":"disabled"}"#,
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(disable_resp.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn t13_5_auth_center_user_rejects_profile_and_org_overrides() {
+    let (mut app, ctx) = test_app().await;
+    create_test_user(&ctx, "admin", "StrongP@ss1").await;
+    let (token, _) = login(&mut app, "admin", "StrongP@ss1").await;
+    let (external_user, _) = ctx
+        .iam_repo
+        .upsert_external_user(UpsertExternalUserParams {
+            external_id: "auth-user-1",
+            username: "auth-user",
+            display_name: Some("Auth User"),
+            email: Some("auth@example.test"),
+            mobile: None,
+            departments_json: None,
+            auth_source: Some("auth-center-directory"),
+            app_code: "agent",
+            external_status: Some("active"),
+            external_updated_at: None,
+        })
+        .await
+        .unwrap();
+
+    let resp = app
+        .oneshot(json_put_with_token(
+            &format!("/api/iam/users/{}", external_user.id),
+            r#"{"display_name":"Edited Locally","organization_ids":[]}"#,
+            &token,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn t13_6_organization_update_can_clear_parent() {
+    let (mut app, ctx) = test_app().await;
+    create_test_user(&ctx, "admin", "StrongP@ss1").await;
+    let (token, _) = login(&mut app, "admin", "StrongP@ss1").await;
+
+    let parent_resp = app
+        .clone()
+        .oneshot(json_post_with_token(
+            "/api/iam/organizations",
+            r#"{"name":"Parent","status":"active","sort":1}"#,
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(parent_resp.status(), StatusCode::OK);
+    let parent_id = body_json(parent_resp).await["data"]["id"].as_str().unwrap().to_owned();
+
+    let child_body = format!(r#"{{"name":"Child","parent_id":"{parent_id}","status":"active","sort":2}}"#);
+    let child_resp = app
+        .clone()
+        .oneshot(json_post_with_token("/api/iam/organizations", &child_body, &token))
+        .await
+        .unwrap();
+    assert_eq!(child_resp.status(), StatusCode::OK);
+    let child_id = body_json(child_resp).await["data"]["id"].as_str().unwrap().to_owned();
+
+    let clear_resp = app
+        .oneshot(json_put_with_token(
+            &format!("/api/iam/organizations/{child_id}"),
+            r#"{"parent_id":null}"#,
+            &token,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(clear_resp.status(), StatusCode::OK);
+    let clear_json = body_json(clear_resp).await;
+    assert!(clear_json["data"]["parent_id"].is_null());
 }

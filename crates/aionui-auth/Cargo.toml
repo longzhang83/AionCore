@@ -8,6 +8,8 @@ async-trait = { workspace = true }
 aionui-common.workspace = true
 aionui-db.workspace = true
 aionui-api-types.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
 jsonwebtoken.workspace = true
 bcrypt.workspace = true
 tower.workspace = true
@@ -21,8 +23,9 @@ tracing.workspace = true
 getrandom.workspace = true
 base64.workspace = true
 sha2.workspace = true
+chrono.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 http-body-util.workspace = true
 tower = { workspace = true, features = ["util"] }
+wiremock.workspace = true

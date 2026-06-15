@@ -52,6 +52,8 @@ pub struct CurrentUser {
     pub user_type: UserType,
     /// Current account status. Authenticated requests only receive active users.
     pub status: UserStatus,
+    /// Local administrator flag.
+    pub is_admin: bool,
 }
 
 impl CurrentUser {
@@ -61,6 +63,7 @@ impl CurrentUser {
             username: "system_default_user".to_string(),
             user_type: UserType::Local,
             status: UserStatus::Active,
+            is_admin: true,
         }
     }
 }
@@ -119,6 +122,9 @@ pub async fn auth_middleware(
             ApiError::Internal("Authentication service unavailable".into())
         })?
         .ok_or_else(|| ApiError::Unauthorized("Invalid authentication subject".into()))?;
+    if user.status == UserStatus::Disabled || user.external_status.as_deref() == Some("disabled") {
+        return Err(ApiError::Forbidden("User is disabled".into()));
+    }
 
     if state.identity_mode == AuthIdentityMode::AionPro && user.user_type != UserType::Aionpro {
         return Err(ApiError::coded(
@@ -138,6 +144,7 @@ pub async fn auth_middleware(
         username: user.username.unwrap_or_else(|| "external_user".to_string()),
         user_type: user.user_type,
         status: user.status,
+        is_admin: user.is_admin != 0,
     });
 
     Ok(next.run(request).await)
@@ -197,6 +204,7 @@ async fn runtime_token_channel(state: &AuthState, mut request: Request, next: Ne
         username: user.username.unwrap_or_else(|| "external_user".to_string()),
         user_type: user.user_type,
         status: user.status,
+        is_admin: user.is_admin != 0,
     });
 
     Ok(next.run(request).await)
