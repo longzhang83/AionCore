@@ -57,12 +57,11 @@ pub use repository::{
     ISkillRepository, ITeamRepository, IUserRepository, PageDirection, PersistedSessionState, SaveRuntimeStateParams,
     SqliteAcpSessionRepository, SqliteAgentMetadataRepository, SqliteAssistantDefinitionRepository,
     SqliteAssistantOverlayRepository, SqliteAssistantOverrideRepository, SqliteAssistantPreferenceRepository,
-    SqliteAssistantRepository, SqliteChannelRepository, SqliteClientPreferenceRepository,
-    SqliteConversationRepository, SqliteCronRepository, SqliteFeedbackDiagnosticsRepository, SqliteIamRepository,
-    SqliteMcpServerRepository, SqliteOAuthTokenRepository, SqliteProjectStore, SqliteProviderRepository,
-    SqliteRemoteAgentRepository, SqliteSettingsRepository, SqliteSkillRepository, SqliteTeamRepository,
-    SqliteUserRepository, SyncCounts, UpdateOrganizationParams, UpdateUserParams, UpsertExternalOrganizationParams,
-    UpsertExternalUserParams,
+    SqliteAssistantRepository, SqliteChannelRepository, SqliteClientPreferenceRepository, SqliteConversationRepository,
+    SqliteCronRepository, SqliteFeedbackDiagnosticsRepository, SqliteIamRepository, SqliteMcpServerRepository,
+    SqliteOAuthTokenRepository, SqliteProjectStore, SqliteProviderRepository, SqliteRemoteAgentRepository,
+    SqliteSettingsRepository, SqliteSkillRepository, SqliteTeamRepository, SqliteUserRepository, SyncCounts,
+    UpdateOrganizationParams, UpdateUserParams, UpsertExternalOrganizationParams, UpsertExternalUserParams,
 };
 
 // Re-export sqlx pool type for downstream crates

@@ -77,8 +77,8 @@ pub use auth::{
     IamUpdateOrganizationRequest, IamUpdateUserRequest, IamUserSummary, InternalAuthErrorCode, LoginRequest,
     LoginResponse, NullableStringUpdate, PublicUser, QrLoginRequest, RefreshResponse, RefreshTokenRequest,
     RevokeExternalSessionRequest, RevokeExternalSessionResponse, UserInfoResponse, WebuiChangePasswordRequest,
-    WebuiChangeUsernameRequest,
-    WebuiChangeUsernameResponse, WebuiGenerateQrTokenResponse, WebuiResetPasswordResponse, WsTokenResponse,
+    WebuiChangeUsernameRequest, WebuiChangeUsernameResponse, WebuiGenerateQrTokenResponse, WebuiResetPasswordResponse,
+    WsTokenResponse,
 };
 pub use channel::{
     ApprovePairingRequest, BridgeResponse, ChannelAssistantSettingRequest, ChannelAssistantSettingResponse,

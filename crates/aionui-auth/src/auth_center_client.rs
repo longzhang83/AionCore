@@ -8,7 +8,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use aionui_api_types::AuthConfigResponse;
-use aionui_common::ApiError;
+
+use crate::error::AuthCenterError;
 
 const DEFAULT_APP_CODE: &str = "agent";
 pub const AUTH_CENTER_PROVIDER: &str = "rsm-auth-center";
@@ -52,21 +53,19 @@ impl RsmAuthConfig {
         }
     }
 
-    fn require_oidc_ready(&self) -> Result<ReadyOidcConfig<'_>, ApiError> {
+    fn require_oidc_ready(&self) -> Result<ReadyOidcConfig<'_>, AuthCenterError> {
         if !self.enabled {
-            return Err(ApiError::NotFound("RSM Auth Center is disabled".into()));
+            return Err(AuthCenterError::NotFound("RSM Auth Center is disabled".into()));
         }
 
         let issuer = self
             .issuer
             .as_deref()
             .filter(|v| !v.is_empty())
-            .ok_or_else(|| ApiError::Internal("RSM_AUTH_ISSUER or AUTH_CENTER_ISSUER is required".into()))?;
-        let client_id = self
-            .client_id
-            .as_deref()
-            .filter(|v| !v.is_empty())
-            .ok_or_else(|| ApiError::Internal("RSM_AUTH_CLIENT_ID or AUTH_CENTER_CLIENT_ID is required".into()))?;
+            .ok_or_else(|| AuthCenterError::Internal("RSM_AUTH_ISSUER or AUTH_CENTER_ISSUER is required".into()))?;
+        let client_id = self.client_id.as_deref().filter(|v| !v.is_empty()).ok_or_else(|| {
+            AuthCenterError::Internal("RSM_AUTH_CLIENT_ID or AUTH_CENTER_CLIENT_ID is required".into())
+        })?;
         let client_secret = self.client_secret.as_deref().unwrap_or("");
 
         Ok(ReadyOidcConfig {
@@ -78,9 +77,9 @@ impl RsmAuthConfig {
         })
     }
 
-    fn require_directory_ready(&self) -> Result<ReadyDirectoryConfig<'_>, ApiError> {
+    fn require_directory_ready(&self) -> Result<ReadyDirectoryConfig<'_>, AuthCenterError> {
         if !self.enabled {
-            return Err(ApiError::NotFound("RSM Auth Center is disabled".into()));
+            return Err(AuthCenterError::NotFound("RSM Auth Center is disabled".into()));
         }
 
         let base_url = self
@@ -89,14 +88,14 @@ impl RsmAuthConfig {
             .or(self.issuer.as_deref())
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| {
-                ApiError::Internal("AUTH_CENTER_INTERNAL_BASE_URL or AUTH_CENTER_ISSUER is required".into())
+                AuthCenterError::Internal("AUTH_CENTER_INTERNAL_BASE_URL or AUTH_CENTER_ISSUER is required".into())
             })?;
         let internal_token = self
             .internal_token
             .as_deref()
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| {
-                ApiError::Internal("AUTH_CENTER_INTERNAL_TOKEN or RSM_AUTH_INTERNAL_TOKEN is required".into())
+                AuthCenterError::Internal("AUTH_CENTER_INTERNAL_TOKEN or RSM_AUTH_INTERNAL_TOKEN is required".into())
             })?;
 
         Ok(ReadyDirectoryConfig {
@@ -163,14 +162,14 @@ impl RsmOidcStateStore {
         (state, code_verifier, nonce)
     }
 
-    fn consume(&self, state: &str) -> Result<StoredLoginState, ApiError> {
+    fn consume(&self, state: &str) -> Result<StoredLoginState, AuthCenterError> {
         let (_, stored) = self
             .states
             .remove(state)
-            .ok_or_else(|| ApiError::BadRequest("Invalid or expired OIDC state".into()))?;
+            .ok_or_else(|| AuthCenterError::BadRequest("Invalid or expired OIDC state".into()))?;
 
         if aionui_common::now_ms().saturating_sub(stored.created_at_ms) > STATE_TTL_MS {
-            return Err(ApiError::BadRequest("Invalid or expired OIDC state".into()));
+            return Err(AuthCenterError::BadRequest("Invalid or expired OIDC state".into()));
         }
 
         Ok(stored)
@@ -284,7 +283,7 @@ impl AuthCenterProtocolClient {
         store: &RsmOidcStateStore,
         headers: &HeaderMap,
         query: RsmOidcLoginQuery,
-    ) -> Result<String, ApiError> {
+    ) -> Result<String, AuthCenterError> {
         let ready = config.require_oidc_ready()?;
         let discovery = self.discover(ready.issuer).await?;
         validate_discovered_issuer(&discovery, ready.issuer)?;
@@ -298,7 +297,7 @@ impl AuthCenterProtocolClient {
         let code_challenge = pkce_challenge(&code_verifier);
 
         let mut url = Url::parse(&discovery.authorization_endpoint)
-            .map_err(|e| ApiError::BadGateway(format!("Invalid authorization endpoint: {e}")))?;
+            .map_err(|e| AuthCenterError::BadGateway(format!("Invalid authorization endpoint: {e}")))?;
         url.query_pairs_mut()
             .append_pair("response_type", "code")
             .append_pair("client_id", ready.client_id)
@@ -317,10 +316,12 @@ impl AuthCenterProtocolClient {
         config: &RsmAuthConfig,
         store: &RsmOidcStateStore,
         query: RsmOidcCallbackQuery,
-    ) -> Result<(String, AuthCenterLoginIdentity), ApiError> {
+    ) -> Result<(String, AuthCenterLoginIdentity), AuthCenterError> {
         if let Some(error) = query.error {
             let detail = query.error_description.unwrap_or(error);
-            return Err(ApiError::Unauthorized(format!("OIDC authorization failed: {detail}")));
+            return Err(AuthCenterError::Unauthorized(format!(
+                "OIDC authorization failed: {detail}"
+            )));
         }
 
         let ready = config.require_oidc_ready()?;
@@ -328,12 +329,12 @@ impl AuthCenterProtocolClient {
             .code
             .as_deref()
             .filter(|v| !v.is_empty())
-            .ok_or_else(|| ApiError::BadRequest("Missing OIDC code".into()))?;
+            .ok_or_else(|| AuthCenterError::BadRequest("Missing OIDC code".into()))?;
         let state = query
             .state
             .as_deref()
             .filter(|v| !v.is_empty())
-            .ok_or_else(|| ApiError::BadRequest("Missing OIDC state".into()))?;
+            .ok_or_else(|| AuthCenterError::BadRequest("Missing OIDC state".into()))?;
 
         let stored = store.consume(state)?;
         let discovery = self.discover(ready.issuer).await?;
@@ -353,13 +354,13 @@ impl AuthCenterProtocolClient {
             .fetch_userinfo(&discovery, ready.issuer, &token.access_token)
             .await?;
         if userinfo.sub != id_claims.sub {
-            return Err(ApiError::Unauthorized(
+            return Err(AuthCenterError::Unauthorized(
                 "RSM Auth Center id_token and userinfo subject mismatch".into(),
             ));
         }
 
         if !userinfo_has_app(userinfo.apps.as_ref(), ready.app_code) {
-            return Err(ApiError::Forbidden(format!(
+            return Err(AuthCenterError::Forbidden(format!(
                 "RSM Auth Center user is not allowed for app '{}'",
                 ready.app_code
             )));
@@ -387,7 +388,7 @@ impl AuthCenterProtocolClient {
         &self,
         config: &RsmAuthConfig,
         since_ms: Option<i64>,
-    ) -> Result<Vec<DirectoryUser>, ApiError> {
+    ) -> Result<Vec<DirectoryUser>, AuthCenterError> {
         let value = self.fetch_directory(config, "users", since_ms).await?;
         decode_directory_users(value)
     }
@@ -396,12 +397,12 @@ impl AuthCenterProtocolClient {
         &self,
         config: &RsmAuthConfig,
         since_ms: Option<i64>,
-    ) -> Result<Vec<DirectoryDepartment>, ApiError> {
+    ) -> Result<Vec<DirectoryDepartment>, AuthCenterError> {
         let value = self.fetch_directory(config, "departments", since_ms).await?;
         decode_directory_departments(value)
     }
 
-    async fn discover(&self, issuer: &str) -> Result<OidcDiscovery, ApiError> {
+    async fn discover(&self, issuer: &str) -> Result<OidcDiscovery, AuthCenterError> {
         let issuer = issuer.trim_end_matches('/');
         let url = format!("{issuer}/.well-known/openid-configuration");
         let resp = self
@@ -409,16 +410,16 @@ impl AuthCenterProtocolClient {
             .get(&url)
             .send()
             .await
-            .map_err(|e| ApiError::BadGateway(format!("Failed to discover RSM Auth Center: {e}")))?;
+            .map_err(|e| AuthCenterError::BadGateway(format!("Failed to discover RSM Auth Center: {e}")))?;
         if !resp.status().is_success() {
-            return Err(ApiError::BadGateway(format!(
+            return Err(AuthCenterError::BadGateway(format!(
                 "RSM Auth Center discovery failed with status {}",
                 resp.status()
             )));
         }
         resp.json::<OidcDiscovery>()
             .await
-            .map_err(|e| ApiError::BadGateway(format!("Invalid RSM Auth Center discovery response: {e}")))
+            .map_err(|e| AuthCenterError::BadGateway(format!("Invalid RSM Auth Center discovery response: {e}")))
     }
 
     async fn exchange_token(
@@ -427,7 +428,7 @@ impl AuthCenterProtocolClient {
         config: &ReadyOidcConfig<'_>,
         code: &str,
         stored: &StoredLoginState,
-    ) -> Result<TokenResponse, ApiError> {
+    ) -> Result<TokenResponse, AuthCenterError> {
         let form = TokenExchangeForm {
             grant_type: "authorization_code",
             code,
@@ -443,9 +444,9 @@ impl AuthCenterProtocolClient {
             .form(&form)
             .send()
             .await
-            .map_err(|e| ApiError::BadGateway(format!("RSM Auth Center token exchange failed: {e}")))?;
+            .map_err(|e| AuthCenterError::BadGateway(format!("RSM Auth Center token exchange failed: {e}")))?;
         if !resp.status().is_success() {
-            return Err(ApiError::Unauthorized(format!(
+            return Err(AuthCenterError::Unauthorized(format!(
                 "RSM Auth Center token exchange failed with status {}",
                 resp.status()
             )));
@@ -453,7 +454,7 @@ impl AuthCenterProtocolClient {
 
         resp.json::<TokenResponse>()
             .await
-            .map_err(|e| ApiError::Unauthorized(format!("Invalid RSM Auth Center token response: {e}")))
+            .map_err(|e| AuthCenterError::Unauthorized(format!("Invalid RSM Auth Center token response: {e}")))
     }
 
     async fn validate_id_token(
@@ -463,20 +464,22 @@ impl AuthCenterProtocolClient {
         client_id: &str,
         id_token: Option<&str>,
         expected_nonce: &str,
-    ) -> Result<IdTokenClaims, ApiError> {
+    ) -> Result<IdTokenClaims, AuthCenterError> {
         let id_token = id_token
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| ApiError::Unauthorized("RSM Auth Center token response missing id_token".into()))?;
+            .ok_or_else(|| AuthCenterError::Unauthorized("RSM Auth Center token response missing id_token".into()))?;
         let header = decode_header(id_token)
-            .map_err(|e| ApiError::Unauthorized(format!("Invalid RSM Auth Center id_token header: {e}")))?;
+            .map_err(|e| AuthCenterError::Unauthorized(format!("Invalid RSM Auth Center id_token header: {e}")))?;
         if header.alg != Algorithm::RS256 {
-            return Err(ApiError::Unauthorized("RSM Auth Center id_token must use RS256".into()));
+            return Err(AuthCenterError::Unauthorized(
+                "RSM Auth Center id_token must use RS256".into(),
+            ));
         }
         let kid = header
             .kid
             .as_deref()
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| ApiError::Unauthorized("RSM Auth Center id_token missing kid".into()))?;
+            .ok_or_else(|| AuthCenterError::Unauthorized("RSM Auth Center id_token missing kid".into()))?;
 
         let jwks = self.fetch_jwks(&discovery.jwks_uri).await?;
         let jwk = jwks
@@ -488,35 +491,37 @@ impl AuthCenterProtocolClient {
                     && key.alg.as_deref().unwrap_or("RS256") == "RS256"
                     && key.use_.as_deref().unwrap_or("sig") == "sig"
             })
-            .ok_or_else(|| ApiError::Unauthorized("RSM Auth Center signing key not found in JWKS".into()))?;
+            .ok_or_else(|| AuthCenterError::Unauthorized("RSM Auth Center signing key not found in JWKS".into()))?;
         let decoding_key = DecodingKey::from_rsa_components(&jwk.n, &jwk.e)
-            .map_err(|e| ApiError::Unauthorized(format!("Invalid RSM Auth Center JWKS key: {e}")))?;
+            .map_err(|e| AuthCenterError::Unauthorized(format!("Invalid RSM Auth Center JWKS key: {e}")))?;
 
         let mut validation = Validation::new(Algorithm::RS256);
         validation.set_issuer(&[issuer]);
         validation.set_audience(&[client_id]);
         validation.set_required_spec_claims(&["exp", "iss", "aud", "sub"]);
         let token_data = decode::<IdTokenClaims>(id_token, &decoding_key, &validation)
-            .map_err(|e| ApiError::Unauthorized(format!("Invalid RSM Auth Center id_token: {e}")))?;
+            .map_err(|e| AuthCenterError::Unauthorized(format!("Invalid RSM Auth Center id_token: {e}")))?;
         let claims = token_data.claims;
 
         if claims.iss.trim_end_matches('/') != issuer.trim_end_matches('/') {
-            return Err(ApiError::Unauthorized(
+            return Err(AuthCenterError::Unauthorized(
                 "RSM Auth Center id_token issuer mismatch".into(),
             ));
         }
         if claims.token_use.as_deref().is_some_and(|value| value != "id") {
-            return Err(ApiError::Unauthorized(
+            return Err(AuthCenterError::Unauthorized(
                 "RSM Auth Center id_token token_use mismatch".into(),
             ));
         }
         let token_nonce = claims.nonce.as_deref().or(claims.jti.as_deref());
         if token_nonce != Some(expected_nonce) {
-            return Err(ApiError::Unauthorized("RSM Auth Center id_token nonce mismatch".into()));
+            return Err(AuthCenterError::Unauthorized(
+                "RSM Auth Center id_token nonce mismatch".into(),
+            ));
         }
         let now = get_current_timestamp();
         if claims.iat > now.saturating_add(300) || claims.iat > claims.exp {
-            return Err(ApiError::Unauthorized(
+            return Err(AuthCenterError::Unauthorized(
                 "RSM Auth Center id_token issued-at is invalid".into(),
             ));
         }
@@ -524,22 +529,22 @@ impl AuthCenterProtocolClient {
         Ok(claims)
     }
 
-    async fn fetch_jwks(&self, jwks_uri: &str) -> Result<Jwks, ApiError> {
+    async fn fetch_jwks(&self, jwks_uri: &str) -> Result<Jwks, AuthCenterError> {
         let resp = self
             .http_client
             .get(jwks_uri)
             .send()
             .await
-            .map_err(|e| ApiError::BadGateway(format!("Failed to fetch RSM Auth Center JWKS: {e}")))?;
+            .map_err(|e| AuthCenterError::BadGateway(format!("Failed to fetch RSM Auth Center JWKS: {e}")))?;
         if !resp.status().is_success() {
-            return Err(ApiError::BadGateway(format!(
+            return Err(AuthCenterError::BadGateway(format!(
                 "RSM Auth Center JWKS failed with status {}",
                 resp.status()
             )));
         }
         resp.json::<Jwks>()
             .await
-            .map_err(|e| ApiError::BadGateway(format!("Invalid RSM Auth Center JWKS response: {e}")))
+            .map_err(|e| AuthCenterError::BadGateway(format!("Invalid RSM Auth Center JWKS response: {e}")))
     }
 
     async fn fetch_userinfo(
@@ -547,16 +552,16 @@ impl AuthCenterProtocolClient {
         discovery: &OidcDiscovery,
         issuer: &str,
         access_token: &str,
-    ) -> Result<UserInfo, ApiError> {
+    ) -> Result<UserInfo, AuthCenterError> {
         let resp = self
             .http_client
             .get(&discovery.userinfo_endpoint)
             .bearer_auth(access_token)
             .send()
             .await
-            .map_err(|e| ApiError::BadGateway(format!("RSM Auth Center userinfo failed: {e}")))?;
+            .map_err(|e| AuthCenterError::BadGateway(format!("RSM Auth Center userinfo failed: {e}")))?;
         if !resp.status().is_success() {
-            return Err(ApiError::Unauthorized(format!(
+            return Err(AuthCenterError::Unauthorized(format!(
                 "RSM Auth Center userinfo failed with status {}",
                 resp.status()
             )));
@@ -565,14 +570,16 @@ impl AuthCenterProtocolClient {
         let userinfo = resp
             .json::<UserInfo>()
             .await
-            .map_err(|e| ApiError::Unauthorized(format!("Invalid RSM Auth Center userinfo response: {e}")))?;
+            .map_err(|e| AuthCenterError::Unauthorized(format!("Invalid RSM Auth Center userinfo response: {e}")))?;
         if userinfo.sub.trim().is_empty() {
-            return Err(ApiError::Unauthorized("RSM Auth Center userinfo missing sub".into()));
+            return Err(AuthCenterError::Unauthorized(
+                "RSM Auth Center userinfo missing sub".into(),
+            ));
         }
         if let Some(actual) = userinfo.iss.as_deref()
             && actual.trim_end_matches('/') != issuer.trim_end_matches('/')
         {
-            return Err(ApiError::Unauthorized(
+            return Err(AuthCenterError::Unauthorized(
                 "RSM Auth Center userinfo issuer mismatch".into(),
             ));
         }
@@ -584,14 +591,14 @@ impl AuthCenterProtocolClient {
         config: &RsmAuthConfig,
         resource: &str,
         since_ms: Option<i64>,
-    ) -> Result<Value, ApiError> {
+    ) -> Result<Value, AuthCenterError> {
         let ready = config.require_directory_ready()?;
         let base = ready.base_url.trim_end_matches('/');
         let mut url = Url::parse(&format!(
             "{base}/internal/directory/apps/{}/{}",
             ready.app_code, resource
         ))
-        .map_err(|e| ApiError::Internal(format!("Invalid RSM Auth Center directory endpoint config: {e}")))?;
+        .map_err(|e| AuthCenterError::Internal(format!("Invalid RSM Auth Center directory endpoint config: {e}")))?;
         if let Some(since_ms) = since_ms {
             url.query_pairs_mut()
                 .append_pair("since", &timestamp_ms_to_rfc3339(since_ms)?);
@@ -603,16 +610,16 @@ impl AuthCenterProtocolClient {
             .bearer_auth(ready.internal_token)
             .send()
             .await
-            .map_err(|e| ApiError::BadGateway(format!("RSM Auth Center directory request failed: {e}")))?;
+            .map_err(|e| AuthCenterError::BadGateway(format!("RSM Auth Center directory request failed: {e}")))?;
         if !resp.status().is_success() {
-            return Err(ApiError::BadGateway(format!(
+            return Err(AuthCenterError::BadGateway(format!(
                 "RSM Auth Center directory request failed with status {}",
                 resp.status()
             )));
         }
         resp.json::<Value>()
             .await
-            .map_err(|e| ApiError::BadGateway(format!("Invalid RSM Auth Center directory response: {e}")))
+            .map_err(|e| AuthCenterError::BadGateway(format!("Invalid RSM Auth Center directory response: {e}")))
     }
 }
 
@@ -705,29 +712,31 @@ struct TokenExchangeForm<'a> {
     code_verifier: &'a str,
 }
 
-fn decode_directory_users(value: Value) -> Result<Vec<DirectoryUser>, ApiError> {
+fn decode_directory_users(value: Value) -> Result<Vec<DirectoryUser>, AuthCenterError> {
     match value {
         Value::Array(_) => serde_json::from_value(value)
-            .map_err(|e| ApiError::BadGateway(format!("Invalid RSM Auth Center directory users response: {e}"))),
+            .map_err(|e| AuthCenterError::BadGateway(format!("Invalid RSM Auth Center directory users response: {e}"))),
         Value::Object(map) => {
             let selected = map
                 .get("list")
                 .or_else(|| map.get("users"))
                 .cloned()
                 .unwrap_or(Value::Array(Vec::new()));
-            serde_json::from_value(selected)
-                .map_err(|e| ApiError::BadGateway(format!("Invalid RSM Auth Center directory users response: {e}")))
+            serde_json::from_value(selected).map_err(|e| {
+                AuthCenterError::BadGateway(format!("Invalid RSM Auth Center directory users response: {e}"))
+            })
         }
-        _ => Err(ApiError::BadGateway(
+        _ => Err(AuthCenterError::BadGateway(
             "Invalid RSM Auth Center directory users response".into(),
         )),
     }
 }
 
-fn decode_directory_departments(value: Value) -> Result<Vec<DirectoryDepartment>, ApiError> {
+fn decode_directory_departments(value: Value) -> Result<Vec<DirectoryDepartment>, AuthCenterError> {
     match value {
-        Value::Array(_) => serde_json::from_value(value)
-            .map_err(|e| ApiError::BadGateway(format!("Invalid RSM Auth Center directory departments response: {e}"))),
+        Value::Array(_) => serde_json::from_value(value).map_err(|e| {
+            AuthCenterError::BadGateway(format!("Invalid RSM Auth Center directory departments response: {e}"))
+        }),
         Value::Object(map) => {
             let selected = map
                 .get("list")
@@ -735,25 +744,25 @@ fn decode_directory_departments(value: Value) -> Result<Vec<DirectoryDepartment>
                 .cloned()
                 .unwrap_or(Value::Array(Vec::new()));
             serde_json::from_value(selected).map_err(|e| {
-                ApiError::BadGateway(format!("Invalid RSM Auth Center directory departments response: {e}"))
+                AuthCenterError::BadGateway(format!("Invalid RSM Auth Center directory departments response: {e}"))
             })
         }
-        _ => Err(ApiError::BadGateway(
+        _ => Err(AuthCenterError::BadGateway(
             "Invalid RSM Auth Center directory departments response".into(),
         )),
     }
 }
 
-fn validate_discovered_issuer(discovery: &OidcDiscovery, expected: &str) -> Result<(), ApiError> {
+fn validate_discovered_issuer(discovery: &OidcDiscovery, expected: &str) -> Result<(), AuthCenterError> {
     if let Some(issuer) = discovery.issuer.as_deref()
         && issuer.trim_end_matches('/') != expected.trim_end_matches('/')
     {
-        return Err(ApiError::Unauthorized("RSM Auth Center issuer mismatch".into()));
+        return Err(AuthCenterError::Unauthorized("RSM Auth Center issuer mismatch".into()));
     }
     Ok(())
 }
 
-fn callback_url(headers: &HeaderMap) -> Result<String, ApiError> {
+fn callback_url(headers: &HeaderMap) -> Result<String, AuthCenterError> {
     let host = headers
         .get("x-forwarded-host")
         .and_then(|v| v.to_str().ok())
@@ -764,7 +773,7 @@ fn callback_url(headers: &HeaderMap) -> Result<String, ApiError> {
                 .and_then(|v| v.to_str().ok())
                 .filter(|v| !v.is_empty())
         })
-        .ok_or_else(|| ApiError::BadRequest("Missing Host header".into()))?;
+        .ok_or_else(|| AuthCenterError::BadRequest("Missing Host header".into()))?;
     let proto = headers
         .get("x-forwarded-proto")
         .and_then(|v| v.to_str().ok())
@@ -932,9 +941,9 @@ pub fn timestamp_rfc3339_to_ms(value: Option<&str>) -> Option<i64> {
         .map(|datetime| datetime.timestamp_millis())
 }
 
-fn timestamp_ms_to_rfc3339(value: i64) -> Result<String, ApiError> {
+fn timestamp_ms_to_rfc3339(value: i64) -> Result<String, AuthCenterError> {
     let Some(datetime) = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(value) else {
-        return Err(ApiError::BadRequest("Invalid directory sync timestamp".into()));
+        return Err(AuthCenterError::BadRequest("Invalid directory sync timestamp".into()));
     };
     Ok(datetime.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
 }

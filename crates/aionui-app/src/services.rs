@@ -15,9 +15,8 @@ use aionui_db::{
     Database, IAcpSessionRepository, IAgentMetadataRepository, IConversationRepository, IIamRepository,
     IMcpServerRepository, IProjectStore, ISkillRepository, IUserRepository, SqliteAcpSessionRepository,
     SqliteAgentMetadataRepository, SqliteAssistantDefinitionRepository, SqliteAssistantOverlayRepository,
-    SqliteAssistantPreferenceRepository, SqliteConversationRepository, SqliteIamRepository,
-    SqliteMcpServerRepository, SqliteProjectStore, SqliteProviderRepository, SqliteSkillRepository,
-    SqliteUserRepository,
+    SqliteAssistantPreferenceRepository, SqliteConversationRepository, SqliteIamRepository, SqliteMcpServerRepository,
+    SqliteProjectStore, SqliteProviderRepository, SqliteSkillRepository, SqliteUserRepository,
 };
 use aionui_project::ProjectService;
 use aionui_realtime::{BroadcastEventBus, WebSocketManager};

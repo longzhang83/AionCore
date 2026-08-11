@@ -51,8 +51,14 @@ async fn test_app_with_options_and_hook(
     aionpro_mode: bool,
     session_revoked_hook: Option<Arc<SessionRevokedHook>>,
 ) -> (Router, TestContext) {
-    test_app_with_options_and_config(local, bootstrap_secret, aionpro_mode, session_revoked_hook, RsmAuthConfig::from_env())
-        .await
+    test_app_with_options_and_config(
+        local,
+        bootstrap_secret,
+        aionpro_mode,
+        session_revoked_hook,
+        RsmAuthConfig::from_env(),
+    )
+    .await
 }
 
 async fn test_app_with_options_and_config(

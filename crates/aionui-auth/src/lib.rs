@@ -17,7 +17,7 @@ mod service;
 mod validation;
 
 // Error type
-pub use error::AuthError;
+pub use error::{AuthCenterError, AuthError};
 
 // JWT service
 pub use jwt::{JwtService, TokenPayload, generate_random_secret_string, resolve_jwt_secret};

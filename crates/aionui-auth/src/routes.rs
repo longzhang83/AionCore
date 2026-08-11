@@ -37,7 +37,7 @@ use crate::auth_center_client::{
     RsmOidcLoginQuery, RsmOidcStateStore, directory_status_to_local_status, directory_user_is_admin, sanitize_username,
     timestamp_rfc3339_to_ms,
 };
-use crate::error::AuthError;
+use crate::error::{AuthCenterError, AuthError};
 use crate::extract::extract_token_from_headers;
 use crate::middleware::{AuthIdentityMode, AuthState, CurrentUser, auth_middleware};
 use crate::password::{dummy_password_hash, generate_password, hash_password, verify_password_timed};
@@ -64,6 +64,19 @@ impl From<AuthError> for ApiError {
             AuthError::TokenBlacklisted => ApiError::Unauthorized("Token has been revoked".into()),
             AuthError::RateLimited => ApiError::RateLimited,
             AuthError::HashError(msg) => ApiError::Internal(format!("Password hash error: {msg}")),
+        }
+    }
+}
+
+impl From<AuthCenterError> for ApiError {
+    fn from(err: AuthCenterError) -> Self {
+        match err {
+            AuthCenterError::NotFound(msg) => ApiError::NotFound(msg),
+            AuthCenterError::Internal(msg) => ApiError::Internal(msg),
+            AuthCenterError::BadRequest(msg) => ApiError::BadRequest(msg),
+            AuthCenterError::Unauthorized(msg) => ApiError::Unauthorized(msg),
+            AuthCenterError::Forbidden(msg) => ApiError::Forbidden(msg),
+            AuthCenterError::BadGateway(msg) => ApiError::BadGateway(msg),
         }
     }
 }
