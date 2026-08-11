@@ -200,6 +200,7 @@ pub struct AuthCenterLoginIdentity {
     pub departments: Vec<String>,
     pub auth_source: String,
     pub app_code: String,
+    pub is_admin: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -217,6 +218,14 @@ pub struct DirectoryUser {
     pub mobile: Option<String>,
     #[serde(default)]
     pub position: Option<String>,
+    #[serde(
+        default,
+        alias = "positionSort",
+        alias = "position_sort",
+        alias = "sortOrder",
+        alias = "sort_order"
+    )]
+    pub position_sort: Option<i64>,
     #[serde(default, alias = "jobLevel", alias = "job_level")]
     pub job_level: Option<String>,
     #[serde(default, alias = "jobLevelCn", alias = "job_level_cn")]
@@ -233,6 +242,10 @@ pub struct DirectoryUser {
     pub roles: Vec<String>,
     #[serde(default, alias = "appRoles", alias = "app_roles")]
     pub app_roles: Option<Value>,
+    #[serde(default, alias = "isAdmin", alias = "is_admin")]
+    pub is_admin: Option<bool>,
+    #[serde(default)]
+    pub admin: Option<bool>,
     #[serde(default, alias = "updatedAt", alias = "updated_at")]
     pub updated_at: Option<String>,
 }
@@ -364,6 +377,7 @@ impl AuthCenterProtocolClient {
                 .clone()
                 .unwrap_or_else(|| AUTH_CENTER_PROVIDER.to_owned()),
             app_code: ready.app_code.to_owned(),
+            is_admin: userinfo_is_admin(&userinfo, ready.app_code),
         };
 
         Ok((stored.return_to, identity))
@@ -671,6 +685,14 @@ struct UserInfo {
     auth_source: Option<String>,
     #[serde(default)]
     apps: Option<Value>,
+    #[serde(default)]
+    roles: Vec<String>,
+    #[serde(default, alias = "appRoles", alias = "app_roles")]
+    app_roles: Option<Value>,
+    #[serde(default, alias = "isAdmin", alias = "is_admin")]
+    is_admin: Option<bool>,
+    #[serde(default)]
+    admin: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -773,6 +795,88 @@ fn userinfo_has_app(apps: Option<&Value>, app_code: &str) -> bool {
     })
 }
 
+pub fn directory_user_is_admin(user: &DirectoryUser, app_code: &str) -> bool {
+    user.is_admin.unwrap_or(false)
+        || user.admin.unwrap_or(false)
+        || roles_have_admin(&user.roles)
+        || value_has_app_admin(user.app_roles.as_ref(), app_code)
+}
+
+fn userinfo_is_admin(userinfo: &UserInfo, app_code: &str) -> bool {
+    userinfo.is_admin.unwrap_or(false)
+        || userinfo.admin.unwrap_or(false)
+        || roles_have_admin(&userinfo.roles)
+        || value_has_app_admin(userinfo.app_roles.as_ref(), app_code)
+        || apps_have_app_admin(userinfo.apps.as_ref(), app_code)
+}
+
+fn roles_have_admin(roles: &[String]) -> bool {
+    roles.iter().any(|role| role_is_admin(role))
+}
+
+fn role_is_admin(role: &str) -> bool {
+    let normalized = role
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    matches!(normalized.as_str(), "admin" | "administrator" | "superadmin" | "owner")
+}
+
+fn value_has_admin_role(value: &Value) -> bool {
+    match value {
+        Value::String(role) => role_is_admin(role),
+        Value::Bool(is_admin) => *is_admin,
+        Value::Array(items) => items.iter().any(value_has_admin_role),
+        Value::Object(map) => {
+            ["isAdmin", "is_admin", "admin"]
+                .iter()
+                .filter_map(|key| map.get(*key))
+                .any(|value| value.as_bool() == Some(true))
+                || ["role", "roles", "appRole", "appRoles", "app_role", "app_roles"]
+                    .iter()
+                    .filter_map(|key| map.get(*key))
+                    .any(value_has_admin_role)
+        }
+        _ => false,
+    }
+}
+
+fn value_has_app_admin(value: Option<&Value>, app_code: &str) -> bool {
+    match value {
+        Some(Value::Object(map)) => {
+            map.get(app_code).is_some_and(value_has_admin_role)
+                || map
+                    .values()
+                    .any(|entry| value_matches_app(entry, app_code) && value_has_admin_role(entry))
+        }
+        Some(Value::Array(items)) => items
+            .iter()
+            .any(|entry| value_matches_app(entry, app_code) && value_has_admin_role(entry)),
+        Some(_) => false,
+        None => false,
+    }
+}
+
+fn apps_have_app_admin(apps: Option<&Value>, app_code: &str) -> bool {
+    let Some(Value::Array(items)) = apps else {
+        return false;
+    };
+    items
+        .iter()
+        .any(|entry| value_matches_app(entry, app_code) && value_has_admin_role(entry))
+}
+
+fn value_matches_app(value: &Value, app_code: &str) -> bool {
+    let Value::Object(map) = value else {
+        return false;
+    };
+    ["code", "app_code", "appCode", "id"]
+        .iter()
+        .filter_map(|key| map.get(*key))
+        .any(|value| value.as_str() == Some(app_code))
+}
+
 fn username_from_userinfo(userinfo: &UserInfo) -> String {
     let raw = userinfo
         .preferred_username
@@ -862,4 +966,77 @@ fn env_bool_any(names: &[&str]) -> bool {
             .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
             .unwrap_or(false)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn directory_user_admin_mapping_is_exact_and_app_scoped() {
+        let agent_admin: DirectoryUser = serde_json::from_value(json!({
+            "id": "user-1",
+            "username": "alice",
+            "appRoles": {
+                "agent": ["admin"]
+            }
+        }))
+        .unwrap();
+        assert!(directory_user_is_admin(&agent_admin, "agent"));
+
+        let other_app_admin: DirectoryUser = serde_json::from_value(json!({
+            "id": "user-2",
+            "username": "bob",
+            "appRoles": {
+                "crm": ["admin"]
+            }
+        }))
+        .unwrap();
+        assert!(!directory_user_is_admin(&other_app_admin, "agent"));
+
+        let not_admin: DirectoryUser = serde_json::from_value(json!({
+            "id": "user-3",
+            "username": "charlie",
+            "roles": ["not_admin", "admin_readonly"]
+        }))
+        .unwrap();
+        assert!(!directory_user_is_admin(&not_admin, "agent"));
+
+        let unscoped_app_roles: DirectoryUser = serde_json::from_value(json!({
+            "id": "user-4",
+            "username": "dora",
+            "appRoles": ["admin"]
+        }))
+        .unwrap();
+        assert!(!directory_user_is_admin(&unscoped_app_roles, "agent"));
+    }
+
+    #[test]
+    fn userinfo_admin_mapping_accepts_explicit_app_admin_claim() {
+        let userinfo = UserInfo {
+            sub: "auth-user-1".to_owned(),
+            iss: None,
+            email: None,
+            mobile: None,
+            preferred_username: Some("alice".to_owned()),
+            name: None,
+            departments: None,
+            auth_source: None,
+            apps: Some(json!([
+                {
+                    "code": "agent",
+                    "role": "administrator"
+                }
+            ])),
+            roles: Vec::new(),
+            app_roles: None,
+            is_admin: None,
+            admin: None,
+        };
+
+        assert!(userinfo_is_admin(&userinfo, "agent"));
+        assert!(!userinfo_is_admin(&userinfo, "crm"));
+    }
 }

@@ -18,15 +18,55 @@ impl SqliteIamRepository {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
+
+    async fn count_synced_directory_users(&self) -> Result<i64, DbError> {
+        sqlx::query_scalar(
+            r#"
+SELECT COUNT(*)
+FROM users
+WHERE source = 'auth_center'
+  AND auth_provider = ?
+            "#,
+        )
+        .bind(AUTH_CENTER_PROVIDER)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(DbError::Query)
+    }
+
+    async fn count_synced_directory_organizations(&self) -> Result<i64, DbError> {
+        sqlx::query_scalar(
+            r#"
+SELECT COUNT(*)
+FROM organizations
+WHERE source = 'auth_center'
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(DbError::Query)
+    }
 }
 
 #[async_trait::async_trait]
 impl IIamRepository for SqliteIamRepository {
     async fn list_users(&self) -> Result<Vec<User>, DbError> {
-        sqlx::query_as::<_, User>("SELECT * FROM users ORDER BY created_at ASC")
-            .fetch_all(&self.pool)
-            .await
-            .map_err(DbError::Query)
+        sqlx::query_as::<_, User>(
+            r#"
+SELECT *
+FROM users
+ORDER BY
+    CASE WHEN position_sort IS NULL THEN 1 ELSE 0 END ASC,
+    position_sort ASC,
+    position COLLATE NOCASE ASC,
+    COALESCE(display_name, username) COLLATE NOCASE ASC,
+    username COLLATE NOCASE ASC,
+    created_at ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(DbError::Query)
     }
 
     async fn get_user(&self, id: &str) -> Result<Option<User>, DbError> {
@@ -391,6 +431,13 @@ INSERT INTO organizations (
 
     async fn upsert_external_user(&self, params: UpsertExternalUserParams<'_>) -> Result<(User, bool), DbError> {
         let now = aionui_common::now_ms();
+        let email = non_empty_trimmed(params.email);
+        let display_name = non_empty_trimmed(params.display_name);
+        let mobile = non_empty_trimmed(params.mobile);
+        let position = non_empty_trimmed(params.position);
+        let departments_json = non_empty_trimmed(params.departments_json);
+        let auth_source = non_empty_trimmed(params.auth_source);
+        let status = external_status_to_local_status(params.external_status);
         let existing: Option<User> =
             sqlx::query_as::<_, User>("SELECT * FROM users WHERE auth_provider = ? AND auth_sub = ?")
                 .bind(AUTH_CENTER_PROVIDER)
@@ -403,20 +450,25 @@ INSERT INTO organizations (
             Some(user) => {
                 sqlx::query(
                     r#"
-UPDATE users
-SET email = ?, display_name = ?, mobile = ?, department_ids = ?, auth_source = ?,
-    auth_app_code = ?, source = 'auth_center', external_status = ?, external_updated_at = ?, updated_at = ?
-WHERE id = ?
-                    "#,
+	UPDATE users
+	SET email = ?, display_name = ?, mobile = ?, position = ?, position_sort = ?, department_ids = ?, auth_source = ?,
+	    auth_app_code = ?, source = 'auth_center', status = ?, external_status = ?, external_updated_at = ?, is_admin = ?,
+	    updated_at = ?
+	WHERE id = ?
+	                    "#,
                 )
-                .bind(params.email)
-                .bind(params.display_name)
-                .bind(params.mobile)
-                .bind(params.departments_json)
-                .bind(params.auth_source)
+                .bind(email)
+                .bind(display_name)
+                .bind(mobile)
+                .bind(position)
+                .bind(params.position_sort)
+                .bind(departments_json)
+                .bind(auth_source)
                 .bind(params.app_code)
+                .bind(status)
                 .bind(params.external_status)
                 .bind(params.external_updated_at)
+                .bind(bool_to_i64(params.is_admin))
                 .bind(now)
                 .bind(&user.id)
                 .execute(&self.pool)
@@ -433,23 +485,28 @@ WHERE id = ?
                 let username = unique_username(&self.pool, params.username).await?;
                 sqlx::query(
                     r#"
-INSERT INTO users (
-    id, username, email, password_hash, auth_sub, auth_provider, display_name, mobile, department_ids,
-    auth_source, auth_app_code, source, status, external_status, is_admin, external_updated_at, created_at, updated_at
-) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, 'auth_center', 'active', ?, 0, ?, ?, ?)
-                    "#,
+	INSERT INTO users (
+	    id, username, email, password_hash, auth_sub, auth_provider, display_name, mobile, position, position_sort,
+	    department_ids, auth_source, auth_app_code, source, status, external_status, is_admin, external_updated_at,
+	    created_at, updated_at
+	) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'auth_center', ?, ?, ?, ?, ?, ?)
+	                    "#,
                 )
                 .bind(&id)
                 .bind(&username)
-                .bind(params.email)
+                .bind(email)
                 .bind(params.external_id)
                 .bind(AUTH_CENTER_PROVIDER)
-                .bind(params.display_name)
-                .bind(params.mobile)
-                .bind(params.departments_json)
-                .bind(params.auth_source)
+                .bind(display_name)
+                .bind(mobile)
+                .bind(position)
+                .bind(params.position_sort)
+                .bind(departments_json)
+                .bind(auth_source)
                 .bind(params.app_code)
+                .bind(status)
                 .bind(params.external_status)
+                .bind(bool_to_i64(params.is_admin))
                 .bind(params.external_updated_at)
                 .bind(now)
                 .bind(now)
@@ -470,10 +527,11 @@ INSERT INTO users (
         if seen_external_ids.is_empty() {
             let result = sqlx::query(
                 r#"
-UPDATE users
-SET external_status = 'disabled', updated_at = ?
-WHERE source = 'auth_center' AND auth_provider = ? AND COALESCE(external_status, '') != 'disabled'
-                "#,
+	UPDATE users
+	SET status = 'disabled', external_status = 'disabled', updated_at = ?
+	WHERE source = 'auth_center' AND auth_provider = ?
+	    AND (status != 'disabled' OR COALESCE(external_status, '') != 'disabled')
+	                "#,
             )
             .bind(now)
             .bind(AUTH_CENTER_PROVIDER)
@@ -484,11 +542,12 @@ WHERE source = 'auth_center' AND auth_provider = ? AND COALESCE(external_status,
         }
 
         let mut builder: QueryBuilder<'_, Sqlite> =
-            QueryBuilder::new("UPDATE users SET external_status = 'disabled', updated_at = ");
+            QueryBuilder::new("UPDATE users SET status = 'disabled', external_status = 'disabled', updated_at = ");
         builder.push_bind(now);
         builder.push(" WHERE source = 'auth_center' AND auth_provider = ");
         builder.push_bind(AUTH_CENTER_PROVIDER);
-        builder.push(" AND COALESCE(external_status, '') != 'disabled' AND auth_sub NOT IN (");
+        builder
+            .push(" AND (status != 'disabled' OR COALESCE(external_status, '') != 'disabled') AND auth_sub NOT IN (");
         let mut separated = builder.separated(", ");
         for id in seen_external_ids {
             separated.push_bind(id);
@@ -507,6 +566,14 @@ WHERE source = 'auth_center' AND auth_provider = ? AND COALESCE(external_status,
         counts: SyncCounts,
     ) -> Result<DirectorySyncStateRow, DbError> {
         let now = aionui_common::now_ms();
+        let (user_count, department_count) = if status == "success" {
+            (
+                self.count_synced_directory_users().await?,
+                self.count_synced_directory_organizations().await?,
+            )
+        } else {
+            (counts.user_count, counts.department_count)
+        };
         sqlx::query(
             r#"
 INSERT INTO auth_center_directory_sync_states (
@@ -514,12 +581,18 @@ INSERT INTO auth_center_directory_sync_states (
     user_count, department_count, user_created, user_updated, user_disabled, updated_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(app_code) DO UPDATE SET
-    last_synced_at = excluded.last_synced_at,
+    last_synced_at = COALESCE(excluded.last_synced_at, auth_center_directory_sync_states.last_synced_at),
     last_full_synced_at = COALESCE(excluded.last_full_synced_at, auth_center_directory_sync_states.last_full_synced_at),
     last_status = excluded.last_status,
     last_message = excluded.last_message,
-    user_count = excluded.user_count,
-    department_count = excluded.department_count,
+    user_count = CASE
+        WHEN excluded.last_status = 'success' THEN excluded.user_count
+        ELSE auth_center_directory_sync_states.user_count
+    END,
+    department_count = CASE
+        WHEN excluded.last_status = 'success' THEN excluded.department_count
+        ELSE auth_center_directory_sync_states.department_count
+    END,
     user_created = excluded.user_created,
     user_updated = excluded.user_updated,
     user_disabled = excluded.user_disabled,
@@ -531,8 +604,8 @@ ON CONFLICT(app_code) DO UPDATE SET
         .bind(if full && status == "success" { Some(now) } else { None })
         .bind(status)
         .bind(message)
-        .bind(counts.user_count)
-        .bind(counts.department_count)
+        .bind(user_count)
+        .bind(department_count)
         .bind(counts.user_created)
         .bind(counts.user_updated)
         .bind(counts.user_disabled)
@@ -579,6 +652,18 @@ async fn unique_username(pool: &SqlitePool, requested: &str) -> Result<String, D
 
 fn bool_to_i64(value: bool) -> i64 {
     if value { 1 } else { 0 }
+}
+
+fn non_empty_trimmed(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn external_status_to_local_status(value: Option<&str>) -> &'static str {
+    if value.is_some_and(|status| status.trim() == "disabled") {
+        "disabled"
+    } else {
+        "active"
+    }
 }
 
 fn map_unique_user_error(username: &str) -> impl FnOnce(sqlx::Error) -> DbError + '_ {

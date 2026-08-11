@@ -44,9 +44,17 @@ impl RateLimiter {
         Self::new(5, Duration::from_secs(15 * 60))
     }
 
-    /// API rate limiter: 60 requests per 1-minute window.
+    /// Public API rate limiter: 300 requests per 1-minute window.
     pub fn api() -> Self {
-        Self::new(60, Duration::from_secs(60))
+        Self::new(300, Duration::from_secs(60))
+    }
+
+    /// Local admin limiter: 600 requests per 1-minute window.
+    ///
+    /// Used for local-only internal user and WebUI bootstrap/admin endpoints,
+    /// which can burst during desktop startup and setup flows.
+    pub fn local_admin() -> Self {
+        Self::new(600, Duration::from_secs(60))
     }
 
     /// Authenticated action limiter: 20 requests per 1-minute window.
@@ -147,8 +155,10 @@ fn now_ms() -> u64 {
 
 /// Auth rate limit middleware: 5 failed attempts per 15 minutes per IP.
 ///
-/// Pre-checks the limit; records failures only for non-success responses
-/// (skips successful requests per API spec).
+/// Pre-checks the limit; records failures only for client-error responses.
+///
+/// Successful OIDC flows return `307 Temporary Redirect`, which should not be
+/// counted as a failed authentication attempt.
 pub async fn auth_rate_limit_middleware(
     State(limiter): State<Arc<RateLimiter>>,
     request: Request,
@@ -159,14 +169,14 @@ pub async fn auth_rate_limit_middleware(
 
     let response = next.run(request).await;
 
-    if !response.status().is_success() {
+    if response.status().is_client_error() {
         limiter.record_attempt(&ip);
     }
 
     Ok(response)
 }
 
-/// API rate limit middleware: 60 requests per minute per IP.
+/// API rate limit middleware: applies the limiter configured for that route.
 pub async fn api_rate_limit_middleware(
     State(limiter): State<Arc<RateLimiter>>,
     request: Request,
@@ -287,9 +297,18 @@ mod tests {
     }
 
     #[test]
-    fn factory_api_limit_is_sixty() {
+    fn factory_api_limit_is_three_hundred() {
         let limiter = RateLimiter::api();
-        for _ in 0..60 {
+        for _ in 0..300 {
+            assert!(limiter.check_and_increment("ip").is_ok());
+        }
+        assert!(limiter.check_and_increment("ip").is_err());
+    }
+
+    #[test]
+    fn factory_local_admin_limit_is_six_hundred() {
+        let limiter = RateLimiter::local_admin();
+        for _ in 0..600 {
             assert!(limiter.check_and_increment("ip").is_ok());
         }
         assert!(limiter.check_and_increment("ip").is_err());

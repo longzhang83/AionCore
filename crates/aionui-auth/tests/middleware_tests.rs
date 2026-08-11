@@ -5,6 +5,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::middleware;
+use axum::response::Redirect;
 use axum::routing::{get, post};
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use tower::ServiceExt;
@@ -458,6 +459,26 @@ async fn auth_rate_limit_skips_successful_responses() {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+}
+
+#[tokio::test]
+async fn auth_rate_limit_skips_redirect_responses() {
+    let limiter = Arc::new(RateLimiter::new(2, Duration::from_secs(60)));
+    let app = Router::new()
+        .route(
+            "/api/auth/oidc/callback",
+            get(|| async { Redirect::temporary("/welcome") }),
+        )
+        .layer(middleware::from_fn_with_state(limiter, auth_rate_limit_middleware));
+
+    for _ in 0..5 {
+        let resp = app
+            .clone()
+            .oneshot(Request::get("/api/auth/oidc/callback").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
     }
 }
 

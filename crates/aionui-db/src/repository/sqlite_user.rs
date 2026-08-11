@@ -109,6 +109,8 @@ impl IUserRepository for SqliteUserRepository {
             auth_provider: None,
             display_name: None,
             mobile: None,
+            position: None,
+            position_sort: None,
             department_ids: None,
             auth_source: None,
             auth_app_code: None,

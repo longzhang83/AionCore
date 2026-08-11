@@ -10,7 +10,10 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
+use serde_json::json;
 use tower::ServiceExt;
+use wiremock::matchers::{header as wiremock_header, method, path, query_param_contains, query_param_is_missing};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use aionui_auth::{
     AuthIdentityMode, AuthRouterState, CookieConfig, JwtService, QrTokenStore, RsmAuthConfig, RsmOidcStateStore,
@@ -38,11 +41,26 @@ async fn test_app_with_options(local: bool, bootstrap_secret: Option<&str>) -> (
     test_app_with_options_and_hook(local, bootstrap_secret, false, None).await
 }
 
+async fn test_app_with_rsm_auth_config(rsm_auth_config: RsmAuthConfig) -> (Router, TestContext) {
+    test_app_with_options_and_config(false, None, false, None, rsm_auth_config).await
+}
+
 async fn test_app_with_options_and_hook(
     local: bool,
     bootstrap_secret: Option<&str>,
     aionpro_mode: bool,
     session_revoked_hook: Option<Arc<SessionRevokedHook>>,
+) -> (Router, TestContext) {
+    test_app_with_options_and_config(local, bootstrap_secret, aionpro_mode, session_revoked_hook, RsmAuthConfig::from_env())
+        .await
+}
+
+async fn test_app_with_options_and_config(
+    local: bool,
+    bootstrap_secret: Option<&str>,
+    aionpro_mode: bool,
+    session_revoked_hook: Option<Arc<SessionRevokedHook>>,
+    rsm_auth_config: RsmAuthConfig,
 ) -> (Router, TestContext) {
     let db = init_database_memory().await.unwrap();
     let user_repo = Arc::new(SqliteUserRepository::new(db.pool().clone())) as Arc<dyn IUserRepository>;
@@ -70,7 +88,7 @@ async fn test_app_with_options_and_hook(
         },
         bootstrap_secret: bootstrap_secret.map(Arc::<str>::from),
         session_revoked_hook,
-        rsm_auth_config: Arc::new(RsmAuthConfig::from_env()),
+        rsm_auth_config: Arc::new(rsm_auth_config),
         rsm_oidc_state_store: Arc::new(RsmOidcStateStore::new()),
         http_client: reqwest::Client::new(),
         local,
@@ -86,6 +104,19 @@ async fn test_app_with_options_and_hook(
         _db: db,
     };
     (app, ctx)
+}
+
+fn directory_config(base_url: String) -> RsmAuthConfig {
+    RsmAuthConfig {
+        enabled: true,
+        issuer: None,
+        client_id: None,
+        client_secret: None,
+        redirect_uri: None,
+        app_code: "agent".to_owned(),
+        internal_base_url: Some(base_url),
+        internal_token: Some("internal-secret".to_owned()),
+    }
 }
 
 /// Holds references needed by test assertions.
@@ -1130,6 +1161,24 @@ async fn t12_2_internal_user_routes_work_in_local_mode() {
     assert_eq!(renamed_json["data"]["username"], "renamed-admin");
 }
 
+#[tokio::test]
+async fn t12_3_internal_user_routes_do_not_share_public_api_quota() {
+    let (app, ctx) = test_app_with_local(true).await;
+    create_test_user(&ctx, "admin", "StrongP@ss1").await;
+
+    for _ in 0..60 {
+        let resp = app.clone().oneshot(get_anonymous("/api/auth/status")).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    let resp = app
+        .oneshot(get_anonymous("/api/auth/internal/users/system"))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
 // ===========================================================================
 // T13. IAM admin routes
 // ===========================================================================
@@ -1237,11 +1286,14 @@ async fn t13_5_auth_center_user_rejects_profile_and_org_overrides() {
             display_name: Some("Auth User"),
             email: Some("auth@example.test"),
             mobile: None,
+            position: None,
+            position_sort: None,
             departments_json: None,
             auth_source: Some("auth-center-directory"),
             app_code: "agent",
             external_status: Some("active"),
             external_updated_at: None,
+            is_admin: false,
         })
         .await
         .unwrap();
@@ -1297,4 +1349,189 @@ async fn t13_6_organization_update_can_clear_parent() {
     assert_eq!(clear_resp.status(), StatusCode::OK);
     let clear_json = body_json(clear_resp).await;
     assert!(clear_json["data"]["parent_id"].is_null());
+}
+
+#[tokio::test]
+async fn t13_7_directory_sync_imports_wecom_source_departments_and_users() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/internal/directory/apps/agent/departments"))
+        .and(query_param_is_missing("since"))
+        .and(wiremock_header("Authorization", "Bearer internal-secret"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {
+                "id": "wecom-dept-root",
+                "name": "RSM",
+                "sort": 1,
+                "status": "active"
+            },
+            {
+                "id": "wecom-dept-tax",
+                "parentId": "wecom-dept-root",
+                "name": "Tax",
+                "sort": 2,
+                "status": "active"
+            }
+        ])))
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/internal/directory/apps/agent/users"))
+        .and(query_param_is_missing("since"))
+        .and(wiremock_header("Authorization", "Bearer internal-secret"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {
+                "id": "wecom-user-1",
+                "username": "alice",
+                "displayName": "Alice",
+                "email": "alice@example.test",
+                "mobile": "13800000000",
+                "position": "Tax Manager",
+                "positionSort": 20,
+                "source": "wecom",
+                "status": "active",
+                "departments": ["wecom-dept-tax"],
+                "appRoles": {
+                    "agent": ["admin"]
+                },
+                "updatedAt": "2026-06-15T00:00:00Z"
+            }
+        ])))
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/internal/directory/apps/agent/departments"))
+        .and(query_param_contains("since", "T"))
+        .and(wiremock_header("Authorization", "Bearer internal-secret"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/internal/directory/apps/agent/users"))
+        .and(query_param_contains("since", "T"))
+        .and(wiremock_header("Authorization", "Bearer internal-secret"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .mount(&mock_server)
+        .await;
+
+    let (mut app, ctx) = test_app_with_rsm_auth_config(directory_config(mock_server.uri())).await;
+    create_test_user(&ctx, "admin", "StrongP@ss1").await;
+    let (token, _) = login(&mut app, "admin", "StrongP@ss1").await;
+
+    let sync_resp = app
+        .clone()
+        .oneshot(json_post_with_token(
+            "/api/iam/directory-sync",
+            r#"{"full":true}"#,
+            &token,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(sync_resp.status(), StatusCode::OK);
+    let sync_json = body_json(sync_resp).await;
+    assert_eq!(sync_json["data"]["user_count"], 1);
+    assert_eq!(sync_json["data"]["department_count"], 2);
+    assert_eq!(sync_json["data"]["user_created"], 1);
+
+    let users_resp = app
+        .clone()
+        .oneshot(get_with_token("/api/iam/users", &token))
+        .await
+        .unwrap();
+    assert_eq!(users_resp.status(), StatusCode::OK);
+    let users_json = body_json(users_resp).await;
+    let synced_user = users_json["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|user| user["auth_sub"] == "wecom-user-1")
+        .expect("synced WeCom user should be listed");
+    assert_eq!(synced_user["source"], "auth_center");
+    assert_eq!(synced_user["auth_source"], "wecom");
+    assert_eq!(synced_user["is_admin"], true);
+    assert_eq!(synced_user["position"], "Tax Manager");
+    assert_eq!(synced_user["position_sort"], 20);
+    assert_eq!(synced_user["organizations"][0]["name"], "Tax");
+
+    let status_resp = app
+        .clone()
+        .oneshot(get_with_token("/api/iam/directory-sync/status", &token))
+        .await
+        .unwrap();
+    assert_eq!(status_resp.status(), StatusCode::OK);
+    let status_json = body_json(status_resp).await;
+    assert_eq!(status_json["data"]["last_status"], "success");
+    assert_eq!(status_json["data"]["user_count"], 1);
+    assert_eq!(status_json["data"]["department_count"], 2);
+
+    let incremental_resp = app
+        .clone()
+        .oneshot(json_post_with_token(
+            "/api/iam/directory-sync",
+            r#"{"full":false}"#,
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(incremental_resp.status(), StatusCode::OK);
+    let incremental_json = body_json(incremental_resp).await;
+    assert_eq!(incremental_json["data"]["user_count"], 1);
+    assert_eq!(incremental_json["data"]["department_count"], 2);
+    assert_eq!(incremental_json["data"]["user_created"], 0);
+    assert_eq!(incremental_json["data"]["user_updated"], 0);
+
+    let incremental_status_resp = app
+        .oneshot(get_with_token("/api/iam/directory-sync/status", &token))
+        .await
+        .unwrap();
+    assert_eq!(incremental_status_resp.status(), StatusCode::OK);
+    let incremental_status_json = body_json(incremental_status_resp).await;
+    assert_eq!(incremental_status_json["data"]["last_status"], "success");
+    assert_eq!(incremental_status_json["data"]["user_count"], 1);
+    assert_eq!(incremental_status_json["data"]["department_count"], 2);
+}
+
+#[tokio::test]
+async fn t13_8_directory_sync_failure_is_persisted_for_admin_status() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/internal/directory/apps/agent/departments"))
+        .and(wiremock_header("Authorization", "Bearer internal-secret"))
+        .respond_with(ResponseTemplate::new(401).set_body_string("invalid token"))
+        .mount(&mock_server)
+        .await;
+
+    let (mut app, ctx) = test_app_with_rsm_auth_config(directory_config(mock_server.uri())).await;
+    create_test_user(&ctx, "admin", "StrongP@ss1").await;
+    let (token, _) = login(&mut app, "admin", "StrongP@ss1").await;
+
+    let sync_resp = app
+        .clone()
+        .oneshot(json_post_with_token(
+            "/api/iam/directory-sync",
+            r#"{"full":false}"#,
+            &token,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(sync_resp.status(), StatusCode::BAD_GATEWAY);
+    let sync_json = body_json(sync_resp).await;
+    assert_eq!(sync_json["code"], "BAD_GATEWAY");
+
+    let status_resp = app
+        .oneshot(get_with_token("/api/iam/directory-sync/status", &token))
+        .await
+        .unwrap();
+    assert_eq!(status_resp.status(), StatusCode::OK);
+    let status_json = body_json(status_resp).await;
+    assert_eq!(status_json["data"]["last_status"], "failed");
+    assert!(
+        status_json["data"]["last_message"]
+            .as_str()
+            .is_some_and(|message| message.contains("401"))
+    );
+    assert_eq!(status_json["data"]["user_count"], 0);
+    assert_eq!(status_json["data"]["department_count"], 0);
 }

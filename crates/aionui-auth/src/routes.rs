@@ -34,7 +34,8 @@ use aionui_db::{
 
 use crate::auth_center_client::{
     AuthCenterProtocolClient, DirectoryDepartment, DirectoryUser, RsmAuthConfig, RsmOidcCallbackQuery,
-    RsmOidcLoginQuery, RsmOidcStateStore, directory_status_to_local_status, sanitize_username, timestamp_rfc3339_to_ms,
+    RsmOidcLoginQuery, RsmOidcStateStore, directory_status_to_local_status, directory_user_is_admin, sanitize_username,
+    timestamp_rfc3339_to_ms,
 };
 use crate::error::AuthError;
 use crate::extract::extract_token_from_headers;
@@ -132,6 +133,8 @@ fn user_summary(user: User, organizations: Vec<IamOrganizationSummary>) -> IamUs
         display_name: user.display_name,
         email: user.email,
         mobile: user.mobile,
+        position: user.position,
+        position_sort: user.position_sort,
         source: user.source,
         status: user.status.as_str().to_owned(),
         external_status: user.external_status,
@@ -358,13 +361,15 @@ fn user_context_required() -> ApiError {
 /// - `POST /api/webui/generate-qr-token` (local-only)
 pub fn auth_routes(state: AuthRouterState) -> Router {
     let auth_limiter = Arc::new(RateLimiter::auth());
-    let api_limiter = Arc::new(RateLimiter::api());
+    let public_api_limiter = Arc::new(RateLimiter::api());
+    let local_admin_limiter = Arc::new(RateLimiter::local_admin());
     let action_limiter = Arc::new(RateLimiter::authenticated_action());
 
     // Start periodic cleanup for rate limiters
     let cleanup_interval = Duration::from_secs(60);
     auth_limiter.start_cleanup_task(cleanup_interval);
-    api_limiter.start_cleanup_task(cleanup_interval);
+    public_api_limiter.start_cleanup_task(cleanup_interval);
+    local_admin_limiter.start_cleanup_task(cleanup_interval);
     action_limiter.start_cleanup_task(cleanup_interval);
 
     let auth_state = AuthState {
@@ -389,10 +394,18 @@ pub fn auth_routes(state: AuthRouterState) -> Router {
         .route_layer(from_fn_with_state(auth_limiter, auth_rate_limit_middleware))
         .with_state(state.clone());
 
-    // API rate limited public routes (no auth required)
+    // Public unauthenticated routes.
     let api_public = Router::new()
         .route("/api/auth/config", get(config_handler))
         .route("/api/auth/status", get(status_handler))
+        .route_layer(from_fn_with_state(
+            public_api_limiter.clone(),
+            api_rate_limit_middleware,
+        ))
+        .with_state(state.clone());
+
+    // Local-only admin/bootstrap routes.
+    let local_admin = Router::new()
         .route(
             "/api/auth/internal/external-users/{external_user_id}",
             put(ensure_external_user_handler),
@@ -440,7 +453,7 @@ pub fn auth_routes(state: AuthRouterState) -> Router {
         .route("/api/webui/change-username", post(webui_change_username_handler))
         .route("/api/webui/reset-password", post(webui_reset_password_handler))
         .route("/api/webui/generate-qr-token", post(webui_generate_qr_token_handler))
-        .route_layer(from_fn_with_state(api_limiter.clone(), api_rate_limit_middleware))
+        .route_layer(from_fn_with_state(local_admin_limiter, api_rate_limit_middleware))
         .with_state(state.clone());
 
     // Authenticated routes: api limiter -> auth -> action limiter
@@ -474,7 +487,10 @@ pub fn auth_routes(state: AuthRouterState) -> Router {
             authenticated_action_rate_limit_middleware,
         ))
         .route_layer(from_fn_with_state(auth_state, auth_middleware))
-        .route_layer(from_fn_with_state(api_limiter.clone(), api_rate_limit_middleware))
+        .route_layer(from_fn_with_state(
+            public_api_limiter.clone(),
+            api_rate_limit_middleware,
+        ))
         .with_state(state.clone());
 
     // API + action limited routes (token in body, no auth middleware)
@@ -484,7 +500,7 @@ pub fn auth_routes(state: AuthRouterState) -> Router {
             action_limiter,
             authenticated_action_rate_limit_middleware,
         ))
-        .route_layer(from_fn_with_state(api_limiter, api_rate_limit_middleware))
+        .route_layer(from_fn_with_state(public_api_limiter, api_rate_limit_middleware))
         .with_state(state);
 
     // Static page (no middleware)
@@ -493,6 +509,7 @@ pub fn auth_routes(state: AuthRouterState) -> Router {
     Router::new()
         .merge(auth_rate_limited)
         .merge(api_public)
+        .merge(local_admin)
         .merge(authenticated)
         .merge(api_action_limited)
         .merge(static_routes)
@@ -629,11 +646,14 @@ async fn oidc_callback_handler(
             display_name: identity.display_name.as_deref(),
             email: identity.email.as_deref(),
             mobile: identity.mobile.as_deref(),
+            position: None,
+            position_sort: None,
             departments_json: departments_json.as_deref(),
             auth_source: Some(&identity.auth_source),
             app_code: &identity.app_code,
             external_status: Some("active"),
             external_updated_at: None,
+            is_admin: identity.is_admin,
         })
         .await
         .map_err(db_error_to_api_error)?;
@@ -1383,6 +1403,31 @@ async fn directory_sync_handler(
 }
 
 async fn run_directory_sync(state: &AuthRouterState, full: bool) -> Result<IamDirectorySyncResult, ApiError> {
+    match try_run_directory_sync(state, full).await {
+        Ok(result) => Ok(result),
+        Err(error) => {
+            if let Err(save_error) = state
+                .iam_repo
+                .save_directory_sync_state(
+                    &state.rsm_auth_config.app_code,
+                    full,
+                    "failed",
+                    Some(&directory_sync_failure_message(&error)),
+                    SyncCounts::default(),
+                )
+                .await
+            {
+                tracing::warn!(
+                    error = ?save_error,
+                    "failed to persist Auth Center directory sync failure state"
+                );
+            }
+            Err(error)
+        }
+    }
+}
+
+async fn try_run_directory_sync(state: &AuthRouterState, full: bool) -> Result<IamDirectorySyncResult, ApiError> {
     let previous = state
         .iam_repo
         .directory_sync_state(&state.rsm_auth_config.app_code)
@@ -1427,11 +1472,14 @@ async fn run_directory_sync(state: &AuthRouterState, full: bool) -> Result<IamDi
                 display_name: directory_user.display_name.as_deref(),
                 email: directory_user.email.as_deref(),
                 mobile: directory_user.mobile.as_deref(),
+                position: directory_user.position.as_deref(),
+                position_sort: directory_user.position_sort,
                 departments_json: departments_json.as_deref(),
                 auth_source: directory_user.source.as_deref().or(Some("auth-center-directory")),
                 app_code: &state.rsm_auth_config.app_code,
                 external_status: Some(directory_status_to_local_status(directory_user.status.as_deref())),
                 external_updated_at: timestamp_rfc3339_to_ms(directory_user.updated_at.as_deref()),
+                is_admin: directory_user_is_admin(&directory_user, &state.rsm_auth_config.app_code),
             })
             .await
             .map_err(db_error_to_api_error)?;
@@ -1465,13 +1513,22 @@ async fn run_directory_sync(state: &AuthRouterState, full: bool) -> Result<IamDi
     Ok(IamDirectorySyncResult {
         app_code: sync_state.app_code,
         full,
-        user_count: counts.user_count,
-        department_count: counts.department_count,
+        user_count: sync_state.user_count,
+        department_count: sync_state.department_count,
         user_created: counts.user_created,
         user_updated: counts.user_updated,
         user_disabled: counts.user_disabled,
         synced_at: sync_state.updated_at,
     })
+}
+
+fn directory_sync_failure_message(error: &ApiError) -> String {
+    const MAX_MESSAGE_LEN: usize = 512;
+    let message = error.to_string();
+    if message.len() <= MAX_MESSAGE_LEN {
+        return message;
+    }
+    message.chars().take(MAX_MESSAGE_LEN).collect()
 }
 
 async fn upsert_directory_departments(

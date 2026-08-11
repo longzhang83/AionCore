@@ -51,6 +51,8 @@ pub struct User {
     pub auth_provider: Option<String>,
     pub display_name: Option<String>,
     pub mobile: Option<String>,
+    pub position: Option<String>,
+    pub position_sort: Option<i64>,
     pub department_ids: Option<String>,
     pub auth_source: Option<String>,
     pub auth_app_code: Option<String>,

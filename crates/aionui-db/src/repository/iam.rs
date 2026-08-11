@@ -53,11 +53,14 @@ pub struct UpsertExternalUserParams<'a> {
     pub display_name: Option<&'a str>,
     pub email: Option<&'a str>,
     pub mobile: Option<&'a str>,
+    pub position: Option<&'a str>,
+    pub position_sort: Option<i64>,
     pub departments_json: Option<&'a str>,
     pub auth_source: Option<&'a str>,
     pub app_code: &'a str,
     pub external_status: Option<&'a str>,
     pub external_updated_at: Option<i64>,
+    pub is_admin: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
