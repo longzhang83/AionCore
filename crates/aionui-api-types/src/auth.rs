@@ -102,6 +102,8 @@ pub struct IamUserSummary {
     pub display_name: Option<String>,
     pub email: Option<String>,
     pub mobile: Option<String>,
+    pub position: Option<String>,
+    pub position_sort: Option<i64>,
     pub source: String,
     pub status: String,
     pub external_status: Option<String>,
@@ -192,17 +194,12 @@ pub struct IamUpdateOrganizationRequest {
     pub sort: Option<i64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum NullableStringUpdate {
+    #[default]
     Missing,
     Null,
     Value(String),
-}
-
-impl Default for NullableStringUpdate {
-    fn default() -> Self {
-        Self::Missing
-    }
 }
 
 impl<'de> Deserialize<'de> for NullableStringUpdate {
