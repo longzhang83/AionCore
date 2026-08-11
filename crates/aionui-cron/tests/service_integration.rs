@@ -53,6 +53,7 @@ fn current_user(id: &str) -> CurrentUser {
         username: id.to_owned(),
         user_type: aionui_db::UserType::Local,
         status: aionui_db::UserStatus::Active,
+        is_admin: false,
     }
 }
 

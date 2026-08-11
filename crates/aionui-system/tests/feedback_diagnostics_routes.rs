@@ -134,6 +134,7 @@ fn diagnostics_request(uri: &str) -> Request<Body> {
         username: "system_default_user".to_owned(),
         user_type: UserType::Local,
         status: UserStatus::Active,
+        is_admin: false,
     });
     req
 }

@@ -108,6 +108,7 @@ fn post_request(uri: &str, body: serde_json::Value) -> Request<Body> {
         username: TEST_USER_ID.to_owned(),
         user_type: UserType::Local,
         status: UserStatus::Active,
+        is_admin: false,
     });
     req
 }

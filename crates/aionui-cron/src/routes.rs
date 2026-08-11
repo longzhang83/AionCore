@@ -293,6 +293,7 @@ mod tests {
             username: "alice".to_owned(),
             user_type: aionui_db::UserType::Aionpro,
             status: aionui_db::UserStatus::Active,
+            is_admin: false,
         };
 
         assert!(matches!(
@@ -313,6 +314,7 @@ mod tests {
             username: "alice".to_owned(),
             user_type: aionui_db::UserType::Aionpro,
             status: aionui_db::UserStatus::Active,
+            is_admin: false,
         };
 
         assert_eq!(trusted_header_user_id(&headers, &current_user).unwrap(), "user_a");

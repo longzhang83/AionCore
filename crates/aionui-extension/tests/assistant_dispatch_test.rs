@@ -179,6 +179,7 @@ async fn router_with_dispatcher(dispatcher: Arc<FakeDispatcher>) -> axum::Router
         username: "user-current".into(),
         user_type: UserType::Local,
         status: UserStatus::Active,
+        is_admin: false,
     }))
 }
 

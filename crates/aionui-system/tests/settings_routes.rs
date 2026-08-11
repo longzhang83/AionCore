@@ -80,6 +80,7 @@ fn get_request_for_user(user_id: &str, uri: &str) -> Request<Body> {
         username: user_id.to_owned(),
         user_type: UserType::Local,
         status: UserStatus::Active,
+        is_admin: false,
     });
     req
 }
@@ -100,6 +101,7 @@ fn json_request_for_user(user_id: &str, method: &str, uri: &str, body: serde_jso
         username: user_id.to_owned(),
         user_type: UserType::Local,
         status: UserStatus::Active,
+        is_admin: false,
     });
     req
 }
