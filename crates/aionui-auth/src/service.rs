@@ -131,7 +131,21 @@ impl AuthProvisionService {
 
         Ok(ExternalSessionExchange {
             response: EnsureExternalSessionResponse {
-                user: PublicUser { id: user.id, username },
+                user: PublicUser {
+                    id: user.id,
+                    username,
+                    display_name: user.display_name,
+                    email: user.email,
+                    mobile: user.mobile,
+                    departments: user
+                        .department_ids
+                        .as_deref()
+                        .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok()),
+                    auth_source: user.auth_source,
+                    source: user.source,
+                    status: user.status.as_str().to_owned(),
+                    is_admin: user.is_admin != 0,
+                },
                 session_generation: user.session_generation,
             },
             token,

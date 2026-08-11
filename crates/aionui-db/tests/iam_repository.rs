@@ -1,6 +1,6 @@
 use aionui_db::{
     CreateOrganizationParams, IIamRepository, SqliteIamRepository, SyncCounts, UpdateOrganizationParams,
-    UpsertExternalOrganizationParams, UpsertExternalUserParams, init_database_memory,
+    UpsertExternalOrganizationParams, UpsertExternalUserParams, UserStatus, init_database_memory,
 };
 
 async fn repo() -> SqliteIamRepository {
@@ -249,7 +249,7 @@ async fn external_user_upsert_mirrors_disabled_external_status_to_local_status()
         .unwrap();
 
     assert!(created);
-    assert_eq!(disabled.status, "disabled");
+    assert_eq!(disabled.status, UserStatus::Disabled);
     assert_eq!(disabled.external_status.as_deref(), Some("disabled"));
 
     let (enabled, updated_created) = repo
@@ -272,7 +272,7 @@ async fn external_user_upsert_mirrors_disabled_external_status_to_local_status()
         .unwrap();
 
     assert!(!updated_created);
-    assert_eq!(enabled.status, "active");
+    assert_eq!(enabled.status, UserStatus::Active);
     assert_eq!(enabled.external_status.as_deref(), Some("active"));
 }
 
@@ -308,7 +308,7 @@ async fn disable_missing_external_users_repairs_local_status_when_external_statu
     let repaired = repo.get_user(&user.id).await.unwrap().unwrap();
 
     assert_eq!(disabled_count, 1);
-    assert_eq!(repaired.status, "disabled");
+    assert_eq!(repaired.status, UserStatus::Disabled);
     assert_eq!(repaired.external_status.as_deref(), Some("disabled"));
 }
 
@@ -363,7 +363,7 @@ async fn list_users_orders_by_position_sort_from_directory_metadata() {
     assert_eq!(
         external_users
             .iter()
-            .map(|user| user.username.as_str())
+            .map(|user| user.username.as_deref().unwrap())
             .collect::<Vec<_>>(),
         vec!["early_position", "late_position", "unsorted_position"]
     );

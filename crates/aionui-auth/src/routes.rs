@@ -668,7 +668,7 @@ async fn oidc_callback_handler(
 
     let token = state
         .jwt_service
-        .sign(&user.id, &user.username)
+        .sign(&user.id, user.username.as_deref().unwrap_or("external_user"))
         .map_err(|e| ApiError::Internal(format!("Token signing error: {e}")))?;
     if let Err(e) = state.user_repo.update_last_login(&user.id).await {
         tracing::warn!("Failed to update last login for {}: {e}", user.id);
