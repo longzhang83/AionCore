@@ -35,6 +35,12 @@ const GLOBAL_TABLES: &[(&str, &str)] = &[
     // Canonical filesystem-path registry shared by all users by design
     // (project-bind: folders are reused globally by resource_canonical).
     ("folders", "global canonical path registry"),
+    // RSM IAM organization directory (local + Auth Center mirrored orgs) is a
+    // machine-level directory shared by all Core users, not per-user data.
+    ("organizations", "machine-level IAM organization directory"),
+    // RSM Auth Center directory sync state, keyed by app_code — machine-level
+    // sync bookkeeping, not per-user data.
+    ("auth_center_directory_sync_states", "machine-level directory sync state"),
 ];
 
 /// Tables whose `user_id` column is NOT a Core-user ownership column — it
