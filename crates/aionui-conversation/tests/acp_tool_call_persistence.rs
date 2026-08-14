@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use aionui_ai_agent::protocol::events::{
     AgentStreamEvent, FinishEventData,
-    tool_call::{AcpToolCallEventData, AcpToolCallSessionUpdateKind, AcpToolCallStatus, AcpToolCallUpdateData},
+    tool_call::{ToolCallEventData, ToolCallStatus, ToolResultEventData, ToolResultStatus},
 };
 use aionui_common::now_ms;
 use aionui_conversation::stream_relay::StreamRelay;
@@ -54,19 +54,16 @@ async fn run_acp_tool_call_update_without_insert_creates_placeholder() {
     );
     let rx = tx.subscribe();
 
-    tx.send(AgentStreamEvent::ToolResult(AcpToolCallEventData {
-        session_id: "sess-1".into(),
-        update: AcpToolCallUpdateData {
-            session_update: AcpToolCallSessionUpdateKind::ToolCallUpdate,
-            tool_call_id: "atc-late".into(),
-            status: Some(AcpToolCallStatus::Completed),
-            title: Some("Read".into()),
-            kind: None,
-            raw_input: None,
-            raw_output: Some(json!("done")),
-            content: None,
-            locations: None,
-        },
+    tx.send(AgentStreamEvent::ToolResult(ToolResultEventData {
+        call_id: "atc-late".into(),
+        status: ToolResultStatus::Completed,
+        session_id: Some("sess-1".into()),
+        name: Some("Read".into()),
+        input: None,
+        output: Some("done".into()),
+        raw_output: Some(json!("done")),
+        content: None,
+        locations: None,
         meta: None,
     }))
     .unwrap();
@@ -87,11 +84,7 @@ async fn run_acp_tool_call_update_without_insert_creates_placeholder() {
         .await
         .unwrap()
         .items;
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.id == "atc-late" && m.r#type == "acp_tool_call")
-    );
+    assert!(messages.iter().any(|m| m.id == "atc-late" && m.r#type == "tool_call"));
 }
 
 #[tokio::test]
@@ -134,36 +127,27 @@ async fn run_acp_tool_call_late_initial_event_merges_with_update_placeholder() {
     );
     let rx = tx.subscribe();
 
-    tx.send(AgentStreamEvent::ToolResult(AcpToolCallEventData {
-        session_id: "sess-1".into(),
-        update: AcpToolCallUpdateData {
-            session_update: AcpToolCallSessionUpdateKind::ToolCallUpdate,
-            tool_call_id: "atc-out-of-order".into(),
-            status: Some(AcpToolCallStatus::Completed),
-            title: None,
-            kind: None,
-            raw_input: None,
-            raw_output: Some(json!("exit 0")),
-            content: None,
-            locations: None,
-        },
+    tx.send(AgentStreamEvent::ToolResult(ToolResultEventData {
+        call_id: "atc-out-of-order".into(),
+        status: ToolResultStatus::Completed,
+        session_id: Some("sess-1".into()),
+        name: None,
+        input: None,
+        output: Some("exit 0".into()),
+        raw_output: Some(json!("exit 0")),
+        content: None,
+        locations: None,
         meta: None,
     }))
     .unwrap();
-    tx.send(AgentStreamEvent::ToolResult(AcpToolCallEventData {
-        session_id: "sess-1".into(),
-        update: AcpToolCallUpdateData {
-            session_update: AcpToolCallSessionUpdateKind::ToolCall,
-            tool_call_id: "atc-out-of-order".into(),
-            status: Some(AcpToolCallStatus::InProgress),
-            title: Some("Bash".into()),
-            kind: None,
-            raw_input: Some(json!({"command": "echo hi"})),
-            raw_output: None,
-            content: None,
-            locations: None,
-        },
-        meta: None,
+    tx.send(AgentStreamEvent::ToolCall(ToolCallEventData {
+        call_id: "atc-out-of-order".into(),
+        name: "Bash".into(),
+        args: json!({"command": "echo hi"}),
+        status: ToolCallStatus::Running,
+        input: Some(json!({"command": "echo hi"})),
+        output: None,
+        description: None,
     }))
     .unwrap();
     tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
@@ -185,14 +169,13 @@ async fn run_acp_tool_call_late_initial_event_merges_with_update_placeholder() {
         .items;
     let msg = messages
         .iter()
-        .find(|m| m.id == "atc-out-of-order" && m.r#type == "acp_tool_call")
-        .expect("acp tool call row should be persisted");
+        .find(|m| m.id == "atc-out-of-order" && m.r#type == "tool_call")
+        .expect("tool call row should be persisted");
     assert_eq!(msg.status.as_deref(), Some("finish"));
 
     let content: serde_json::Value = serde_json::from_str(&msg.content).unwrap();
-    let update = content.get("update").expect("content should include update object");
-    assert_eq!(update["status"], "completed");
-    assert_eq!(update["title"], "Bash");
-    assert_eq!(update["raw_input"]["command"], "echo hi");
-    assert_eq!(update["raw_output"], "exit 0");
+    assert_eq!(content["status"], "completed");
+    assert_eq!(content["name"], "Bash");
+    assert_eq!(content["input"]["command"], "echo hi");
+    assert_eq!(content["raw_output"], "exit 0");
 }

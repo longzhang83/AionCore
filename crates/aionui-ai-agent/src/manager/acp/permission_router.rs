@@ -77,9 +77,7 @@ impl PermissionRouter {
                 }
 
                 let permission_event = permission_request_to_event_data(&perm_req.request);
-                let confirmation = permission_event
-                    .as_confirmation()
-                    .expect("ACP permission events must be recoverable as confirmations");
+                let confirmation = permission_event.to_confirmation();
 
                 let mut pending = this.pending_permissions.lock().unwrap();
                 if let Some(previous) = pending.insert(

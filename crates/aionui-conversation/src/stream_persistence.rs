@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use aionui_ai_agent::protocol::events::{
     ErrorEventData, TipType, TipsEventData,
-    tool_call::{AcpToolCallStatus, ToolCallStatus},
+    tool_call::{ToolCallStatus, ToolResultEventData, ToolResultStatus},
 };
 use aionui_api_types::{ConversationRuntimeSummary, WebSocketMessage};
 use aionui_common::{ErrorChain, normalize_keys_to_snake_case, now_ms};
@@ -498,21 +498,15 @@ impl StreamPersistenceAdapter {
         }
     }
 
-    /// Persist an ACP (Claude CLI) tool call event.
+    /// Persist a terminal tool result into the same row opened by ToolCall.
     #[tracing::instrument(skip_all)]
-    pub async fn persist_acp_tool_call(
-        &self,
-        data: &aionui_ai_agent::protocol::events::tool_call::AcpToolCallEventData,
-    ) {
+    pub async fn persist_tool_result(&self, data: &ToolResultEventData) {
         if !self.allows_write(RuntimeWriteKind::AcpToolCallPersist) {
             return;
         }
-        let tool_call_id = &data.update.tool_call_id;
-        let status = match data.update.status {
-            Some(AcpToolCallStatus::Pending) | None => "work",
-            Some(AcpToolCallStatus::InProgress) => "work",
-            Some(AcpToolCallStatus::Completed) => "finish",
-            Some(AcpToolCallStatus::Failed) => "error",
+        let status = match data.status {
+            ToolResultStatus::Completed => "finish",
+            ToolResultStatus::Failed => "error",
         };
 
         let mut value = serde_json::to_value(data).unwrap_or_default();
@@ -520,10 +514,10 @@ impl StreamPersistenceAdapter {
         let content = value.to_string();
 
         let row = MessageRow {
-            id: tool_call_id.clone(),
+            id: data.call_id.clone(),
             conversation_id: self.conversation_id.clone(),
-            msg_id: Some(tool_call_id.clone()),
-            r#type: "acp_tool_call".into(),
+            msg_id: Some(data.call_id.clone()),
+            r#type: "tool_call".into(),
             content,
             position: Some("left".into()),
             status: Some(status.to_owned()),
@@ -532,7 +526,7 @@ impl StreamPersistenceAdapter {
             backend_turn_id: self.current_backend_turn_id(),
         };
         if let Err(e) = self.repo.upsert_message(&self.user_id, &row).await {
-            error!(error = %ErrorChain(&e), "Failed to upsert acp_tool_call message");
+            error!(call_id = %data.call_id, error = %ErrorChain(&e), "Failed to upsert tool result");
         }
     }
 

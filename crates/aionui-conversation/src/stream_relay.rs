@@ -574,7 +574,7 @@ impl StreamRelay {
                             self.close_active_text_segment(&mut active_text, &mut text_segments, "finish")
                                 .await;
                             self.forward_to_websocket(&event);
-                            self.adapter.persist_acp_tool_call(data).await;
+                            self.adapter.persist_tool_result(data).await;
                         }
                         AgentStreamEvent::ToolGroup(entries) => {
                             attempt.saw_tool_or_side_effect = true;
@@ -2532,7 +2532,7 @@ mod tests {
     #[tokio::test]
     async fn run_acp_tool_call_inserts_then_updates() {
         use aionui_ai_agent::protocol::events::tool_call::{
-            AcpToolCallEventData, AcpToolCallSessionUpdateKind, AcpToolCallStatus, AcpToolCallUpdateData,
+            ToolCallEventData, ToolCallStatus, ToolResultEventData, ToolResultStatus,
         };
 
         let repo = Arc::new(RecordingRepo::new());
@@ -2550,36 +2550,27 @@ mod tests {
 
         let rx = tx.subscribe();
 
-        tx.send(AgentStreamEvent::ToolResult(AcpToolCallEventData {
-            session_id: "sess-1".into(),
-            update: AcpToolCallUpdateData {
-                session_update: AcpToolCallSessionUpdateKind::ToolCall,
-                tool_call_id: "atc-001".into(),
-                status: Some(AcpToolCallStatus::InProgress),
-                title: Some("Bash".into()),
-                kind: None,
-                raw_input: Some(json!({"command": "mv /tmp/a /tmp/b", "description": "Move file"})),
-                raw_output: None,
-                content: None,
-                locations: None,
-            },
-            meta: None,
+        tx.send(AgentStreamEvent::ToolCall(ToolCallEventData {
+            call_id: "atc-001".into(),
+            name: "Bash".into(),
+            args: json!({"command": "mv /tmp/a /tmp/b", "description": "Move file"}),
+            status: ToolCallStatus::Running,
+            input: Some(json!({"command": "mv /tmp/a /tmp/b", "description": "Move file"})),
+            output: None,
+            description: None,
         }))
         .unwrap();
 
-        tx.send(AgentStreamEvent::ToolResult(AcpToolCallEventData {
-            session_id: "sess-1".into(),
-            update: AcpToolCallUpdateData {
-                session_update: AcpToolCallSessionUpdateKind::ToolCallUpdate,
-                tool_call_id: "atc-001".into(),
-                status: Some(AcpToolCallStatus::Completed),
-                title: None,
-                kind: None,
-                raw_input: None,
-                raw_output: Some(json!("Exit code: 0\nSTDOUT:\nSTDERR:")),
-                content: None,
-                locations: None,
-            },
+        tx.send(AgentStreamEvent::ToolResult(ToolResultEventData {
+            call_id: "atc-001".into(),
+            status: ToolResultStatus::Completed,
+            session_id: Some("sess-1".into()),
+            name: None,
+            input: None,
+            output: Some("Exit code: 0\nSTDOUT:\nSTDERR:".into()),
+            raw_output: Some(json!("Exit code: 0\nSTDOUT:\nSTDERR:")),
+            content: None,
+            locations: None,
             meta: None,
         }))
         .unwrap();
@@ -2590,7 +2581,7 @@ mod tests {
         relay.consume(rx).await;
 
         let inserts = repo.take_inserts();
-        let acp_msg = inserts.iter().find(|m| m.r#type == "acp_tool_call");
+        let acp_msg = inserts.iter().find(|m| m.r#type == "tool_call");
         assert!(acp_msg.is_some());
         let msg = acp_msg.unwrap();
         assert_eq!(msg.id, "atc-001");
@@ -2602,25 +2593,15 @@ mod tests {
         let (_, upd) = acp_update.unwrap();
         assert_eq!(upd.status, Some(Some("finish".to_owned())));
 
-        // Verify merge: raw_input from ToolCall is preserved, raw_output from ToolCallUpdate is added
+        // Verify merge: input from ToolCall is preserved, raw_output from ToolResult is added.
         let merged: serde_json::Value = serde_json::from_str(upd.content.as_deref().unwrap()).unwrap();
-        let update_obj = merged.get("update").unwrap();
-        assert!(
-            update_obj.get("raw_input").is_some(),
-            "raw_input must be preserved after merge"
-        );
+        assert!(merged.get("input").is_some(), "input must be preserved after merge");
         assert_eq!(
-            update_obj
-                .get("raw_input")
-                .unwrap()
-                .get("command")
-                .unwrap()
-                .as_str()
-                .unwrap(),
+            merged.get("input").unwrap().get("command").unwrap().as_str().unwrap(),
             "mv /tmp/a /tmp/b"
         );
         assert!(
-            update_obj.get("raw_output").is_some(),
+            merged.get("raw_output").is_some(),
             "raw_output must be present after merge"
         );
     }
@@ -2628,8 +2609,7 @@ mod tests {
     #[tokio::test]
     async fn run_acp_image_tool_call_update_persists_finish_without_base64() {
         use aionui_ai_agent::protocol::events::tool_call::{
-            AcpToolCallEventData, AcpToolCallKind, AcpToolCallSessionUpdateKind, AcpToolCallStatus,
-            AcpToolCallUpdateData,
+            ToolCallEventData, ToolCallStatus, ToolResultEventData, ToolResultStatus,
         };
 
         let repo = Arc::new(RecordingRepo::new());
@@ -2647,46 +2627,37 @@ mod tests {
 
         let rx = tx.subscribe();
 
-        tx.send(AgentStreamEvent::ToolResult(AcpToolCallEventData {
-            session_id: "sess-1".into(),
-            update: AcpToolCallUpdateData {
-                session_update: AcpToolCallSessionUpdateKind::ToolCall,
-                tool_call_id: "ig_test_image".into(),
-                status: Some(AcpToolCallStatus::InProgress),
-                title: Some("Image generation".into()),
-                kind: Some(AcpToolCallKind::Execute),
-                raw_input: Some(json!({"prompt": "一只小猫"})),
-                raw_output: None,
-                content: None,
-                locations: None,
-            },
-            meta: None,
+        tx.send(AgentStreamEvent::ToolCall(ToolCallEventData {
+            call_id: "ig_test_image".into(),
+            name: "Image generation".into(),
+            args: json!({"prompt": "一只小猫"}),
+            status: ToolCallStatus::Running,
+            input: Some(json!({"prompt": "一只小猫"})),
+            output: None,
+            description: None,
         }))
         .unwrap();
 
-        tx.send(AgentStreamEvent::ToolResult(AcpToolCallEventData {
-            session_id: "sess-1".into(),
-            update: AcpToolCallUpdateData {
-                session_update: AcpToolCallSessionUpdateKind::ToolCallUpdate,
-                tool_call_id: "ig_test_image".into(),
-                status: Some(AcpToolCallStatus::Completed),
-                title: None,
-                kind: Some(AcpToolCallKind::Execute),
-                raw_input: None,
-                raw_output: Some(json!({
-                    "saved_path": "/Users/test/.codex/generated_images/session/ig_test_image.png",
-                    "image": {
-                        "path": "/Users/test/.codex/generated_images/session/ig_test_image.png",
-                        "mime_type": "image/png",
-                        "source": "codex_image_generation"
-                    },
-                    "result_omitted": true,
-                    "result_omitted_reason": "image_base64",
-                    "result_bytes": 131_083
-                })),
-                content: None,
-                locations: None,
-            },
+        tx.send(AgentStreamEvent::ToolResult(ToolResultEventData {
+            call_id: "ig_test_image".into(),
+            status: ToolResultStatus::Completed,
+            session_id: Some("sess-1".into()),
+            name: None,
+            input: None,
+            output: None,
+            raw_output: Some(json!({
+                "saved_path": "/Users/test/.codex/generated_images/session/ig_test_image.png",
+                "image": {
+                    "path": "/Users/test/.codex/generated_images/session/ig_test_image.png",
+                    "mime_type": "image/png",
+                    "source": "codex_image_generation"
+                },
+                "result_omitted": true,
+                "result_omitted_reason": "image_base64",
+                "result_bytes": 131_083
+            })),
+            content: None,
+            locations: None,
             meta: None,
         }))
         .unwrap();
@@ -2708,7 +2679,7 @@ mod tests {
 
         let merged: serde_json::Value = serde_json::from_str(content).unwrap();
         assert_eq!(
-            merged["update"]["raw_output"]["image"]["path"],
+            merged["raw_output"]["image"]["path"],
             "/Users/test/.codex/generated_images/session/ig_test_image.png"
         );
     }

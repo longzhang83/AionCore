@@ -7,7 +7,7 @@ use serde_json::json;
 use tokio::sync::broadcast;
 use tracing::debug;
 
-use crate::protocol::events::{AcpPermissionEventData, AgentStreamEvent, ToolCallEventData, ToolCallStatus};
+use crate::protocol::events::{AgentStreamEvent, ToolCallEventData, ToolCallStatus};
 
 /// Implements `ProtocolEmitter` for the aioncore context.
 ///
@@ -71,9 +71,9 @@ impl ProtocolEmitter for BackendProtocolSink {
                     confs.push(confirmation.clone());
                 }
 
-                let _ = self.event_tx.send(AgentStreamEvent::ApprovalComplete(
-                    AcpPermissionEventData::Confirmation(confirmation.clone()),
-                ));
+                let _ = self
+                    .event_tx
+                    .send(AgentStreamEvent::ApprovalComplete(confirmation.clone()));
 
                 debug!(
                     call_id,
@@ -138,7 +138,7 @@ mod tests {
 
         let received = rx.try_recv().unwrap();
         match received {
-            AgentStreamEvent::ApprovalComplete(AcpPermissionEventData::Confirmation(conf)) => {
+            AgentStreamEvent::ApprovalComplete(conf) => {
                 assert_eq!(conf.call_id, "c1");
                 assert!(conf.options.len() >= 3);
             }

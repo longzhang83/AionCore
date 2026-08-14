@@ -6,19 +6,7 @@ use serde_json::Value;
 use super::tool_call::{AcpToolCallContentItem, AcpToolCallKind, AcpToolCallLocationItem, AcpToolCallStatus};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-// The Request variant grew past clippy's size threshold with SDK 2.0's larger
-// Meta type. Boxing it would ripple into every construction/match site
-// (including session_agent.rs) for a transient event value that is not stored
-// in bulk, so the size difference is accepted instead.
-#[allow(clippy::large_enum_variant)]
-pub enum AcpPermissionEventData {
-    Request(AcpPermissionRequestData),
-    Confirmation(Confirmation),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AcpPermissionRequestData {
+pub struct ApprovalRequestEventData {
     #[serde(default)]
     pub session_id: String,
     pub tool_call: AcpPermissionToolCall,
@@ -66,16 +54,7 @@ pub enum AcpPermissionOptionKind {
     RejectAlways,
 }
 
-impl AcpPermissionEventData {
-    pub fn as_confirmation(&self) -> Option<Confirmation> {
-        match self {
-            Self::Confirmation(conf) => Some(conf.clone()),
-            Self::Request(req) => Some(req.to_confirmation()),
-        }
-    }
-}
-
-impl AcpPermissionRequestData {
+impl ApprovalRequestEventData {
     pub fn to_confirmation(&self) -> Confirmation {
         Confirmation {
             id: self.tool_call.tool_call_id.clone(),
@@ -140,8 +119,8 @@ mod to_confirmation_tests {
     use super::*;
     use serde_json::json;
 
-    fn request(raw_input: serde_json::Value) -> AcpPermissionRequestData {
-        AcpPermissionRequestData {
+    fn request(raw_input: serde_json::Value) -> ApprovalRequestEventData {
+        ApprovalRequestEventData {
             session_id: "s1".into(),
             tool_call: AcpPermissionToolCall {
                 tool_call_id: "call-1".into(),

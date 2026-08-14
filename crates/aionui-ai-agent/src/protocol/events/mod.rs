@@ -8,17 +8,16 @@ use serde::{Deserialize, Serialize};
 pub use aionui_api_types::AgentStreamErrorData as ErrorEventData;
 
 pub use permission::{
-    AcpPermissionEventData, AcpPermissionOptionData, AcpPermissionOptionKind, AcpPermissionRequestData,
-    AcpPermissionToolCall,
+    AcpPermissionOptionData, AcpPermissionOptionKind, AcpPermissionToolCall, ApprovalRequestEventData,
 };
 pub use session_updates::{
     AgentStatusEventData, AvailableCommandsEventData, CronTriggerEventData, PlanEventData, SkillSuggestEventData,
     ThinkingEventData,
 };
 pub use tool_call::{
-    AcpToolCallContentItem, AcpToolCallEventData, AcpToolCallKind, AcpToolCallLocationItem,
-    AcpToolCallSessionUpdateKind, AcpToolCallStatus, AcpToolCallTextBlock, AcpToolCallTextBlockType,
-    AcpToolCallUpdateData, ToolCallEventData, ToolCallStatus, ToolGroupEntry, ToolGroupStatus,
+    AcpToolCallContentItem, AcpToolCallKind, AcpToolCallLocationItem, AcpToolCallStatus, AcpToolCallTextBlock,
+    AcpToolCallTextBlockType, ToolCallEventData, ToolCallStatus, ToolGroupEntry, ToolGroupStatus, ToolResultEventData,
+    ToolResultStatus,
 };
 pub(crate) use translate::{permission_request_to_event_data, session_notification_to_events};
 
@@ -31,14 +30,14 @@ pub enum AgentStreamEvent {
     Text(TextEventData),
     Tips(TipsEventData),
     ToolCall(ToolCallEventData),
-    ToolResult(AcpToolCallEventData),
+    ToolResult(ToolResultEventData),
     ToolGroup(Vec<ToolGroupEntry>),
     AgentStatus(AgentStatusEventData),
     Thinking(ThinkingEventData),
     Plan(PlanEventData),
     Permission(serde_json::Value),
-    ApprovalRequest(AcpPermissionEventData),
-    ApprovalComplete(AcpPermissionEventData),
+    ApprovalRequest(ApprovalRequestEventData),
+    ApprovalComplete(aionui_common::Confirmation),
     /// Structured question card (claude AskUserQuestion — `SessionEvent::Ask`).
     /// Its own frame, NOT an `ApprovalRequest`: asking is not authorizing
     /// (2026-08-04 spec). Payload: `{ session_id, request_id, questions }` where
@@ -226,6 +225,22 @@ mod tests {
     };
     use serde_json::json;
 
+    fn tool_raw_output(event: &AgentStreamEvent) -> serde_json::Value {
+        match event {
+            AgentStreamEvent::ToolCall(data) => serde_json::from_str(
+                data.output
+                    .as_deref()
+                    .expect("in-progress tool update should carry serialized output"),
+            )
+            .expect("tool output should remain valid JSON"),
+            AgentStreamEvent::ToolResult(data) => data
+                .raw_output
+                .clone()
+                .expect("terminal tool result should carry raw output"),
+            other => panic!("expected tool event, got {other:?}"),
+        }
+    }
+
     #[test]
     fn text_event_roundtrip() {
         let event = AgentStreamEvent::Text(TextEventData {
@@ -399,7 +414,7 @@ mod tests {
     }
 
     #[test]
-    fn session_tool_call_maps_to_runtime_tool_result_envelope() {
+    fn pending_session_tool_call_maps_to_tool_call() {
         let notif = SessionNotification::new(
             "sess-1",
             SessionUpdate::ToolCall(
@@ -412,14 +427,10 @@ mod tests {
 
         let events = session_notification_to_events(&notif);
         assert_eq!(events.len(), 1);
-        let json = serde_json::to_value(&events[0]).unwrap();
-        assert_eq!(json["type"], "tool_result");
-        assert_eq!(json["data"]["session_id"], "sess-1");
-        assert_eq!(json["data"]["update"]["sessionUpdate"], "tool_call");
-        assert_eq!(json["data"]["update"]["tool_call_id"], "tool-1");
-        assert_eq!(json["data"]["update"]["title"], "Terminal");
-        assert_eq!(json["data"]["update"]["kind"], "execute");
-        assert_eq!(json["data"]["update"]["rawInput"]["command"], "echo hi");
+        assert!(
+            matches!(&events[..], [AgentStreamEvent::ToolCall(_)]),
+            "pending tool calls must use ToolCall, got {events:?}"
+        );
     }
 
     #[test]
@@ -436,11 +447,27 @@ mod tests {
         assert_eq!(events.len(), 1);
         let json = serde_json::to_value(&events[0]).unwrap();
         assert_eq!(json["type"], "tool_result");
-        assert_eq!(json["data"]["update"]["sessionUpdate"], "tool_call_update");
-        assert_eq!(json["data"]["update"]["tool_call_id"], "tool-1");
-        assert_eq!(json["data"]["update"]["status"], "completed");
-        assert!(json["data"]["update"].get("title").is_none());
-        assert!(json["data"]["update"].get("rawInput").is_none());
+        assert_eq!(json["data"]["call_id"], "tool-1");
+        assert_eq!(json["data"]["status"], "completed");
+        assert!(json["data"].get("name").is_none());
+        assert!(json["data"].get("input").is_none());
+    }
+
+    #[test]
+    fn in_progress_session_tool_update_maps_to_tool_call() {
+        let notif = SessionNotification::new(
+            "sess-1",
+            SessionUpdate::ToolCallUpdate(SdkToolCallUpdate::new(
+                "tool-1",
+                ToolCallUpdateFields::new().status(SdkToolCallStatus::InProgress),
+            )),
+        );
+
+        let events = session_notification_to_events(&notif);
+        assert!(
+            matches!(&events[..], [AgentStreamEvent::ToolCall(_)]),
+            "in-progress tool updates must use ToolCall, got {events:?}"
+        );
     }
 
     #[test]
@@ -464,8 +491,7 @@ mod tests {
 
         let events = session_notification_to_events(&notif);
         assert_eq!(events.len(), 1);
-        let json = serde_json::to_value(&events[0]).unwrap();
-        let raw_output = &json["data"]["update"]["rawOutput"];
+        let raw_output = tool_raw_output(&events[0]);
 
         assert_eq!(
             raw_output["saved_path"],
@@ -498,10 +524,14 @@ mod tests {
 
         let events = session_notification_to_events(&notif);
         assert_eq!(events.len(), 1);
-        let json = serde_json::to_value(&events[0]).unwrap();
-
-        assert_eq!(json["data"]["update"]["status"], "completed");
-        assert_eq!(json["data"]["update"]["rawOutput"]["status"], "completed");
+        assert!(matches!(
+            &events[..],
+            [AgentStreamEvent::ToolResult(ToolResultEventData {
+                status: ToolResultStatus::Completed,
+                ..
+            })]
+        ));
+        assert_eq!(tool_raw_output(&events[0])["status"], "completed");
     }
 
     #[test]
@@ -521,10 +551,9 @@ mod tests {
         );
 
         let events = session_notification_to_events(&notif);
-        let json = serde_json::to_value(&events[0]).unwrap();
-        let raw_output = &json["data"]["update"]["rawOutput"];
+        let raw_output = tool_raw_output(&events[0]);
 
-        assert_eq!(json["data"]["update"]["status"], "in_progress");
+        assert!(matches!(&events[..], [AgentStreamEvent::ToolCall(_)]));
         assert_eq!(raw_output["result"], "not an inline image");
         assert!(raw_output.get("image").is_none());
         assert!(raw_output.get("result_omitted").is_none());
@@ -553,10 +582,10 @@ mod tests {
             );
 
             let events = session_notification_to_events(&notif);
-            let json = serde_json::to_value(&events[0]).unwrap();
+            let raw_output = tool_raw_output(&events[0]);
 
-            assert_eq!(json["data"]["update"]["rawOutput"]["image"]["mime_type"], expected_mime);
-            assert!(json["data"]["update"]["rawOutput"].get("result").is_none());
+            assert_eq!(raw_output["image"]["mime_type"], expected_mime);
+            assert!(raw_output.get("result").is_none());
         }
     }
 
@@ -579,8 +608,7 @@ mod tests {
 
         let events = session_notification_to_events(&notif);
         assert_eq!(events.len(), 1);
-        let json = serde_json::to_value(&events[0]).unwrap();
-        let raw_output = &json["data"]["update"]["rawOutput"];
+        let raw_output = tool_raw_output(&events[0]);
 
         // Oversized base64 must be stripped even though Codex did not save the file.
         assert!(raw_output.get("result").is_none());
@@ -588,7 +616,7 @@ mod tests {
         // No saved_path means we cannot offer a path-based preview, so no image object.
         assert!(raw_output.get("image").is_none());
         // Without a saved image the status must pass through unchanged.
-        assert_eq!(json["data"]["update"]["status"], "in_progress");
+        assert!(matches!(&events[..], [AgentStreamEvent::ToolCall(_)]));
     }
 
     #[test]
@@ -610,13 +638,18 @@ mod tests {
 
         let events = session_notification_to_events(&notif);
         assert_eq!(events.len(), 1);
-        let json = serde_json::to_value(&events[0]).unwrap();
-
         // A terminal `failed` status must never be rewritten to `completed`.
-        assert_eq!(json["data"]["update"]["status"], "failed");
-        assert_eq!(json["data"]["update"]["rawOutput"]["status"], "failed");
+        assert!(matches!(
+            &events[..],
+            [AgentStreamEvent::ToolResult(ToolResultEventData {
+                status: ToolResultStatus::Failed,
+                ..
+            })]
+        ));
+        let raw_output = tool_raw_output(&events[0]);
+        assert_eq!(raw_output["status"], "failed");
         // The base64 payload is still stripped regardless of the failure.
-        assert!(json["data"]["update"]["rawOutput"].get("result").is_none());
+        assert!(raw_output.get("result").is_none());
     }
 
     #[test]
@@ -637,12 +670,11 @@ mod tests {
 
         let events = session_notification_to_events(&notif);
         assert_eq!(events.len(), 1);
-        let json = serde_json::to_value(&events[0]).unwrap();
-
-        assert_eq!(json["data"]["update"]["status"], "completed");
-        assert_eq!(json["data"]["update"]["rawOutput"]["status"], "completed");
+        assert!(matches!(&events[..], [AgentStreamEvent::ToolResult(_)]));
+        let raw_output = tool_raw_output(&events[0]);
+        assert_eq!(raw_output["status"], "completed");
         assert_eq!(
-            json["data"]["update"]["rawOutput"]["image"]["path"],
+            raw_output["image"]["path"],
             "/Users/test/.codex/generated_images/session/ig_path_only.png"
         );
     }
@@ -665,11 +697,10 @@ mod tests {
 
         let events = session_notification_to_events(&notif);
         assert_eq!(events.len(), 1);
-        let json = serde_json::to_value(&events[0]).unwrap();
-
-        assert_eq!(json["data"]["update"]["status"], "in_progress");
-        assert_eq!(json["data"]["update"]["rawOutput"]["status"], "generating");
-        assert!(json["data"]["update"]["rawOutput"].get("image").is_none());
+        assert!(matches!(&events[..], [AgentStreamEvent::ToolCall(_)]));
+        let raw_output = tool_raw_output(&events[0]);
+        assert_eq!(raw_output["status"], "generating");
+        assert!(raw_output.get("image").is_none());
     }
 
     #[test]
@@ -700,6 +731,30 @@ mod tests {
         assert_eq!(json["data"]["options"][0]["kind"], "allow_once");
         assert!(json["data"].get("toolCall").is_none());
         assert!(json["data"]["options"][0].get("optionId").is_none());
+    }
+
+    #[test]
+    fn approval_variants_accept_only_their_semantic_payloads() {
+        let request = RequestPermissionRequest::new(
+            "sess-1",
+            SdkToolCallUpdate::new("tool-1", ToolCallUpdateFields::new().title("Write file")),
+            vec![PermissionOption::new(
+                "allow",
+                "Allow",
+                SdkPermissionOptionKind::AllowOnce,
+            )],
+        );
+
+        let request_data: ApprovalRequestEventData = permission_request_to_event_data(&request);
+        let confirmation = request_data.to_confirmation();
+        let request_event = AgentStreamEvent::ApprovalRequest(request_data);
+        let complete_event = AgentStreamEvent::ApprovalComplete(confirmation);
+
+        assert_eq!(serde_json::to_value(request_event).unwrap()["type"], "approval_request");
+        assert_eq!(
+            serde_json::to_value(complete_event).unwrap()["type"],
+            "approval_complete"
+        );
     }
 
     #[test]

@@ -6,14 +6,12 @@ use agent_client_protocol::schema::v1::{
 use tracing::debug;
 
 use super::permission::{
-    AcpPermissionEventData, AcpPermissionOptionData, AcpPermissionOptionKind, AcpPermissionRequestData,
-    AcpPermissionToolCall,
+    AcpPermissionOptionData, AcpPermissionOptionKind, AcpPermissionToolCall, ApprovalRequestEventData,
 };
 use super::session_updates::{AvailableCommandsEventData, PlanEventData, ThinkingEventData};
 use super::tool_call::{
-    AcpToolCallContentItem, AcpToolCallEventData, AcpToolCallKind, AcpToolCallLocationItem,
-    AcpToolCallSessionUpdateKind, AcpToolCallStatus, AcpToolCallTextBlock, AcpToolCallTextBlockType,
-    AcpToolCallUpdateData,
+    AcpToolCallContentItem, AcpToolCallKind, AcpToolCallLocationItem, AcpToolCallStatus, AcpToolCallTextBlock,
+    AcpToolCallTextBlockType, ToolCallEventData, ToolCallStatus, ToolResultEventData, ToolResultStatus,
 };
 use super::{AgentStreamEvent, TextEventData};
 
@@ -45,21 +43,33 @@ pub(crate) fn session_notification_to_events(notif: &SessionNotification) -> Vec
         SessionUpdate::UserMessageChunk(_chunk) => {}
 
         SessionUpdate::ToolCall(tc) => {
-            events.push(AgentStreamEvent::ToolResult(AcpToolCallEventData {
-                session_id,
-                update: AcpToolCallUpdateData {
-                    session_update: AcpToolCallSessionUpdateKind::ToolCall,
-                    tool_call_id: tc.tool_call_id.to_string(),
-                    status: Some(map_sdk_tool_status(&tc.status)),
-                    title: Some(tc.title.clone()),
-                    kind: Some(map_sdk_tool_kind(&tc.kind)),
-                    raw_input: tc.raw_input.clone(),
+            let status = map_sdk_tool_status(&tc.status);
+            let content = map_tool_call_content(&tc.content);
+            let locations = map_tool_call_locations(&tc.locations);
+            if let Some(status) = terminal_tool_result_status(Some(status)) {
+                events.push(AgentStreamEvent::ToolResult(ToolResultEventData {
+                    call_id: tc.tool_call_id.to_string(),
+                    status,
+                    session_id: Some(session_id),
+                    name: Some(tc.title.clone()),
+                    input: tc.raw_input.clone(),
+                    output: tool_output_text(None, content.as_deref()),
                     raw_output: None,
-                    content: map_tool_call_content(&tc.content),
-                    locations: map_tool_call_locations(&tc.locations),
-                },
-                meta: tc.meta.clone(),
-            }));
+                    content,
+                    locations,
+                    meta: tc.meta.clone(),
+                }));
+            } else {
+                events.push(AgentStreamEvent::ToolCall(ToolCallEventData {
+                    call_id: tc.tool_call_id.to_string(),
+                    name: tc.title.clone(),
+                    args: tc.raw_input.clone().unwrap_or(serde_json::Value::Null),
+                    status: ToolCallStatus::Running,
+                    input: tc.raw_input.clone(),
+                    output: tool_output_text(None, content.as_deref()),
+                    description: None,
+                }));
+            }
         }
 
         SessionUpdate::ToolCallUpdate(tcu) => {
@@ -67,29 +77,42 @@ pub(crate) fn session_notification_to_events(notif: &SessionNotification) -> Vec
             let status = normalize_tool_status(tcu.fields.status.as_ref(), raw_output.as_ref());
             normalize_raw_output_status(&mut raw_output, status.as_ref());
 
-            events.push(AgentStreamEvent::ToolResult(AcpToolCallEventData {
-                session_id,
-                update: AcpToolCallUpdateData {
-                    session_update: AcpToolCallSessionUpdateKind::ToolCallUpdate,
-                    tool_call_id: tcu.tool_call_id.to_string(),
+            let content = tcu
+                .fields
+                .content
+                .as_ref()
+                .and_then(|content| map_tool_call_content(content));
+            let locations = tcu
+                .fields
+                .locations
+                .as_ref()
+                .and_then(|locations| map_tool_call_locations(locations));
+            let output = tool_output_text(raw_output.as_ref(), content.as_deref());
+
+            if let Some(status) = terminal_tool_result_status(status) {
+                events.push(AgentStreamEvent::ToolResult(ToolResultEventData {
+                    call_id: tcu.tool_call_id.to_string(),
                     status,
-                    title: tcu.fields.title.clone(),
-                    kind: tcu.fields.kind.as_ref().map(map_sdk_tool_kind),
-                    raw_input: tcu.fields.raw_input.clone(),
+                    session_id: Some(session_id),
+                    name: tcu.fields.title.clone(),
+                    input: tcu.fields.raw_input.clone(),
+                    output,
                     raw_output,
-                    content: tcu
-                        .fields
-                        .content
-                        .as_ref()
-                        .and_then(|content| map_tool_call_content(content)),
-                    locations: tcu
-                        .fields
-                        .locations
-                        .as_ref()
-                        .and_then(|locations| map_tool_call_locations(locations)),
-                },
-                meta: tcu.meta.clone(),
-            }));
+                    content,
+                    locations,
+                    meta: tcu.meta.clone(),
+                }));
+            } else {
+                events.push(AgentStreamEvent::ToolCall(ToolCallEventData {
+                    call_id: tcu.tool_call_id.to_string(),
+                    name: tcu.fields.title.clone().unwrap_or_default(),
+                    args: tcu.fields.raw_input.clone().unwrap_or(serde_json::Value::Null),
+                    status: ToolCallStatus::Running,
+                    input: tcu.fields.raw_input.clone(),
+                    output,
+                    description: None,
+                }));
+            }
         }
 
         SessionUpdate::Plan(plan) => {
@@ -142,13 +165,37 @@ pub(crate) fn session_notification_to_events(notif: &SessionNotification) -> Vec
     events
 }
 
-pub(crate) fn permission_request_to_event_data(request: &RequestPermissionRequest) -> AcpPermissionEventData {
-    AcpPermissionEventData::Request(AcpPermissionRequestData {
+pub(crate) fn permission_request_to_event_data(request: &RequestPermissionRequest) -> ApprovalRequestEventData {
+    ApprovalRequestEventData {
         session_id: request.session_id.to_string(),
         tool_call: map_permission_tool_call(&request.tool_call),
         options: request.options.iter().map(map_permission_option).collect(),
         meta: request.meta.clone(),
-    })
+    }
+}
+
+fn terminal_tool_result_status(status: Option<AcpToolCallStatus>) -> Option<ToolResultStatus> {
+    match status {
+        Some(AcpToolCallStatus::Completed) => Some(ToolResultStatus::Completed),
+        Some(AcpToolCallStatus::Failed) => Some(ToolResultStatus::Failed),
+        Some(AcpToolCallStatus::Pending | AcpToolCallStatus::InProgress) | None => None,
+    }
+}
+
+fn tool_output_text(
+    raw_output: Option<&serde_json::Value>,
+    content: Option<&[AcpToolCallContentItem]>,
+) -> Option<String> {
+    if let Some(raw_output) = raw_output {
+        return Some(match raw_output {
+            serde_json::Value::String(text) => text.clone(),
+            other => other.to_string(),
+        });
+    }
+
+    content
+        .filter(|items| !items.is_empty())
+        .and_then(|items| serde_json::to_string(items).ok())
 }
 
 fn map_sdk_tool_status(sdk: &SdkToolCallStatus) -> AcpToolCallStatus {

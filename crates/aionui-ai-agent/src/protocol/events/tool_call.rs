@@ -24,40 +24,37 @@ pub struct ToolCallEventData {
     pub description: Option<String>,
 }
 
+/// Terminal data for a completed or failed tool execution.
+///
+/// Unlike the former ACP update envelope, this payload cannot represent a
+/// pending/in-progress call. Those states belong to [`ToolCallEventData`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AcpToolCallEventData {
-    pub session_id: String,
-    pub update: AcpToolCallUpdateData,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+pub struct ToolResultEventData {
+    pub call_id: String,
+    pub status: ToolResultStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_output: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<Vec<AcpToolCallContentItem>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locations: Option<Vec<AcpToolCallLocationItem>>,
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<SdkMeta>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AcpToolCallUpdateData {
-    #[serde(rename = "sessionUpdate")]
-    pub session_update: AcpToolCallSessionUpdateKind,
-    pub tool_call_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<AcpToolCallStatus>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kind: Option<AcpToolCallKind>,
-    #[serde(rename = "rawInput", skip_serializing_if = "Option::is_none")]
-    pub raw_input: Option<Value>,
-    #[serde(rename = "rawOutput", skip_serializing_if = "Option::is_none")]
-    pub raw_output: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<Vec<AcpToolCallContentItem>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub locations: Option<Vec<AcpToolCallLocationItem>>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum AcpToolCallSessionUpdateKind {
-    ToolCall,
-    ToolCallUpdate,
+pub enum ToolResultStatus {
+    Completed,
+    Failed,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

@@ -24,7 +24,7 @@ use crate::agent_task::IAgentTask;
 use crate::error::AgentError;
 use crate::protocol::events::session_updates::AvailableCommandsEventData;
 use crate::protocol::events::session_updates::ThinkingEventData;
-use crate::protocol::events::tool_call::{ToolCallEventData, ToolCallStatus};
+use crate::protocol::events::tool_call::{ToolCallEventData, ToolCallStatus, ToolResultEventData, ToolResultStatus};
 use crate::protocol::events::{
     AgentStreamEvent, FinishEventData, StartEventData, TextEventData, TipType, TipsEventData,
 };
@@ -3468,8 +3468,7 @@ fn ask_user_question_options(
         .collect()
 }
 
-/// Keep a tool's name alive across the multiple `AgentStreamEvent::ToolCall` frames
-/// that share one `call_id` over its lifecycle.
+/// Keep a tool's name alive from its `ToolCall` frames through `ToolResult`.
 ///
 /// A single tool call surfaces as several frames keyed by the same `call_id`: the
 /// initial `ToolCall` (status Running, name known); any codex `ToolOutputDelta`
@@ -3483,7 +3482,7 @@ fn ask_user_question_options(
 /// This learns the name from the first frame that carries one and stamps it back
 /// onto any later empty-name frame for the same `call_id`, mirroring the reference
 /// `BackendOutputSink::emit_tool_result`, which re-sends the name on completion.
-/// `names` is the pump-local map (cleared per turn); non-`ToolCall` events are inert.
+/// `names` is the pump-local map (cleared per turn); unrelated events are inert.
 /// Fold one workflow event into its container's ledger, returning any progress
 /// frames that should go out now.
 ///
@@ -3503,14 +3502,24 @@ fn shield_live_card_status(
     cards: &std::collections::HashMap<String, crate::workflow_progress::WorkflowCard>,
     ev: &mut AgentStreamEvent,
 ) {
-    let AgentStreamEvent::ToolCall(data) = ev else {
-        return;
-    };
-    if data.status == ToolCallStatus::Running {
-        return;
-    }
-    if cards.values().any(|c| c.call_id() == data.call_id) {
-        data.status = ToolCallStatus::Running;
+    match ev {
+        AgentStreamEvent::ToolCall(data)
+            if data.status != ToolCallStatus::Running && cards.values().any(|c| c.call_id() == data.call_id) =>
+        {
+            data.status = ToolCallStatus::Running;
+        }
+        AgentStreamEvent::ToolResult(data) if cards.values().any(|c| c.call_id() == data.call_id) => {
+            *ev = AgentStreamEvent::ToolCall(ToolCallEventData {
+                call_id: data.call_id.clone(),
+                name: data.name.clone().unwrap_or_default(),
+                args: serde_json::Value::Null,
+                status: ToolCallStatus::Running,
+                input: data.input.clone(),
+                output: data.output.clone(),
+                description: None,
+            });
+        }
+        _ => {}
     }
 }
 
@@ -3804,15 +3813,24 @@ fn settle_workflow_cards(
 }
 
 fn stamp_tool_name(names: &mut std::collections::HashMap<String, String>, ev: &mut AgentStreamEvent) {
-    let AgentStreamEvent::ToolCall(data) = ev else {
-        return;
-    };
-    if data.name.is_empty() {
-        if let Some(known) = names.get(&data.call_id) {
-            data.name = known.clone();
+    match ev {
+        AgentStreamEvent::ToolCall(data) => {
+            if data.name.is_empty() {
+                if let Some(known) = names.get(&data.call_id) {
+                    data.name = known.clone();
+                }
+            } else {
+                names.insert(data.call_id.clone(), data.name.clone());
+            }
         }
-    } else {
-        names.insert(data.call_id.clone(), data.name.clone());
+        AgentStreamEvent::ToolResult(data) => {
+            if let Some(name) = data.name.as_ref().filter(|name| !name.is_empty()) {
+                names.insert(data.call_id.clone(), name.clone());
+            } else if let Some(known) = names.get(&data.call_id) {
+                data.name = Some(known.clone());
+            }
+        }
+        _ => {}
     }
 }
 
@@ -3933,18 +3951,21 @@ fn translate_event(event: SessionEvent, conversation_id: &str, terminal_result_s
             ..
         } => {
             let output = tool_result_text(&content);
-            vec![AgentStreamEvent::ToolCall(ToolCallEventData {
+            vec![AgentStreamEvent::ToolResult(ToolResultEventData {
                 call_id: tool_use_id,
-                name: String::new(),
-                args: serde_json::Value::Null,
                 status: if is_error {
-                    ToolCallStatus::Error
+                    ToolResultStatus::Failed
                 } else {
-                    ToolCallStatus::Completed
+                    ToolResultStatus::Completed
                 },
+                session_id: None,
+                name: None,
                 input: None,
                 output,
-                description: None,
+                raw_output: None,
+                content: None,
+                locations: None,
+                meta: None,
             })]
         }
         SessionEvent::TurnResult {
@@ -4052,24 +4073,22 @@ fn translate_event(event: SessionEvent, conversation_id: &str, terminal_result_s
                 options
             };
             vec![AgentStreamEvent::ApprovalRequest(
-                crate::protocol::events::AcpPermissionEventData::Request(
-                    crate::protocol::events::AcpPermissionRequestData {
-                        session_id: conversation_id.to_owned(),
-                        tool_call: crate::protocol::events::AcpPermissionToolCall {
-                            tool_call_id: request_id,
-                            status: None,
-                            title: tool_name,
-                            kind: None,
-                            raw_input: input,
-                            raw_output: None,
-                            content: None,
-                            locations: None,
-                            meta: None,
-                        },
-                        options,
+                crate::protocol::events::ApprovalRequestEventData {
+                    session_id: conversation_id.to_owned(),
+                    tool_call: crate::protocol::events::AcpPermissionToolCall {
+                        tool_call_id: request_id,
+                        status: None,
+                        title: tool_name,
+                        kind: None,
+                        raw_input: input,
+                        raw_output: None,
+                        content: None,
+                        locations: None,
                         meta: None,
                     },
-                ),
+                    options,
+                    meta: None,
+                },
             )]
         }
         // Structured question (claude AskUserQuestion) → its own `ask` frame; the
@@ -4889,6 +4908,21 @@ mod translate_tests {
         })
     }
 
+    fn tool_result(call_id: &str, name: Option<&str>, status: ToolResultStatus) -> AgentStreamEvent {
+        AgentStreamEvent::ToolResult(ToolResultEventData {
+            call_id: call_id.into(),
+            status,
+            session_id: None,
+            name: name.map(str::to_owned),
+            input: None,
+            output: None,
+            raw_output: None,
+            content: None,
+            locations: None,
+            meta: None,
+        })
+    }
+
     // The bug: a tool's terminal ToolResult frame (and any codex ToolOutputDelta)
     // carries no name, so — persisted by upsert on call_id — it clobbered the tool
     // name to "" and the frontend rendered a nameless tool line. `stamp_tool_name`
@@ -4911,13 +4945,13 @@ mod translate_tests {
         assert_eq!(d.name, "Read", "live-output frame must keep the name");
 
         // Terminal result frame arrives with an empty name → refilled, NOT clobbered.
-        let mut result = tool_call("call-1", "", ToolCallStatus::Completed);
+        let mut result = tool_result("call-1", None, ToolResultStatus::Completed);
         stamp_tool_name(&mut names, &mut result);
-        let AgentStreamEvent::ToolCall(r) = &result else {
+        let AgentStreamEvent::ToolResult(r) = &result else {
             unreachable!()
         };
-        assert_eq!(r.name, "Read", "result frame must keep the name, not go blank");
-        assert_eq!(r.status, ToolCallStatus::Completed);
+        assert_eq!(r.name.as_deref(), Some("Read"), "result frame must keep the name");
+        assert_eq!(r.status, ToolResultStatus::Completed);
     }
 
     // A result frame for a call_id we never saw a name for stays empty (no panic,
@@ -4928,12 +4962,12 @@ mod translate_tests {
         let mut a = tool_call("call-a", "Bash", ToolCallStatus::Running);
         stamp_tool_name(&mut names, &mut a);
 
-        let mut orphan = tool_call("call-b", "", ToolCallStatus::Completed);
+        let mut orphan = tool_result("call-b", None, ToolResultStatus::Completed);
         stamp_tool_name(&mut names, &mut orphan);
-        let AgentStreamEvent::ToolCall(o) = &orphan else {
+        let AgentStreamEvent::ToolResult(o) = &orphan else {
             unreachable!()
         };
-        assert_eq!(o.name, "", "unknown call_id must not inherit another tool's name");
+        assert_eq!(o.name, None, "unknown call_id must not inherit another tool's name");
     }
 
     #[test]
@@ -4952,6 +4986,21 @@ mod translate_tests {
         assert!(
             matches!(&tool_events[..], [AgentStreamEvent::ToolCall(_)]),
             "ToolCall must use the Runtime-neutral stream variant"
+        );
+
+        let result_events = translate_event(
+            SessionEvent::ToolResult {
+                tool_use_id: "tool-42".into(),
+                is_error: false,
+                content: vec![ToolResultContent::Text("ok".into())],
+                parent_tool_use_id: None,
+            },
+            "conv-1",
+            false,
+        );
+        assert!(
+            matches!(&result_events[..], [AgentStreamEvent::ToolResult(_)]),
+            "ToolResult must use the Runtime-neutral terminal stream variant"
         );
 
         let approval_events = translate_event(
@@ -4985,10 +5034,7 @@ mod translate_tests {
             false,
         );
         assert_eq!(events.len(), 1, "permission must project to exactly one card");
-        let crate::protocol::events::AgentStreamEvent::ApprovalRequest(
-            crate::protocol::events::AcpPermissionEventData::Request(req),
-        ) = &events[0]
-        else {
+        let crate::protocol::events::AgentStreamEvent::ApprovalRequest(req) = &events[0] else {
             panic!("expected AcpPermission Request, got {:?}", events[0]);
         };
         // The confirm() path answers AnswerPermission keyed on this id — it MUST
@@ -5029,10 +5075,7 @@ mod translate_tests {
             "conv-1",
             false,
         );
-        let crate::protocol::events::AgentStreamEvent::ApprovalRequest(
-            crate::protocol::events::AcpPermissionEventData::Request(req),
-        ) = &events[0]
-        else {
+        let crate::protocol::events::AgentStreamEvent::ApprovalRequest(req) = &events[0] else {
             panic!("expected AcpPermission Request, got {:?}", events[0]);
         };
         let ids: Vec<&str> = req.options.iter().map(|o| o.option_id.as_str()).collect();
@@ -5063,10 +5106,7 @@ mod translate_tests {
             "conv-1",
             false,
         );
-        let crate::protocol::events::AgentStreamEvent::ApprovalRequest(
-            crate::protocol::events::AcpPermissionEventData::Request(req),
-        ) = &events[0]
-        else {
+        let crate::protocol::events::AgentStreamEvent::ApprovalRequest(req) = &events[0] else {
             panic!("expected AcpPermission Request");
         };
         let ids: Vec<&str> = req.options.iter().map(|o| o.option_id.as_str()).collect();
@@ -6445,10 +6485,10 @@ mod pump_tests {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(1500);
         while tokio::time::Instant::now() < deadline {
             match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
-                Ok(Ok(AgentStreamEvent::ToolCall(data)))
-                    if data.call_id == "call-detached" && data.status == ToolCallStatus::Completed =>
+                Ok(Ok(AgentStreamEvent::ToolResult(data)))
+                    if data.call_id == "call-detached" && data.status == ToolResultStatus::Completed =>
                 {
-                    terminal_names.push(data.name.clone());
+                    terminal_names.push(data.name.unwrap_or_default());
                 }
                 Ok(Ok(_)) => {}
                 _ => break,

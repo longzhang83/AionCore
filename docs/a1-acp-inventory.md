@@ -340,3 +340,25 @@ Session/MCP/API/App/Team：
 - `cargo clippy --workspace --all-targets -- -D warnings` 通过。
 
 未纳入本切片：API DTO、DB `acp_session`、旧 `AcpAgentManager`、aionrs/antigravity 删除，以及 `AcpToolCall*` / `AcpPermissionEventData` 内部拆分。
+
+---
+
+## 7. V3 A1 clean-cut 第 4 步进度（2026-08-14）
+
+状态：已实现并验证。
+
+- 工具生命周期 payload 已按语义拆分：`Pending` / `InProgress` 的 ACP tool call 与 update 投影为 `AgentStreamEvent::ToolCall(ToolCallEventData)`；`Completed` / `Failed` 投影为 `AgentStreamEvent::ToolResult(ToolResultEventData)`，终态 status 由只能表达 `Completed` / `Failed` 的 `ToolResultStatus` 承载。
+- `SessionAgentTask::translate_event()` 已同步：`SessionEvent::ToolCall → ToolCall`，`SessionEvent::ToolResult → ToolResult`。工具名称 ledger、后台 workflow live-card 屏蔽、relay 与持久化消费方均显式处理独立终态。
+- 旧混合工具 wrapper `AcpToolCallEventData` / `AcpToolCallUpdateData` 及 `AcpToolCallSessionUpdateKind` 已删除。工具起始与结果现在合并写入同一个 `tool_call` message row，乱序的晚到起始帧不会把已完成状态回退为运行中。
+- 审批 payload 已按语义拆分：`ApprovalRequest` 只接受 `ApprovalRequestEventData`，`ApprovalComplete` 只接受 `Confirmation`；旧 untagged `AcpPermissionEventData::{Request, Confirmation}` union 已删除。
+- 可观测性：现有 stream event-kind、relay persistence error 与 session pump 日志已覆盖本次路由；本切片没有引入新的不可观察分支，因此无需新增生产日志。
+
+验证：
+
+- RED（工具运行时）：`pending_session_tool_call_maps_to_tool_call` 首次运行失败，实际值为 `ToolResult(AcpToolCallEventData { status: Pending, ... })`，exit 101。
+- RED（审批编译时）：类型约束测试首次以 `E0425` 失败，证明 `ApprovalRequestEventData` 尚不存在，exit 101。
+- GREEN：`cargo test -p aionui-ai-agent -p aionui-session -p aionui-conversation -p aionui-channel -p aionui-team -p aionui-cron` 通过，exit 0。
+- `cargo fmt --all -- --check` 通过，exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` 通过，exit 0。
+
+未纳入本切片：API DTO、DB `acp_session`、旧 `AcpAgentManager`、aionrs/antigravity 删除。其余叶子 `Acp*` 类型命名继续留给第 5 步统一迁移。
