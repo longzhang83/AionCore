@@ -31,15 +31,16 @@ pub enum AgentStreamEvent {
     Text(TextEventData),
     Tips(TipsEventData),
     ToolCall(ToolCallEventData),
-    AcpToolCall(AcpToolCallEventData),
+    ToolResult(AcpToolCallEventData),
     ToolGroup(Vec<ToolGroupEntry>),
     AgentStatus(AgentStatusEventData),
     Thinking(ThinkingEventData),
     Plan(PlanEventData),
     Permission(serde_json::Value),
-    AcpPermission(AcpPermissionEventData),
+    ApprovalRequest(AcpPermissionEventData),
+    ApprovalComplete(AcpPermissionEventData),
     /// Structured question card (claude AskUserQuestion — `SessionEvent::Ask`).
-    /// Its own frame, NOT an `AcpPermission`: asking is not authorizing
+    /// Its own frame, NOT an `ApprovalRequest`: asking is not authorizing
     /// (2026-08-04 spec). Payload: `{ session_id, request_id, questions }` where
     /// `questions` is the raw claude `questions[]` array — the cross-vendor shape
     /// (claude/qwen/grok all converged on it, 2026-08-04 captures):
@@ -49,21 +50,21 @@ pub enum AgentStreamEvent {
     Ask(serde_json::Value),
     SkillSuggest(SkillSuggestEventData),
     CronTrigger(CronTriggerEventData),
-    AcpModelInfo(serde_json::Value),
-    AcpModeInfo(serde_json::Value),
-    AcpConfigOption(serde_json::Value),
-    AcpSessionInfo(serde_json::Value),
-    AcpContextUsage(serde_json::Value),
+    ModelInfo(serde_json::Value),
+    ModeInfo(serde_json::Value),
+    ConfigOption(serde_json::Value),
+    SessionInfo(serde_json::Value),
+    ContextUsage(serde_json::Value),
     /// Live snapshot of a client-hosted terminal (ACP `terminal/*`):
     /// `{terminal_id, command, output(cumulative), truncated, exit_status?}`.
     /// Emitted throttled while the delegated command runs, plus one final
     /// frame when it exits.
-    AcpTerminalOutput(serde_json::Value),
-    AcpPromptHookWarning(serde_json::Value),
+    TerminalOutput(serde_json::Value),
+    PromptHookWarning(serde_json::Value),
     SlashCommandsUpdated(serde_json::Value),
     AvailableCommands(AvailableCommandsEventData),
-    Finish(FinishEventData),
-    Error(ErrorEventData),
+    RunComplete(FinishEventData),
+    RunError(ErrorEventData),
     System(serde_json::Value),
     RequestTrace(serde_json::Value),
     SessionAssigned(SessionAssignedEventData),
@@ -104,13 +105,6 @@ pub enum AgentStreamEvent {
     /// Never counts as user-visible turn output (see `event_is_user_visible_output`):
     /// it is an out-of-band status refresh, not the turn "saying something".
     WorkflowProgress(WorkflowProgressData),
-    /// Internal-only signal: the tolerant transport layer absorbed a CodeBuddy
-    /// dialect notification (`session_end` / `compact-maxtoken`) that the stock
-    /// ACP schema hard-rejects as `-32602`. Consumed by the empty-turn judgment
-    /// within the turn/near-window; never counts as user-visible output and is
-    /// never forwarded to the WebSocket. Mirrors `SegmentBreak`'s "relay consumes
-    /// internally, never forwards" contract.
-    AcpDialectSignal(AcpDialectSignalData),
 }
 
 /// Data for the `Start` event.
@@ -207,10 +201,19 @@ pub struct WorkflowProgressData {
     pub settle_only: bool,
 }
 
-/// Data for the internal-only [`AgentStreamEvent::AcpDialectSignal`] event.
+/// Data used while translating absorbed ACP dialect notifications into Runtime-neutral events.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AcpDialectSignalData {
     pub kind: AcpDialectSignalKind,
+}
+
+pub(crate) fn runtime_event_from_dialect_signal(kind: AcpDialectSignalKind) -> AgentStreamEvent {
+    match kind {
+        AcpDialectSignalKind::SessionEnd => AgentStreamEvent::RunComplete(FinishEventData::default()),
+        AcpDialectSignalKind::TokenPressure => AgentStreamEvent::ContextUsage(serde_json::json!({
+            "kind": "token_pressure",
+        })),
+    }
 }
 
 #[cfg(test)]
@@ -333,20 +336,20 @@ mod tests {
     }
 
     #[test]
-    fn finish_event_roundtrip() {
-        let event = AgentStreamEvent::Finish(FinishEventData {
+    fn run_complete_event_roundtrip() {
+        let event = AgentStreamEvent::RunComplete(FinishEventData {
             session_id: Some("sess-abc".into()),
         });
         let json = serde_json::to_value(&event).unwrap();
-        assert_eq!(json["type"], "finish");
+        assert_eq!(json["type"], "run_complete");
         assert_eq!(json["data"]["session_id"], "sess-abc");
     }
 
     #[test]
-    fn error_event_roundtrip() {
-        let event = AgentStreamEvent::Error(ErrorEventData::legacy("timeout", None));
+    fn run_error_event_roundtrip() {
+        let event = AgentStreamEvent::RunError(ErrorEventData::legacy("timeout", None));
         let json = serde_json::to_value(&event).unwrap();
-        assert_eq!(json["type"], "error");
+        assert_eq!(json["type"], "run_error");
         assert_eq!(json["data"]["message"], "timeout");
     }
 
@@ -396,7 +399,7 @@ mod tests {
     }
 
     #[test]
-    fn session_tool_call_maps_to_acp_tool_call_event() {
+    fn session_tool_call_maps_to_runtime_tool_result_envelope() {
         let notif = SessionNotification::new(
             "sess-1",
             SessionUpdate::ToolCall(
@@ -410,7 +413,7 @@ mod tests {
         let events = session_notification_to_events(&notif);
         assert_eq!(events.len(), 1);
         let json = serde_json::to_value(&events[0]).unwrap();
-        assert_eq!(json["type"], "acp_tool_call");
+        assert_eq!(json["type"], "tool_result");
         assert_eq!(json["data"]["session_id"], "sess-1");
         assert_eq!(json["data"]["update"]["sessionUpdate"], "tool_call");
         assert_eq!(json["data"]["update"]["tool_call_id"], "tool-1");
@@ -432,7 +435,7 @@ mod tests {
         let events = session_notification_to_events(&notif);
         assert_eq!(events.len(), 1);
         let json = serde_json::to_value(&events[0]).unwrap();
-        assert_eq!(json["type"], "acp_tool_call");
+        assert_eq!(json["type"], "tool_result");
         assert_eq!(json["data"]["update"]["sessionUpdate"], "tool_call_update");
         assert_eq!(json["data"]["update"]["tool_call_id"], "tool-1");
         assert_eq!(json["data"]["update"]["status"], "completed");
@@ -686,10 +689,10 @@ mod tests {
             ],
         );
 
-        let event = AgentStreamEvent::AcpPermission(permission_request_to_event_data(&request));
+        let event = AgentStreamEvent::ApprovalRequest(permission_request_to_event_data(&request));
         let json = serde_json::to_value(&event).unwrap();
 
-        assert_eq!(json["type"], "acp_permission");
+        assert_eq!(json["type"], "approval_request");
         assert_eq!(json["data"]["session_id"], "sess-1");
         assert_eq!(json["data"]["tool_call"]["tool_call_id"], "tool-1");
         assert_eq!(json["data"]["tool_call"]["raw_input"]["file_path"], "/tmp/a.txt");

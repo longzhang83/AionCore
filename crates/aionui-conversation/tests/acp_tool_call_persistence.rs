@@ -54,7 +54,7 @@ async fn run_acp_tool_call_update_without_insert_creates_placeholder() {
     );
     let rx = tx.subscribe();
 
-    tx.send(AgentStreamEvent::AcpToolCall(AcpToolCallEventData {
+    tx.send(AgentStreamEvent::ToolResult(AcpToolCallEventData {
         session_id: "sess-1".into(),
         update: AcpToolCallUpdateData {
             session_update: AcpToolCallSessionUpdateKind::ToolCallUpdate,
@@ -70,7 +70,8 @@ async fn run_acp_tool_call_update_without_insert_creates_placeholder() {
         meta: None,
     }))
     .unwrap();
-    tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+    tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+        .unwrap();
 
     relay.consume(rx).await;
 
@@ -133,7 +134,7 @@ async fn run_acp_tool_call_late_initial_event_merges_with_update_placeholder() {
     );
     let rx = tx.subscribe();
 
-    tx.send(AgentStreamEvent::AcpToolCall(AcpToolCallEventData {
+    tx.send(AgentStreamEvent::ToolResult(AcpToolCallEventData {
         session_id: "sess-1".into(),
         update: AcpToolCallUpdateData {
             session_update: AcpToolCallSessionUpdateKind::ToolCallUpdate,
@@ -149,7 +150,7 @@ async fn run_acp_tool_call_late_initial_event_merges_with_update_placeholder() {
         meta: None,
     }))
     .unwrap();
-    tx.send(AgentStreamEvent::AcpToolCall(AcpToolCallEventData {
+    tx.send(AgentStreamEvent::ToolResult(AcpToolCallEventData {
         session_id: "sess-1".into(),
         update: AcpToolCallUpdateData {
             session_update: AcpToolCallSessionUpdateKind::ToolCall,
@@ -165,7 +166,8 @@ async fn run_acp_tool_call_late_initial_event_merges_with_update_placeholder() {
         meta: None,
     }))
     .unwrap();
-    tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+    tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+        .unwrap();
 
     relay.consume(rx).await;
 

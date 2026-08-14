@@ -318,3 +318,25 @@ Session/MCP/API/App/Team：
 5. 最后再迁移 API DTO、数据库 `acp_session` 命名和旧 `AcpAgentManager`，避免先改存储名却仍保留协议耦合。
 
 本次仅执行只读检索；`git status --short` 为空，没有修改、commit 或 push。
+
+---
+
+## 6. V3 A1 clean-cut 第 3 步进度（2026-08-14）
+
+状态：已实现并验证。
+
+- `AgentStreamEvent` 外层 variant 已去除 `Acp*`：工具事件使用 `ToolCall` / `ToolResult`，审批使用 `ApprovalRequest` / `ApprovalComplete`，其余 catalog、session、usage、terminal、hook、error、finish 事件使用冻结的 Runtime 中性名称。
+- `SessionAgentTask::translate_event()` 已由测试固定：`SessionEvent::ToolCall → AgentStreamEvent::ToolCall`，`SessionEvent::Permission → AgentStreamEvent::ApprovalRequest`。
+- 方言信号在产生点完成中性投影：`SessionEnd → RunComplete`，`TokenPressure → ContextUsage { kind: "token_pressure" }`；消费方不再匹配 `AgentStreamEvent::AcpDialectSignal`。
+- `AcpToolCall*` 与 `AcpPermissionEventData` payload 类型保持不拆，符合本切片边界；下一步再按 tool update/status 和 permission inner kind 完成内部 DTO 拆分。
+- WebSocket stream tag 随 variant 更新为 snake_case 中性名称；Rust 侧 relay、后台流、channel、cron、team、测试消费方已同步。
+- 可观测性：现有 stream event-kind 日志已同步中性名称；本次仅改事件命名/投影，现有终止、错误与 relay 日志足够，无需新增日志点。
+
+验证：
+
+- RED：新增投影测试首次编译以 `E0599` 失败，证明 `AgentStreamEvent::ApprovalRequest` 尚不存在。
+- GREEN：`cargo test -p aionui-ai-agent -p aionui-session -p aionui-conversation -p aionui-channel -p aionui-team -p aionui-cron` 通过。
+- `cargo fmt --all -- --check` 通过。
+- `cargo clippy --workspace --all-targets -- -D warnings` 通过。
+
+未纳入本切片：API DTO、DB `acp_session`、旧 `AcpAgentManager`、aionrs/antigravity 删除，以及 `AcpToolCall*` / `AcpPermissionEventData` 内部拆分。

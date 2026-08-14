@@ -60,7 +60,7 @@ impl AcpAgentManager {
     /// the CLI side (target.md §7.2). It intentionally consumes a dedicated
     /// mpsc receiver — NOT a subscription to `event_tx` — to keep the "SDK
     /// notification → session" flow single-directional. Anything else that
-    /// emits `AgentStreamEvent::Acp*` on `event_tx` (e.g. session_flow's
+    /// emits Runtime-neutral `AgentStreamEvent` values on `event_tx` (e.g. session_flow's
     /// `emit_snapshot_events` broadcasting initial UI state) does NOT feed
     /// back into the session.
     ///
@@ -93,7 +93,7 @@ impl AcpAgentManager {
     /// layer and forward any resulting domain events to the persistence consumer.
     async fn apply_event_to_session(&self, event: &AgentStreamEvent) {
         match event {
-            AgentStreamEvent::AcpModeInfo(value) => {
+            AgentStreamEvent::ModeInfo(value) => {
                 if let Ok(update) = serde_json::from_value::<SessionModeState>(value.clone()) {
                     let mut s = self.session.write().await;
                     s.apply_advertised_modes(update);
@@ -104,21 +104,21 @@ impl AcpAgentManager {
                     self.commit_session_changes(&mut s).await;
                 }
             }
-            AgentStreamEvent::AcpModelInfo(value) => {
+            AgentStreamEvent::ModelInfo(value) => {
                 if let Some(update) = LegacySessionModelState::from_state_value(value) {
                     let mut s = self.session.write().await;
                     s.apply_advertised_models(update);
                     self.commit_session_changes(&mut s).await;
                 }
             }
-            AgentStreamEvent::AcpConfigOption(value) => {
+            AgentStreamEvent::ConfigOption(value) => {
                 if let Some(update) = extract_config_options_from_value(value) {
                     let mut s = self.session.write().await;
                     s.apply_advertised_config_options(update);
                     self.commit_session_changes(&mut s).await;
                 }
             }
-            AgentStreamEvent::AcpContextUsage(value) => {
+            AgentStreamEvent::ContextUsage(value) => {
                 if let Ok(update) = serde_json::from_value::<UsageUpdate>(value.clone()) {
                     let mut s = self.session.write().await;
                     s.apply_context_usage(update);
@@ -299,9 +299,7 @@ mod tests {
         let (notification_tx, mut notification_rx) = mpsc::channel::<SessionNotification>(8);
 
         // Simulate what emit_snapshot_events does: broadcast on event_tx
-        let _ = event_tx.send(AgentStreamEvent::AcpModeInfo(
-            serde_json::json!({"currentModeId": "plan"}),
-        ));
+        let _ = event_tx.send(AgentStreamEvent::ModeInfo(serde_json::json!({"currentModeId": "plan"})));
 
         // Drop the notification sender so the receiver's try_recv terminates
         drop(notification_tx);

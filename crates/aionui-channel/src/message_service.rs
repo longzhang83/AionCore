@@ -205,8 +205,8 @@ impl ChannelMessageService {
     pub fn process_stream_event(event: &AgentStreamEvent) -> Option<StreamAction> {
         match event {
             AgentStreamEvent::Text(data) => Some(StreamAction::AppendText(data.content.clone())),
-            AgentStreamEvent::Finish(_) => Some(StreamAction::Finish),
-            AgentStreamEvent::Error(data) => Some(StreamAction::Error(data.message.clone())),
+            AgentStreamEvent::RunComplete(_) => Some(StreamAction::Finish),
+            AgentStreamEvent::RunError(data) => Some(StreamAction::Error(data.message.clone())),
             AgentStreamEvent::Thinking(data) => Some(StreamAction::Thinking(data.content.clone())),
             AgentStreamEvent::ToolCall(data) => Some(StreamAction::ToolCall {
                 name: data.name.clone(),
@@ -219,23 +219,24 @@ impl ChannelMessageService {
             | AgentStreamEvent::AgentStatus(_)
             | AgentStreamEvent::Plan(_)
             | AgentStreamEvent::Permission(_)
-            | AgentStreamEvent::AcpPermission(_)
+            | AgentStreamEvent::ApprovalRequest(_)
+            | AgentStreamEvent::ApprovalComplete(_)
             // IM channels have no interactive question card; the ask stays
             // pending in the app UI (same treatment as Permission).
             | AgentStreamEvent::Ask(_)
-            | AgentStreamEvent::AcpToolCall(_)
+            | AgentStreamEvent::ToolResult(_)
             | AgentStreamEvent::AvailableCommands(_)
             | AgentStreamEvent::SkillSuggest(_)
             | AgentStreamEvent::CronTrigger(_)
-            | AgentStreamEvent::AcpModelInfo(_)
-            | AgentStreamEvent::AcpModeInfo(_)
-            | AgentStreamEvent::AcpConfigOption(_)
-            | AgentStreamEvent::AcpSessionInfo(_)
-            | AgentStreamEvent::AcpContextUsage(_)
+            | AgentStreamEvent::ModelInfo(_)
+            | AgentStreamEvent::ModeInfo(_)
+            | AgentStreamEvent::ConfigOption(_)
+            | AgentStreamEvent::SessionInfo(_)
+            | AgentStreamEvent::ContextUsage(_)
             // Live terminal snapshots are a web-UI card refresh; the final
             // command outcome reaches the IM transcript via the tool result.
-            | AgentStreamEvent::AcpTerminalOutput(_)
-            | AgentStreamEvent::AcpPromptHookWarning(_)
+            | AgentStreamEvent::TerminalOutput(_)
+            | AgentStreamEvent::PromptHookWarning(_)
             | AgentStreamEvent::System(_)
             | AgentStreamEvent::RequestTrace(_)
             | AgentStreamEvent::SlashCommandsUpdated(_)
@@ -245,8 +246,7 @@ impl ChannelMessageService {
             // A workflow progress refresh is a live re-render of a card in the
             // web UI; an IM transcript has no card to update, and streaming one
             // message per refresh would spam the channel.
-            | AgentStreamEvent::WorkflowProgress(_)
-            | AgentStreamEvent::AcpDialectSignal(_) => None,
+            | AgentStreamEvent::WorkflowProgress(_) => None,
         }
     }
 
@@ -523,14 +523,14 @@ mod tests {
 
     #[test]
     fn finish_event_produces_finish() {
-        let event = AgentStreamEvent::Finish(FinishEventData { session_id: None });
+        let event = AgentStreamEvent::RunComplete(FinishEventData { session_id: None });
         let action = ChannelMessageService::process_stream_event(&event);
         assert!(matches!(action, Some(StreamAction::Finish)));
     }
 
     #[test]
     fn error_event_produces_error() {
-        let event = AgentStreamEvent::Error(ErrorEventData::legacy("timeout", None));
+        let event = AgentStreamEvent::RunError(ErrorEventData::legacy("timeout", None));
         let action = ChannelMessageService::process_stream_event(&event);
         match action {
             Some(StreamAction::Error(msg)) => assert_eq!(msg, "timeout"),

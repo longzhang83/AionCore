@@ -81,7 +81,7 @@ impl IAgentTask for MockAgent {
         let _ = self.event_tx.send(AgentStreamEvent::Text(TextEventData {
             content: "Mock response".into(),
         }));
-        let _ = self.event_tx.send(AgentStreamEvent::Finish(
+        let _ = self.event_tx.send(AgentStreamEvent::RunComplete(
             aionui_ai_agent::protocol::events::FinishEventData::default(),
         ));
         Ok(())

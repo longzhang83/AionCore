@@ -3108,7 +3108,7 @@ impl IAgentTask for MockAgent {
     }
     async fn send_message(&self, _data: SendMessageData) -> Result<(), AgentSendError> {
         // Emit finish event so the relay task completes
-        let _ = self.event_tx.send(AgentStreamEvent::Finish(
+        let _ = self.event_tx.send(AgentStreamEvent::RunComplete(
             aionui_ai_agent::protocol::events::FinishEventData::default(),
         ));
         Ok(())
@@ -3189,7 +3189,7 @@ impl IMockAgent for MockAgent {
         }
         if let Some(response) = self.set_config_option_response.lock().unwrap().clone() {
             if let Some(config_options) = response.config_options.as_ref() {
-                let _ = self.event_tx.send(AgentStreamEvent::AcpConfigOption(json!({
+                let _ = self.event_tx.send(AgentStreamEvent::ConfigOption(json!({
                     "config_options": config_options,
                 })));
             }
@@ -3200,7 +3200,7 @@ impl IMockAgent for MockAgent {
             config_options: Some(self.config_options.lock().unwrap().clone()),
         };
         if let Some(config_options) = response.config_options.as_ref() {
-            let _ = self.event_tx.send(AgentStreamEvent::AcpConfigOption(json!({
+            let _ = self.event_tx.send(AgentStreamEvent::ConfigOption(json!({
                 "config_options": config_options,
             })));
         }
@@ -3280,7 +3280,9 @@ impl IAgentTask for BlockingCancelAgent {
     async fn send_message(&self, _data: SendMessageData) -> Result<(), AgentSendError> {
         self.send_started.notify_waiters();
         self.finish_notify.notified().await;
-        let _ = self.event_tx.send(AgentStreamEvent::Finish(FinishEventData::default()));
+        let _ = self
+            .event_tx
+            .send(AgentStreamEvent::RunComplete(FinishEventData::default()));
         Ok(())
     }
 
@@ -3816,7 +3818,7 @@ impl IAgentTask for ScriptedAgent {
             .lock()
             .unwrap()
             .pop_front()
-            .unwrap_or_else(|| vec![AgentStreamEvent::Finish(FinishEventData::default())]);
+            .unwrap_or_else(|| vec![AgentStreamEvent::RunComplete(FinishEventData::default())]);
         for event in script {
             let _ = self.event_tx.send(event);
         }
@@ -4355,7 +4357,7 @@ async fn run_agent_turn_applies_required_runtime_mode_after_stream_subscription(
     let events = broadcaster.take_events();
     let config_event = events
         .iter()
-        .find(|event| event.name == "message.stream" && event.data["type"] == "acp_config_option")
+        .find(|event| event.name == "message.stream" && event.data["type"] == "config_option")
         .expect("runtime mode switch should broadcast config option snapshot");
     assert_eq!(config_event.data["conversation_id"], conv.id);
     assert_eq!(config_event.data["data"]["config_options"][0]["id"], "mode");
@@ -5648,7 +5650,7 @@ async fn send_message_keeps_acp_task_after_normal_finish() {
 
     let scripted_agent = Arc::new(ScriptedAgent::new(
         &conv.id,
-        vec![vec![AgentStreamEvent::Finish(FinishEventData::default())]],
+        vec![vec![AgentStreamEvent::RunComplete(FinishEventData::default())]],
     ));
     task_mgr.insert_agent(&conv.id, AgentInstance::Mock(scripted_agent));
 
@@ -5671,7 +5673,7 @@ async fn send_message_does_not_evict_non_acp_task_after_terminal_error() {
     let scripted_agent = Arc::new(
         ScriptedAgent::new(
             &conv.id,
-            vec![vec![AgentStreamEvent::Error(ErrorEventData::legacy(
+            vec![vec![AgentStreamEvent::RunError(ErrorEventData::legacy(
                 "aionrs terminal error",
                 Some(AgentErrorCode::UnknownUpstreamError),
             ))]],
@@ -5699,7 +5701,7 @@ async fn send_message_does_not_inject_send_error_when_runtime_terminal_exists() 
     let scripted_agent = Arc::new(
         ScriptedAgent::new(
             &conv.id,
-            vec![vec![AgentStreamEvent::Error(ErrorEventData::legacy(
+            vec![vec![AgentStreamEvent::RunError(ErrorEventData::legacy(
                 "runtime already emitted",
                 Some(AgentErrorCode::UnknownUpstreamError),
             ))]],
@@ -5849,7 +5851,7 @@ async fn send_message_records_agent_availability_feedback_on_send_success() {
 
     let scripted_agent = Arc::new(ScriptedAgent::new(
         &conv.id,
-        vec![vec![AgentStreamEvent::Finish(FinishEventData::default())]],
+        vec![vec![AgentStreamEvent::RunComplete(FinishEventData::default())]],
     ));
     task_mgr.insert_agent(&conv.id, AgentInstance::Mock(scripted_agent));
 
@@ -5903,7 +5905,7 @@ async fn send_message_auto_replays_clean_retryable_acp_error_once() {
 
     let first = Arc::new(ScriptedAgent::new(
         &conv.id,
-        vec![vec![AgentStreamEvent::Error(ErrorEventData {
+        vec![vec![AgentStreamEvent::RunError(ErrorEventData {
             message: "temporary provider failure".into(),
             code: Some(AgentErrorCode::UnknownUpstreamError),
             ownership: None,
@@ -5918,7 +5920,7 @@ async fn send_message_auto_replays_clean_retryable_acp_error_once() {
         &conv.id,
         vec![vec![
             AgentStreamEvent::Text(TextEventData { content: "done".into() }),
-            AgentStreamEvent::Finish(FinishEventData::default()),
+            AgentStreamEvent::RunComplete(FinishEventData::default()),
         ]],
     ));
     let task_mgr = Arc::new(RebuildingScriptedTaskManager::new(vec![
@@ -5967,7 +5969,7 @@ async fn auto_replay_rebuild_keeps_existing_acp_session_id_in_build_options() {
 
     let first = Arc::new(ScriptedAgent::new(
         &conv.id,
-        vec![vec![AgentStreamEvent::Error(ErrorEventData {
+        vec![vec![AgentStreamEvent::RunError(ErrorEventData {
             message: "temporary provider failure".into(),
             code: Some(AgentErrorCode::UnknownUpstreamError),
             ownership: None,
@@ -5980,7 +5982,7 @@ async fn auto_replay_rebuild_keeps_existing_acp_session_id_in_build_options() {
     ));
     let second = Arc::new(ScriptedAgent::new(
         &conv.id,
-        vec![vec![AgentStreamEvent::Finish(FinishEventData::default())]],
+        vec![vec![AgentStreamEvent::RunComplete(FinishEventData::default())]],
     ));
     let task_mgr = Arc::new(RebuildingScriptedTaskManager::new(vec![
         AgentInstance::Mock(first),
@@ -6018,7 +6020,7 @@ async fn send_message_does_not_auto_replay_after_visible_output() {
             AgentStreamEvent::Text(TextEventData {
                 content: "partial".into(),
             }),
-            AgentStreamEvent::Error(ErrorEventData {
+            AgentStreamEvent::RunError(ErrorEventData {
                 message: "temporary provider failure".into(),
                 code: Some(AgentErrorCode::UnknownUpstreamError),
                 ownership: None,
@@ -6032,7 +6034,7 @@ async fn send_message_does_not_auto_replay_after_visible_output() {
     ));
     let second = Arc::new(ScriptedAgent::new(
         &conv.id,
-        vec![vec![AgentStreamEvent::Finish(FinishEventData::default())]],
+        vec![vec![AgentStreamEvent::RunComplete(FinishEventData::default())]],
     ));
     let task_mgr = Arc::new(RebuildingScriptedTaskManager::new(vec![
         AgentInstance::Mock(first),
@@ -6073,7 +6075,7 @@ async fn send_message_does_not_auto_replay_after_tool_side_effect() {
                 output: None,
                 description: None,
             }),
-            AgentStreamEvent::Error(ErrorEventData {
+            AgentStreamEvent::RunError(ErrorEventData {
                 message: "temporary provider failure".into(),
                 code: Some(AgentErrorCode::UnknownUpstreamError),
                 ownership: None,
@@ -6087,7 +6089,7 @@ async fn send_message_does_not_auto_replay_after_tool_side_effect() {
     ));
     let second = Arc::new(ScriptedAgent::new(
         &conv.id,
-        vec![vec![AgentStreamEvent::Finish(FinishEventData::default())]],
+        vec![vec![AgentStreamEvent::RunComplete(FinishEventData::default())]],
     ));
     let task_mgr = Arc::new(RebuildingScriptedTaskManager::new(vec![
         AgentInstance::Mock(first),
@@ -6111,7 +6113,7 @@ async fn send_message_does_not_auto_replay_model_not_found() {
 
     let first = Arc::new(ScriptedAgent::new(
         &conv.id,
-        vec![vec![AgentStreamEvent::Error(ErrorEventData {
+        vec![vec![AgentStreamEvent::RunError(ErrorEventData {
             message: "model not found".into(),
             code: Some(AgentErrorCode::UserLlmProviderModelNotFound),
             ownership: None,
@@ -6124,7 +6126,7 @@ async fn send_message_does_not_auto_replay_model_not_found() {
     ));
     let second = Arc::new(ScriptedAgent::new(
         &conv.id,
-        vec![vec![AgentStreamEvent::Finish(FinishEventData::default())]],
+        vec![vec![AgentStreamEvent::RunComplete(FinishEventData::default())]],
     ));
     let task_mgr = Arc::new(RebuildingScriptedTaskManager::new(vec![
         AgentInstance::Mock(first),
@@ -6155,7 +6157,7 @@ async fn send_message_auto_replay_stops_after_second_retryable_failure() {
 
     let first = Arc::new(ScriptedAgent::new(
         &conv.id,
-        vec![vec![AgentStreamEvent::Error(ErrorEventData {
+        vec![vec![AgentStreamEvent::RunError(ErrorEventData {
             message: "temporary provider failure one".into(),
             code: Some(AgentErrorCode::UnknownUpstreamError),
             ownership: None,
@@ -6168,7 +6170,7 @@ async fn send_message_auto_replay_stops_after_second_retryable_failure() {
     ));
     let second = Arc::new(ScriptedAgent::new(
         &conv.id,
-        vec![vec![AgentStreamEvent::Error(ErrorEventData {
+        vec![vec![AgentStreamEvent::RunError(ErrorEventData {
             message: "temporary provider failure two".into(),
             code: Some(AgentErrorCode::UnknownUpstreamError),
             ownership: None,
@@ -6181,7 +6183,7 @@ async fn send_message_auto_replay_stops_after_second_retryable_failure() {
     ));
     let third = Arc::new(ScriptedAgent::new(
         &conv.id,
-        vec![vec![AgentStreamEvent::Finish(FinishEventData::default())]],
+        vec![vec![AgentStreamEvent::RunComplete(FinishEventData::default())]],
     ));
     let task_mgr = Arc::new(RebuildingScriptedTaskManager::new(vec![
         AgentInstance::Mock(first),

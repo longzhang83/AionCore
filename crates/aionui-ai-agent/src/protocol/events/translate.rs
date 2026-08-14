@@ -45,7 +45,7 @@ pub(crate) fn session_notification_to_events(notif: &SessionNotification) -> Vec
         SessionUpdate::UserMessageChunk(_chunk) => {}
 
         SessionUpdate::ToolCall(tc) => {
-            events.push(AgentStreamEvent::AcpToolCall(AcpToolCallEventData {
+            events.push(AgentStreamEvent::ToolResult(AcpToolCallEventData {
                 session_id,
                 update: AcpToolCallUpdateData {
                     session_update: AcpToolCallSessionUpdateKind::ToolCall,
@@ -67,7 +67,7 @@ pub(crate) fn session_notification_to_events(notif: &SessionNotification) -> Vec
             let status = normalize_tool_status(tcu.fields.status.as_ref(), raw_output.as_ref());
             normalize_raw_output_status(&mut raw_output, status.as_ref());
 
-            events.push(AgentStreamEvent::AcpToolCall(AcpToolCallEventData {
+            events.push(AgentStreamEvent::ToolResult(AcpToolCallEventData {
                 session_id,
                 update: AcpToolCallUpdateData {
                     session_update: AcpToolCallSessionUpdateKind::ToolCallUpdate,
@@ -112,25 +112,25 @@ pub(crate) fn session_notification_to_events(notif: &SessionNotification) -> Vec
         }
 
         SessionUpdate::CurrentModeUpdate(update) => {
-            events.push(AgentStreamEvent::AcpModeInfo(
+            events.push(AgentStreamEvent::ModeInfo(
                 serde_json::to_value(update).unwrap_or_default(),
             ));
         }
 
         SessionUpdate::ConfigOptionUpdate(update) => {
-            events.push(AgentStreamEvent::AcpConfigOption(
+            events.push(AgentStreamEvent::ConfigOption(
                 serde_json::to_value(update).unwrap_or_default(),
             ));
         }
 
         SessionUpdate::SessionInfoUpdate(update) => {
-            events.push(AgentStreamEvent::AcpSessionInfo(
+            events.push(AgentStreamEvent::SessionInfo(
                 serde_json::to_value(update).unwrap_or_default(),
             ));
         }
 
         SessionUpdate::UsageUpdate(update) => {
-            events.push(AgentStreamEvent::AcpContextUsage(
+            events.push(AgentStreamEvent::ContextUsage(
                 serde_json::to_value(update).unwrap_or_default(),
             ));
         }

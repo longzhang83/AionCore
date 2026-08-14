@@ -100,7 +100,7 @@ impl PermissionRouter {
 
                 if runtime
                     .event_sender()
-                    .send(AgentStreamEvent::AcpPermission(permission_event))
+                    .send(AgentStreamEvent::ApprovalRequest(permission_event))
                     .is_err()
                     && let Some(pending) = this.pending_permissions.lock().unwrap().remove(&call_id)
                 {
@@ -511,7 +511,7 @@ mod tests {
             .await
             .expect("permission event should be emitted")
             .expect("permission event channel should stay open");
-        assert!(matches!(event, AgentStreamEvent::AcpPermission(_)));
+        assert!(matches!(event, AgentStreamEvent::ApprovalRequest(_)));
 
         let confirmations = router.get_confirmations();
         assert_eq!(confirmations.len(), 1);

@@ -2,7 +2,7 @@
 //!
 //! Each hook reads a one-shot flag on `AcpSession` (or a `pending_*`
 //! field), consumes it, and prepends its block to the prompt. Failures
-//! are reported via `ctx.runtime.emit(AgentStreamEvent::AcpPromptHookWarning(..))`
+//! are reported via `ctx.runtime.emit(AgentStreamEvent::PromptHookWarning(..))`
 //! and the prompt is returned in a gracefully-degraded form.
 
 use crate::capability::first_message_injector::{InjectionConfig, inject_first_message_prefix};
@@ -49,7 +49,7 @@ pub(crate) fn emit_hook_warning(ctx: &PromptCtx<'_>, hook: &'static str, message
         message: message.into(),
     };
     let value = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
-    ctx.runtime.emit(AgentStreamEvent::AcpPromptHookWarning(value));
+    ctx.runtime.emit(AgentStreamEvent::PromptHookWarning(value));
 }
 
 #[cfg(test)]

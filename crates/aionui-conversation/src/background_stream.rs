@@ -66,13 +66,14 @@ impl BackgroundStreamWatcher {
             AgentStreamEvent::Text(_)
                 | AgentStreamEvent::Thinking(_)
                 | AgentStreamEvent::ToolCall(_)
-                | AgentStreamEvent::AcpToolCall(_)
+                | AgentStreamEvent::ToolResult(_)
                 | AgentStreamEvent::ToolGroup(_)
                 | AgentStreamEvent::Plan(_)
                 | AgentStreamEvent::Permission(_)
-                | AgentStreamEvent::AcpPermission(_)
+                | AgentStreamEvent::ApprovalRequest(_)
+                | AgentStreamEvent::ApprovalComplete(_)
                 | AgentStreamEvent::Ask(_)
-                | AgentStreamEvent::Error(_)
+                | AgentStreamEvent::RunError(_)
         )
         // Deliberately absent: Tips. Tips are OUR pump-side diagnostics, never
         // how a CLI-initiated turn begins (those open with thinking/tool/text) —
@@ -112,7 +113,7 @@ impl BackgroundStreamWatcher {
             //   — racing the relay's exit. Only a gate-free persistent consumer
             //   catches both. apply_agent_title is guarded (name_source) and
             //   idempotent (same-title no-op), so timing is never harmful.
-            if let AgentStreamEvent::AcpSessionInfo(payload) = &ev {
+            if let AgentStreamEvent::SessionInfo(payload) = &ev {
                 if let Some(title) = payload
                     .get("title")
                     .and_then(serde_json::Value::as_str)
@@ -326,14 +327,15 @@ fn frame_kind(ev: &AgentStreamEvent) -> &'static str {
         AgentStreamEvent::Text(_) => "text",
         AgentStreamEvent::Thinking(_) => "thinking",
         AgentStreamEvent::ToolCall(_) => "tool_call",
-        AgentStreamEvent::AcpToolCall(_) => "acp_tool_call",
+        AgentStreamEvent::ToolResult(_) => "tool_result",
         AgentStreamEvent::ToolGroup(_) => "tool_group",
         AgentStreamEvent::Plan(_) => "plan",
         AgentStreamEvent::Permission(_) => "permission",
-        AgentStreamEvent::AcpPermission(_) => "acp_permission",
+        AgentStreamEvent::ApprovalRequest(_) => "approval_request",
+        AgentStreamEvent::ApprovalComplete(_) => "approval_complete",
         AgentStreamEvent::Ask(_) => "ask",
         AgentStreamEvent::Tips(_) => "tips",
-        AgentStreamEvent::Error(_) => "error",
+        AgentStreamEvent::RunError(_) => "run_error",
         _ => "other",
     }
 }
@@ -535,7 +537,7 @@ mod tests {
             }))
             .unwrap();
         rig.tx
-            .send(AgentStreamEvent::Finish(FinishEventData::default()))
+            .send(AgentStreamEvent::RunComplete(FinishEventData::default()))
             .unwrap();
 
         let row = eventually(async || rows_of_type(&rig, "text").await.into_iter().next())
@@ -660,7 +662,7 @@ mod tests {
             }))
             .unwrap();
         rig.tx
-            .send(AgentStreamEvent::Finish(FinishEventData::default()))
+            .send(AgentStreamEvent::RunComplete(FinishEventData::default()))
             .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
         assert!(
@@ -683,7 +685,7 @@ mod tests {
             .try_claim_turn("conv-1", "turn-user")
             .expect("claimed");
         rig.tx
-            .send(AgentStreamEvent::AcpSessionInfo(serde_json::json!({
+            .send(AgentStreamEvent::SessionInfo(serde_json::json!({
                 "title": "创建带时间戳的JSON文件"
             })))
             .unwrap();
@@ -725,7 +727,7 @@ mod tests {
         let rig = rig().await;
         let mut ws = rig.bus.subscribe();
         rig.tx
-            .send(AgentStreamEvent::AcpSessionInfo(serde_json::json!({
+            .send(AgentStreamEvent::SessionInfo(serde_json::json!({
                 "title": "Fix login bug"
             })))
             .unwrap();

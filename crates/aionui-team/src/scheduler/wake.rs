@@ -56,8 +56,8 @@ impl TeammateManager {
                 tokio::select! {
                     event = rx.recv() => {
                         match event {
-                            Ok(AgentStreamEvent::Finish(_)) => break false,
-                            Ok(AgentStreamEvent::Error(_)) => break false,
+                            Ok(AgentStreamEvent::RunComplete(_)) => break false,
+                            Ok(AgentStreamEvent::RunError(_)) => break false,
                             Err(broadcast::error::RecvError::Closed) => break false,
                             Err(broadcast::error::RecvError::Lagged(n)) => {
                                 warn!(slot_id = %slot_id_owned, skipped = n, "wake watchdog lagged");

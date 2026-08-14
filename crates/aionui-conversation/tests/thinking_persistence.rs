@@ -154,7 +154,8 @@ async fn empty_thinking_segment_is_dropped_before_persistence() {
     }))
     .unwrap();
     tx.send(tool_call("tc-2")).unwrap();
-    tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+    tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+        .unwrap();
 
     relay.consume(rx).await;
 

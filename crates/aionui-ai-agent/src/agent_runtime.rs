@@ -122,7 +122,7 @@ impl AgentRuntime {
         }
         let _ = self
             .event_tx
-            .send(AgentStreamEvent::Finish(FinishEventData { session_id }));
+            .send(AgentStreamEvent::RunComplete(FinishEventData { session_id }));
     }
 
     /// Atomic: set status ← Finished AND broadcast `Error { message }`.
@@ -145,7 +145,7 @@ impl AgentRuntime {
         if already_finished {
             return;
         }
-        let _ = self.event_tx.send(AgentStreamEvent::Error(data));
+        let _ = self.event_tx.send(AgentStreamEvent::RunError(data));
     }
 }
 
@@ -186,7 +186,7 @@ mod tests {
         assert_eq!(rt.status(), Some(ConversationStatus::Finished));
         let ev = rx.recv().await.expect("finish event");
         match ev {
-            AgentStreamEvent::Finish(data) => {
+            AgentStreamEvent::RunComplete(data) => {
                 assert_eq!(data.session_id.as_deref(), Some("sess-1"));
             }
             other => panic!("expected Finish, got {other:?}"),
@@ -201,7 +201,7 @@ mod tests {
         assert_eq!(rt.status(), Some(ConversationStatus::Finished));
         let ev = rx.recv().await.expect("error event");
         match ev {
-            AgentStreamEvent::Error(data) => {
+            AgentStreamEvent::RunError(data) => {
                 assert_eq!(data.message, "boom");
             }
             other => panic!("expected Error, got {other:?}"),
@@ -265,7 +265,7 @@ mod tests {
 
         let ev = rx.recv().await.expect("finish event after reset");
         match ev {
-            AgentStreamEvent::Finish(data) => {
+            AgentStreamEvent::RunComplete(data) => {
                 assert_eq!(data.session_id.as_deref(), Some("sess-2"));
             }
             other => panic!("expected Finish, got {other:?}"),

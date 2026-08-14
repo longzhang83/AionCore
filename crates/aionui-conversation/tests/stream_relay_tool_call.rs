@@ -97,7 +97,8 @@ async fn run_tool_call_with_empty_call_id_is_not_persisted() {
         description: None,
     }))
     .unwrap();
-    tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+    tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+        .unwrap();
 
     relay.consume(rx).await;
 
@@ -155,7 +156,8 @@ async fn run_tool_call_late_running_event_does_not_regress_completed_message() {
         description: Some("search files".into()),
     }))
     .unwrap();
-    tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+    tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+        .unwrap();
 
     relay.consume(rx).await;
 
@@ -222,7 +224,8 @@ async fn run_tool_call_canceled_status_persists_as_terminal_finish() {
         description: None,
     }))
     .unwrap();
-    tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+    tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+        .unwrap();
 
     relay.consume(rx).await;
 
@@ -301,7 +304,9 @@ impl IAgentTask for ToolCallAgent {
             output: None,
             description: None,
         }));
-        let _ = self.event_tx.send(AgentStreamEvent::Finish(FinishEventData::default()));
+        let _ = self
+            .event_tx
+            .send(AgentStreamEvent::RunComplete(FinishEventData::default()));
         Ok(())
     }
 

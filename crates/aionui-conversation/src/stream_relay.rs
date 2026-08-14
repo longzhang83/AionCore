@@ -303,7 +303,7 @@ impl StreamRelay {
                 if let Some(send_error) = pending_send_error.take() {
                     match rx.try_recv() {
                         Ok(event) => {
-                            if !matches!(event, AgentStreamEvent::Finish(_) | AgentStreamEvent::Error(_)) {
+                            if !matches!(event, AgentStreamEvent::RunComplete(_) | AgentStreamEvent::RunError(_)) {
                                 pending_send_error = Some(send_error);
                             } else {
                                 debug!("Runtime terminal event won race with fallback send error");
@@ -316,7 +316,7 @@ impl StreamRelay {
                                 ownership = ?send_error.ownership(),
                                 "Injecting stream error for failed agent send"
                             );
-                            Ok(AgentStreamEvent::Error(send_error.into_stream_error()))
+                            Ok(AgentStreamEvent::RunError(send_error.into_stream_error()))
                         }
                         Err(TryRecvError::Lagged(n)) => Err(broadcast::error::RecvError::Lagged(n)),
                     }
@@ -342,7 +342,7 @@ impl StreamRelay {
             match recv_result {
                 Ok(event) => {
                     let deleting = self.is_deleting();
-                    if deleting && !matches!(event, AgentStreamEvent::Finish(_) | AgentStreamEvent::Error(_)) {
+                    if deleting && !matches!(event, AgentStreamEvent::RunComplete(_) | AgentStreamEvent::RunError(_)) {
                         debug!(
                             event_type = Self::event_kind(&event),
                             "Skipping non-terminal stream event because conversation is deleting"
@@ -373,13 +373,6 @@ impl StreamRelay {
                             self.complete_active_thinking(&mut active_thinking).await;
                             self.close_active_text_segment(&mut active_text, &mut text_segments, "finish")
                                 .await;
-                        }
-                        AgentStreamEvent::AcpDialectSignal(_) => {
-                            // Internal-only turn/near-window signal (see
-                            // AgentStreamEvent::AcpDialectSignal): consumed by the ACP
-                            // empty-turn judgment, never rendered. Explicitly dropped here so
-                            // the catch-all below does not forward it to the WebSocket, and
-                            // it is never persisted.
                         }
                         AgentStreamEvent::BackendTurnBound(backend_turn_id) => {
                             // Internal-only fork anchor (codex Turn.id): stamp it on the
@@ -476,9 +469,9 @@ impl StreamRelay {
                                 segment.flush_counter = 0;
                             }
                         }
-                        AgentStreamEvent::Finish(_) | AgentStreamEvent::Error(_) => {
+                        AgentStreamEvent::RunComplete(_) | AgentStreamEvent::RunError(_) => {
                             let elapsed_ms = now_ms() - started_at;
-                            let event_type = if matches!(event, AgentStreamEvent::Finish(_)) {
+                            let event_type = if matches!(event, AgentStreamEvent::RunComplete(_)) {
                                 "Finish"
                             } else {
                                 "Error"
@@ -513,7 +506,7 @@ impl StreamRelay {
                                 && attempt.safe_to_auto_replay();
 
                             if defer_clean_error {
-                                if let AgentStreamEvent::Error(data) = &event {
+                                if let AgentStreamEvent::RunError(data) = &event {
                                     attempt.terminal_error = Some(data.clone());
                                     attempt.terminal_error_deferred = true;
                                 }
@@ -535,7 +528,7 @@ impl StreamRelay {
                                 self.close_active_text_segment(
                                     &mut active_text,
                                     &mut text_segments,
-                                    if matches!(event, AgentStreamEvent::Error(_)) {
+                                    if matches!(event, AgentStreamEvent::RunError(_)) {
                                         "error"
                                     } else {
                                         "finish"
@@ -544,7 +537,7 @@ impl StreamRelay {
                                 .await;
                             }
                             self.forward_to_websocket(&event);
-                            if let AgentStreamEvent::Error(data) = &event {
+                            if let AgentStreamEvent::RunError(data) = &event {
                                 attempt.terminal_error = Some(data.clone());
                             }
                             let mut outcome = if deleting {
@@ -575,7 +568,7 @@ impl StreamRelay {
                             self.forward_to_websocket(&event);
                             self.adapter.persist_tool_call(data).await;
                         }
-                        AgentStreamEvent::AcpToolCall(data) => {
+                        AgentStreamEvent::ToolResult(data) => {
                             attempt.saw_tool_or_side_effect = true;
                             self.complete_active_thinking(&mut active_thinking).await;
                             self.close_active_text_segment(&mut active_text, &mut text_segments, "finish")
@@ -649,7 +642,8 @@ impl StreamRelay {
                         }
                         AgentStreamEvent::CronTrigger(_)
                         | AgentStreamEvent::Permission(_)
-                        | AgentStreamEvent::AcpPermission(_)
+                        | AgentStreamEvent::ApprovalRequest(_)
+                        | AgentStreamEvent::ApprovalComplete(_)
                         // Ask rides the permission lane: a raised question is a
                         // side-effect (blocks auto-replay) and must reach the ws
                         // live for the card to pop mid-turn.
@@ -706,7 +700,9 @@ impl StreamRelay {
                         self.finalize(
                             &full_text_buffer,
                             &text_segments,
-                            &AgentStreamEvent::Finish(aionui_ai_agent::protocol::events::FinishEventData::default()),
+                            &AgentStreamEvent::RunComplete(
+                                aionui_ai_agent::protocol::events::FinishEventData::default(),
+                            ),
                             RelayTerminal::ChannelClosed,
                         )
                         .await
@@ -742,43 +738,43 @@ impl StreamRelay {
             AgentStreamEvent::Tips(_) => "Tips",
             AgentStreamEvent::Thinking(_) => "Thinking",
             AgentStreamEvent::ToolCall(_) => "ToolCall",
-            AgentStreamEvent::AcpToolCall(_) => "AcpToolCall",
+            AgentStreamEvent::ToolResult(_) => "ToolResult",
             AgentStreamEvent::ToolGroup(_) => "ToolGroup",
             AgentStreamEvent::AgentStatus(_) => "AgentStatus",
             AgentStreamEvent::Plan(_) => "Plan",
             AgentStreamEvent::Permission(_) => "Permission",
-            AgentStreamEvent::AcpPermission(_) => "AcpPermission",
+            AgentStreamEvent::ApprovalRequest(_) => "ApprovalRequest",
+            AgentStreamEvent::ApprovalComplete(_) => "ApprovalComplete",
             AgentStreamEvent::Ask(_) => "Ask",
             AgentStreamEvent::SkillSuggest(_) => "SkillSuggest",
             AgentStreamEvent::CronTrigger(_) => "CronTrigger",
-            AgentStreamEvent::AcpModelInfo(_) => "AcpModelInfo",
-            AgentStreamEvent::AcpModeInfo(_) => "AcpModeInfo",
-            AgentStreamEvent::AcpConfigOption(_) => "AcpConfigOption",
-            AgentStreamEvent::AcpSessionInfo(_) => "AcpSessionInfo",
-            AgentStreamEvent::AcpContextUsage(_) => "AcpContextUsage",
-            AgentStreamEvent::AcpTerminalOutput(_) => "AcpTerminalOutput",
-            AgentStreamEvent::AcpPromptHookWarning(_) => "AcpPromptHookWarning",
+            AgentStreamEvent::ModelInfo(_) => "ModelInfo",
+            AgentStreamEvent::ModeInfo(_) => "ModeInfo",
+            AgentStreamEvent::ConfigOption(_) => "ConfigOption",
+            AgentStreamEvent::SessionInfo(_) => "SessionInfo",
+            AgentStreamEvent::ContextUsage(_) => "ContextUsage",
+            AgentStreamEvent::TerminalOutput(_) => "TerminalOutput",
+            AgentStreamEvent::PromptHookWarning(_) => "PromptHookWarning",
             AgentStreamEvent::SlashCommandsUpdated(_) => "SlashCommandsUpdated",
             AgentStreamEvent::AvailableCommands(_) => "AvailableCommands",
-            AgentStreamEvent::Finish(_) => "Finish",
-            AgentStreamEvent::Error(_) => "Error",
+            AgentStreamEvent::RunComplete(_) => "RunComplete",
+            AgentStreamEvent::RunError(_) => "RunError",
             AgentStreamEvent::System(_) => "System",
             AgentStreamEvent::RequestTrace(_) => "RequestTrace",
             AgentStreamEvent::SessionAssigned(_) => "SessionAssigned",
             AgentStreamEvent::SegmentBreak => "SegmentBreak",
             AgentStreamEvent::BackendTurnBound(_) => "BackendTurnBound",
             AgentStreamEvent::WorkflowProgress(_) => "WorkflowProgress",
-            AgentStreamEvent::AcpDialectSignal(_) => "AcpDialectSignal",
         }
     }
 
     fn terminal_from_event(event: &AgentStreamEvent) -> RelayTerminal {
         match event {
-            AgentStreamEvent::Error(data) => RelayTerminal::Error {
+            AgentStreamEvent::RunError(data) => RelayTerminal::Error {
                 code: data.code,
                 retryable: data.retryable,
             },
-            AgentStreamEvent::Finish(_) => RelayTerminal::Finish,
+            AgentStreamEvent::RunComplete(_) => RelayTerminal::Finish,
             _ => RelayTerminal::ChannelClosed,
         }
     }
@@ -839,7 +835,7 @@ impl StreamRelay {
             attempt: TurnAttemptSummary::default(),
         };
         let status = match event {
-            AgentStreamEvent::Error(_) => "error",
+            AgentStreamEvent::RunError(_) => "error",
             _ => "finish",
         };
 
@@ -859,7 +855,7 @@ impl StreamRelay {
 
             self.send_system_responses(&processed.system_responses);
             outcome.system_responses = processed.system_responses;
-        } else if let AgentStreamEvent::Error(data) = event {
+        } else if let AgentStreamEvent::RunError(data) = event {
             self.adapter.persist_error_tip(data).await;
         }
 
@@ -1149,7 +1145,8 @@ mod tests {
             content: "World".into(),
         }))
         .unwrap();
-        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+            .unwrap();
 
         let outcome = relay.consume(rx).await;
         assert!(outcome.system_responses.is_empty());
@@ -1207,11 +1204,12 @@ mod tests {
             bus.clone(),
         );
         let rx = tx.subscribe();
-        tx.send(AgentStreamEvent::AcpSessionInfo(serde_json::json!({
+        tx.send(AgentStreamEvent::SessionInfo(serde_json::json!({
             "title": "Fix login bug"
         })))
         .unwrap();
-        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+            .unwrap();
         let outcome = relay.consume(rx).await;
         assert_eq!(outcome.terminal, RelayTerminal::Finish);
 
@@ -1251,11 +1249,12 @@ mod tests {
             bus.clone(),
         );
         let rx = tx.subscribe();
-        tx.send(AgentStreamEvent::AcpSessionInfo(serde_json::json!({ "title": null })))
+        tx.send(AgentStreamEvent::SessionInfo(serde_json::json!({ "title": null })))
             .unwrap();
-        tx.send(AgentStreamEvent::AcpSessionInfo(serde_json::json!({ "title": "   " })))
+        tx.send(AgentStreamEvent::SessionInfo(serde_json::json!({ "title": "   " })))
             .unwrap();
-        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+            .unwrap();
         relay.consume(rx).await;
 
         assert!(
@@ -1296,7 +1295,8 @@ mod tests {
             supersedes_key: None,
         }))
         .unwrap();
-        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+            .unwrap();
 
         let outcome = relay.consume(rx).await;
         assert_eq!(
@@ -1332,7 +1332,8 @@ mod tests {
             supersedes_key: None,
         }))
         .unwrap();
-        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+            .unwrap();
 
         let outcome = relay.consume(rx).await;
         assert!(
@@ -1371,7 +1372,8 @@ mod tests {
             supersedes_key: None,
         }))
         .unwrap();
-        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+            .unwrap();
 
         let outcome = relay.consume(rx).await;
         assert_eq!(outcome.terminal, RelayTerminal::Finish);
@@ -1435,7 +1437,8 @@ mod tests {
                 content: "running in the background.".into(),
             }))
             .unwrap();
-            tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+            tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+                .unwrap();
             relay.consume(rx).await;
 
             let mut frames = Vec::new();
@@ -1518,12 +1521,10 @@ mod tests {
         );
     }
 
-    // issue 136586749 (B-3): AcpDialectSignal is an internal-only turn/near-window
-    // signal. Like SegmentBreak it must never reach the WS and must not persist.
+    // Token pressure is now a Runtime-neutral ContextUsage frame. It reaches the
+    // WebSocket for context UI updates but remains non-message metadata.
     #[tokio::test]
-    async fn acp_dialect_signal_is_not_forwarded_or_persisted() {
-        use aionui_ai_agent::protocol::events::{AcpDialectSignalData, AcpDialectSignalKind};
-
+    async fn token_pressure_context_usage_is_forwarded_but_not_persisted() {
         let repo = Arc::new(RecordingRepo::new());
         let bus = Arc::new(aionui_realtime::BroadcastEventBus::new(64));
         let mut ws_rx = bus.subscribe();
@@ -1538,24 +1539,25 @@ mod tests {
         );
         let rx = tx.subscribe();
 
-        tx.send(AgentStreamEvent::AcpDialectSignal(AcpDialectSignalData {
-            kind: AcpDialectSignalKind::TokenPressure,
-        }))
+        tx.send(AgentStreamEvent::ContextUsage(serde_json::json!({
+            "kind": "token_pressure"
+        })))
         .unwrap();
-        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+            .unwrap();
 
         relay.consume(rx).await;
 
-        let mut saw_dialect_frame = false;
+        let mut saw_context_usage = false;
         while let Ok(evt) = ws_rx.try_recv() {
-            if evt.name == "message.stream" && evt.data["type"] == "acp_dialect_signal" {
-                saw_dialect_frame = true;
+            if evt.name == "message.stream" && evt.data["type"] == "context_usage" {
+                saw_context_usage = true;
             }
         }
-        assert!(!saw_dialect_frame, "AcpDialectSignal must never be forwarded to the WS");
+        assert!(saw_context_usage, "token pressure must use the ContextUsage frame");
         assert!(
             repo.take_inserts().is_empty(),
-            "AcpDialectSignal must not be persisted as a message"
+            "ContextUsage must not be persisted as a chat message"
         );
     }
 
@@ -1595,7 +1597,8 @@ mod tests {
         .unwrap();
         tx.send(AgentStreamEvent::Text(TextEventData { content: "Beta".into() }))
             .unwrap();
-        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+            .unwrap();
 
         relay.consume(rx).await;
 
@@ -1648,7 +1651,8 @@ mod tests {
             content: "workflow done".into(),
         }))
         .unwrap();
-        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+            .unwrap();
 
         relay.consume(rx).await;
 
@@ -1699,7 +1703,7 @@ mod tests {
 
         let rx = tx.subscribe();
 
-        tx.send(AgentStreamEvent::Error(ErrorEventData::legacy(
+        tx.send(AgentStreamEvent::RunError(ErrorEventData::legacy(
             "Something went wrong",
             None,
         )))
@@ -1747,7 +1751,7 @@ mod tests {
                     bus,
                 );
 
-                tx.send(AgentStreamEvent::Error(ErrorEventData::legacy(
+                tx.send(AgentStreamEvent::RunError(ErrorEventData::legacy(
                     "Something went wrong",
                     None,
                 )))
@@ -1785,7 +1789,7 @@ mod tests {
         .with_turn_completion(false)
         .with_defer_clean_terminal_errors(true);
 
-        tx.send(AgentStreamEvent::Error(ErrorEventData {
+        tx.send(AgentStreamEvent::RunError(ErrorEventData {
             message: "temporary provider failure".into(),
             code: Some(AgentErrorCode::UnknownUpstreamError),
             ownership: None,
@@ -1840,7 +1844,7 @@ mod tests {
             content: "partial".into(),
         }))
         .unwrap();
-        tx.send(AgentStreamEvent::Error(ErrorEventData {
+        tx.send(AgentStreamEvent::RunError(ErrorEventData {
             message: "temporary provider failure".into(),
             code: Some(AgentErrorCode::UnknownUpstreamError),
             ownership: None,
@@ -1859,7 +1863,7 @@ mod tests {
         assert!(!outcome.attempt.safe_to_auto_replay());
         let mut saw_error = false;
         while let Ok(event) = ws_rx.try_recv() {
-            saw_error |= event.data["type"] == "error";
+            saw_error |= event.data["type"] == "run_error";
         }
         assert!(saw_error, "unsafe errors are still broadcast");
     }
@@ -1895,7 +1899,7 @@ mod tests {
             supersedes_key: None,
         }))
         .unwrap();
-        tx.send(AgentStreamEvent::Error(ErrorEventData {
+        tx.send(AgentStreamEvent::RunError(ErrorEventData {
             message: "codex rejected the turn request: thread not found: 0199-dead".into(),
             code: Some(AgentErrorCode::UserAgentSessionNotFound),
             ownership: None,
@@ -1949,7 +1953,7 @@ mod tests {
             description: None,
         }))
         .unwrap();
-        tx.send(AgentStreamEvent::Error(ErrorEventData {
+        tx.send(AgentStreamEvent::RunError(ErrorEventData {
             message: "temporary provider failure".into(),
             code: Some(AgentErrorCode::UnknownUpstreamError),
             ownership: None,
@@ -1995,7 +1999,8 @@ mod tests {
             },
         ))
         .unwrap();
-        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+            .unwrap();
 
         let outcome = relay.consume(rx).await;
         assert!(outcome.system_responses.is_empty());
@@ -2069,7 +2074,7 @@ mod tests {
 
         let error_event = ws_events
             .iter()
-            .find(|evt| evt.name == "message.stream" && evt.data["type"] == "error")
+            .find(|evt| evt.name == "message.stream" && evt.data["type"] == "run_error")
             .expect("send error should be forwarded as message.stream error");
         assert_eq!(error_event.data["data"]["code"], "USER_LLM_PROVIDER_AUTH_FAILED");
         assert_eq!(error_event.data["data"]["ownership"], "user_llm_provider");
@@ -2094,7 +2099,7 @@ mod tests {
         let rx = tx.subscribe();
         let send_error =
             AgentSendError::from_agent_error(AgentError::bad_gateway("provider returned 401 invalid api key"));
-        tx.send(AgentStreamEvent::Error(ErrorEventData::legacy(
+        tx.send(AgentStreamEvent::RunError(ErrorEventData::legacy(
             "stream already emitted",
             None,
         )))
@@ -2141,7 +2146,7 @@ mod tests {
             .unwrap();
         let delayed_stream_error = tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            let _ = tx.send(AgentStreamEvent::Error(ErrorEventData::legacy(
+            let _ = tx.send(AgentStreamEvent::RunError(ErrorEventData::legacy(
                 "stream already emitted",
                 None,
             )));
@@ -2209,7 +2214,8 @@ mod tests {
             output: None,
         }))
         .unwrap();
-        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+            .unwrap();
 
         relay.consume(rx).await;
 
@@ -2282,7 +2288,8 @@ mod tests {
             status: Some("thinking".into()),
         }))
         .unwrap();
-        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+            .unwrap();
 
         relay.consume(rx).await;
 
@@ -2332,7 +2339,8 @@ mod tests {
             content: "Final answer".into(),
         }))
         .unwrap();
-        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+            .unwrap();
 
         relay.consume(rx).await;
 
@@ -2418,7 +2426,8 @@ mod tests {
         let mut ws_rx = bus.subscribe();
         let rx = tx.subscribe();
 
-        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+            .unwrap();
 
         let outcome = relay.consume(rx).await;
         assert!(outcome.system_responses.is_empty());
@@ -2489,7 +2498,8 @@ mod tests {
             description: None,
         }))
         .unwrap();
-        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+            .unwrap();
 
         relay.consume(rx).await;
 
@@ -2540,7 +2550,7 @@ mod tests {
 
         let rx = tx.subscribe();
 
-        tx.send(AgentStreamEvent::AcpToolCall(AcpToolCallEventData {
+        tx.send(AgentStreamEvent::ToolResult(AcpToolCallEventData {
             session_id: "sess-1".into(),
             update: AcpToolCallUpdateData {
                 session_update: AcpToolCallSessionUpdateKind::ToolCall,
@@ -2557,7 +2567,7 @@ mod tests {
         }))
         .unwrap();
 
-        tx.send(AgentStreamEvent::AcpToolCall(AcpToolCallEventData {
+        tx.send(AgentStreamEvent::ToolResult(AcpToolCallEventData {
             session_id: "sess-1".into(),
             update: AcpToolCallUpdateData {
                 session_update: AcpToolCallSessionUpdateKind::ToolCallUpdate,
@@ -2574,7 +2584,8 @@ mod tests {
         }))
         .unwrap();
 
-        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+            .unwrap();
 
         relay.consume(rx).await;
 
@@ -2636,7 +2647,7 @@ mod tests {
 
         let rx = tx.subscribe();
 
-        tx.send(AgentStreamEvent::AcpToolCall(AcpToolCallEventData {
+        tx.send(AgentStreamEvent::ToolResult(AcpToolCallEventData {
             session_id: "sess-1".into(),
             update: AcpToolCallUpdateData {
                 session_update: AcpToolCallSessionUpdateKind::ToolCall,
@@ -2653,7 +2664,7 @@ mod tests {
         }))
         .unwrap();
 
-        tx.send(AgentStreamEvent::AcpToolCall(AcpToolCallEventData {
+        tx.send(AgentStreamEvent::ToolResult(AcpToolCallEventData {
             session_id: "sess-1".into(),
             update: AcpToolCallUpdateData {
                 session_update: AcpToolCallSessionUpdateKind::ToolCallUpdate,
@@ -2680,7 +2691,8 @@ mod tests {
         }))
         .unwrap();
 
-        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+            .unwrap();
 
         relay.consume(rx).await;
 
@@ -2735,7 +2747,8 @@ mod tests {
             },
         ]))
         .unwrap();
-        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+            .unwrap();
 
         relay.consume(rx).await;
 
@@ -2820,7 +2833,8 @@ mod tests {
             content: "partial answer".into(),
         }))
         .unwrap();
-        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+            .unwrap();
 
         let outcome = relay.consume(rx).await;
 
@@ -2847,7 +2861,7 @@ mod tests {
             .finalize(
                 "partial answer",
                 &[],
-                &AgentStreamEvent::Finish(FinishEventData::default()),
+                &AgentStreamEvent::RunComplete(FinishEventData::default()),
                 RelayTerminal::Finish,
             )
             .await;

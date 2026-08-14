@@ -71,11 +71,9 @@ impl ProtocolEmitter for BackendProtocolSink {
                     confs.push(confirmation.clone());
                 }
 
-                let _ = self
-                    .event_tx
-                    .send(AgentStreamEvent::AcpPermission(AcpPermissionEventData::Confirmation(
-                        confirmation.clone(),
-                    )));
+                let _ = self.event_tx.send(AgentStreamEvent::ApprovalComplete(
+                    AcpPermissionEventData::Confirmation(confirmation.clone()),
+                ));
 
                 debug!(
                     call_id,
@@ -140,7 +138,7 @@ mod tests {
 
         let received = rx.try_recv().unwrap();
         match received {
-            AgentStreamEvent::AcpPermission(AcpPermissionEventData::Confirmation(conf)) => {
+            AgentStreamEvent::ApprovalComplete(AcpPermissionEventData::Confirmation(conf)) => {
                 assert_eq!(conf.call_id, "c1");
                 assert!(conf.options.len() >= 3);
             }

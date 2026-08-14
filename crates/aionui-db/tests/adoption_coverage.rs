@@ -40,7 +40,10 @@ const GLOBAL_TABLES: &[(&str, &str)] = &[
     ("organizations", "machine-level IAM organization directory"),
     // RSM Auth Center directory sync state, keyed by app_code — machine-level
     // sync bookkeeping, not per-user data.
-    ("auth_center_directory_sync_states", "machine-level directory sync state"),
+    (
+        "auth_center_directory_sync_states",
+        "machine-level directory sync state",
+    ),
 ];
 
 /// Tables whose `user_id` column is NOT a Core-user ownership column — it

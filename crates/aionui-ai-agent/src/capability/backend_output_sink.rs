@@ -135,13 +135,13 @@ impl OutputSink for BackendOutputSink {
     ) {
         let _ = self
             .event_tx
-            .send(AgentStreamEvent::Finish(FinishEventData { session_id: None }));
+            .send(AgentStreamEvent::RunComplete(FinishEventData { session_id: None }));
     }
 
     fn emit_error(&self, msg: &str) {
         let _ = self
             .event_tx
-            .send(AgentStreamEvent::Error(ErrorEventData::legacy(msg, None)));
+            .send(AgentStreamEvent::RunError(ErrorEventData::legacy(msg, None)));
     }
 
     fn emit_info(&self, msg: &str) {
@@ -286,7 +286,7 @@ mod tests {
         sink.emit_stream_end("msg-1", 3, 1000, 500, 100, 200);
         let event = rx.try_recv().unwrap();
         match event {
-            AgentStreamEvent::Finish(_) => {}
+            AgentStreamEvent::RunComplete(_) => {}
             other => panic!("Expected Finish, got {:?}", other),
         }
     }
@@ -297,7 +297,7 @@ mod tests {
         sink.emit_error("something went wrong");
         let event = rx.try_recv().unwrap();
         match event {
-            AgentStreamEvent::Error(data) => assert_eq!(data.message, "something went wrong"),
+            AgentStreamEvent::RunError(data) => assert_eq!(data.message, "something went wrong"),
             other => panic!("Expected Error, got {:?}", other),
         }
     }

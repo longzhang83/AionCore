@@ -66,15 +66,15 @@ fn catalog_partial_from_event(event: &AgentStreamEvent) -> Option<AgentHandshake
         v
     }
     match event {
-        AgentStreamEvent::AcpModeInfo(v) => Some(AgentHandshake {
+        AgentStreamEvent::ModeInfo(v) => Some(AgentHandshake {
             available_modes: Some(snake(v.clone())),
             ..Default::default()
         }),
-        AgentStreamEvent::AcpModelInfo(v) => Some(AgentHandshake {
+        AgentStreamEvent::ModelInfo(v) => Some(AgentHandshake {
             available_models: Some(snake(v.clone())),
             ..Default::default()
         }),
-        AgentStreamEvent::AcpConfigOption(v) => Some(AgentHandshake {
+        AgentStreamEvent::ConfigOption(v) => Some(AgentHandshake {
             config_options: Some(snake(v.clone())),
             ..Default::default()
         }),
@@ -170,16 +170,16 @@ mod tests {
     /// nothing for them.
     #[test]
     fn catalog_partial_covers_session_fields() {
-        let modes = catalog_partial_from_event(&AgentStreamEvent::AcpModeInfo(json!({"x": 1})))
-            .expect("mode event must project");
+        let modes =
+            catalog_partial_from_event(&AgentStreamEvent::ModeInfo(json!({"x": 1}))).expect("mode event must project");
         assert_eq!(modes.available_modes, Some(json!({"x": 1})));
         assert!(modes.available_models.is_none());
 
         let models =
-            catalog_partial_from_event(&AgentStreamEvent::AcpModelInfo(json!([1]))).expect("model event must project");
+            catalog_partial_from_event(&AgentStreamEvent::ModelInfo(json!([1]))).expect("model event must project");
         assert_eq!(models.available_models, Some(json!([1])));
 
-        let cfg = catalog_partial_from_event(&AgentStreamEvent::AcpConfigOption(json!([
+        let cfg = catalog_partial_from_event(&AgentStreamEvent::ConfigOption(json!([
             {"id":"mode"}
         ])))
         .expect("config event must project");
@@ -213,7 +213,7 @@ mod tests {
 
         // Rebuild the events `emit_snapshot_events` would broadcast for the same
         // state, then run them through the forwarder's own projection.
-        let mode_event = catalog_partial_from_event(&AgentStreamEvent::AcpModeInfo(
+        let mode_event = catalog_partial_from_event(&AgentStreamEvent::ModeInfo(
             crate::manager::acp::agent::sdk_to_snake_value(&modes).expect("modes serialize"),
         ))
         .expect("mode event projects");
@@ -227,7 +227,7 @@ mod tests {
                 label: "GPT-5".to_owned(),
             }],
         };
-        let model_event = catalog_partial_from_event(&AgentStreamEvent::AcpModelInfo(
+        let model_event = catalog_partial_from_event(&AgentStreamEvent::ModelInfo(
             crate::manager::acp::agent::sdk_to_snake_value(&model_payload).expect("models serialize"),
         ))
         .expect("model event projects");

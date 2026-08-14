@@ -2222,7 +2222,7 @@ mod tests {
 
         let _ = agent
             .event_tx
-            .send(AgentStreamEvent::Finish(FinishEventData::default()));
+            .send(AgentStreamEvent::RunComplete(FinishEventData::default()));
         for _ in 0..20 {
             tokio::task::yield_now().await;
         }
@@ -2745,7 +2745,9 @@ mod tests {
                     content: content.clone(),
                 }));
             }
-            let _ = self.event_tx.send(AgentStreamEvent::Finish(FinishEventData::default()));
+            let _ = self
+                .event_tx
+                .send(AgentStreamEvent::RunComplete(FinishEventData::default()));
             Ok(())
         }
 

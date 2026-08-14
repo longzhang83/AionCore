@@ -63,7 +63,7 @@ async fn relay_sends_thinking_then_final_message() {
         }))
         .unwrap();
     event_tx
-        .send(AgentStreamEvent::Finish(FinishEventData { session_id: None }))
+        .send(AgentStreamEvent::RunComplete(FinishEventData { session_id: None }))
         .unwrap();
 
     relay.run(rx).await;
@@ -94,7 +94,7 @@ async fn relay_handles_error_event() {
     let rx = event_tx.subscribe();
 
     event_tx
-        .send(AgentStreamEvent::Error(ErrorEventData::legacy("timeout", None)))
+        .send(AgentStreamEvent::RunError(ErrorEventData::legacy("timeout", None)))
         .unwrap();
 
     relay.run(rx).await;
@@ -142,7 +142,7 @@ async fn weixin_flushes_pending_text_before_tool_call() {
         }))
         .unwrap();
     event_tx
-        .send(AgentStreamEvent::Finish(FinishEventData { session_id: None }))
+        .send(AgentStreamEvent::RunComplete(FinishEventData { session_id: None }))
         .unwrap();
 
     relay.run(rx).await;
@@ -195,7 +195,7 @@ async fn telegram_does_not_flush_text_before_tool_call() {
         }))
         .unwrap();
     event_tx
-        .send(AgentStreamEvent::Finish(FinishEventData { session_id: None }))
+        .send(AgentStreamEvent::RunComplete(FinishEventData { session_id: None }))
         .unwrap();
 
     relay.run(rx).await;
@@ -233,7 +233,7 @@ async fn weixin_skips_flush_when_buffer_is_empty() {
         }))
         .unwrap();
     event_tx
-        .send(AgentStreamEvent::Finish(FinishEventData { session_id: None }))
+        .send(AgentStreamEvent::RunComplete(FinishEventData { session_id: None }))
         .unwrap();
 
     relay.run(rx).await;

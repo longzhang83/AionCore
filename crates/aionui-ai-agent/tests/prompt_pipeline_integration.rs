@@ -218,7 +218,7 @@ async fn prelude_io_failure_emits_prompt_hook_warning() {
     // When inject_first_message_prefix exposes an error path, the hook
     // should call emit_hook_warning("session_new_prelude", ...) and
     // return the user content unchanged. Subscribers on runtime.subscribe()
-    // must then receive an AgentStreamEvent::AcpPromptHookWarning whose
+    // must then receive an AgentStreamEvent::PromptHookWarning whose
     // payload deserializes to AcpPromptHookWarningPayload with
     // hook == "session_new_prelude".
     let _ = fixture_params("claude", Some("ctx"), true).await;

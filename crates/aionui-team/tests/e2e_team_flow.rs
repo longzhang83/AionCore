@@ -349,7 +349,7 @@ impl EventBroadcaster for RecordingBroadcaster {
 }
 
 /// RecordingAgent: captures every send_message call. The broadcast channel
-/// lets tests simulate Finish events by sending AgentStreamEvent::Finish.
+/// lets tests simulate Finish events by sending AgentStreamEvent::RunComplete.
 struct RecordingAgent {
     conversation_id: String,
     sent: Arc<Mutex<Vec<SendMessageData>>>,
@@ -392,7 +392,7 @@ impl RecordingAgent {
     fn fire_finish(&self) {
         let _ = self
             .event_tx
-            .send(AgentStreamEvent::Finish(FinishEventData { session_id: None }));
+            .send(AgentStreamEvent::RunComplete(FinishEventData { session_id: None }));
     }
 }
 

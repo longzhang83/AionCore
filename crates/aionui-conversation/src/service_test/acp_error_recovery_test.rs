@@ -8,7 +8,7 @@ async fn send_message_evicts_acp_task_after_terminal_error() {
 
     let scripted_agent = Arc::new(ScriptedAgent::new(
         &conv.id,
-        vec![vec![AgentStreamEvent::Error(ErrorEventData::legacy(
+        vec![vec![AgentStreamEvent::RunError(ErrorEventData::legacy(
             "mock terminal error",
             Some(AgentErrorCode::UnknownUpstreamError),
         ))]],
@@ -68,7 +68,7 @@ async fn send_message_clears_persisted_acp_model_after_model_not_found() {
 
     let scripted_agent = Arc::new(ScriptedAgent::new(
         &conv.id,
-        vec![vec![AgentStreamEvent::Error(ErrorEventData::legacy(
+        vec![vec![AgentStreamEvent::RunError(ErrorEventData::legacy(
             "The configured model was not found by the provider.",
             Some(AgentErrorCode::UserLlmProviderModelNotFound),
         ))]],
@@ -128,7 +128,7 @@ async fn send_message_does_not_clear_persisted_acp_model_for_other_terminal_erro
 
     let scripted_agent = Arc::new(ScriptedAgent::new(
         &conv.id,
-        vec![vec![AgentStreamEvent::Error(ErrorEventData::legacy(
+        vec![vec![AgentStreamEvent::RunError(ErrorEventData::legacy(
             "Unknown upstream error.",
             Some(AgentErrorCode::UnknownUpstreamError),
         ))]],

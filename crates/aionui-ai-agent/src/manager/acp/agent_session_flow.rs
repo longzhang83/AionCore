@@ -374,7 +374,7 @@ impl AcpAgentManager {
                 session.apply_context_usage(update);
                 self.commit_session_changes(&mut session).await;
             }
-            self.runtime.emit(AgentStreamEvent::AcpContextUsage(frame));
+            self.runtime.emit(AgentStreamEvent::ContextUsage(frame));
         }
 
         // Drain the turn-scoped receiver once: detect both the empty-turn
@@ -444,13 +444,13 @@ impl AcpAgentManager {
             // ModelInfoPayload is our own struct but go through the
             // normaliser for consistency with sibling events.
             if let Some(v) = sdk_to_snake_value(&payload) {
-                self.runtime.emit(AgentStreamEvent::AcpModelInfo(v));
+                self.runtime.emit(AgentStreamEvent::ModelInfo(v));
             }
         }
         if let Some(modes) = session.modes()
             && let Some(v) = sdk_to_snake_value(&modes)
         {
-            self.runtime.emit(AgentStreamEvent::AcpModeInfo(v));
+            self.runtime.emit(AgentStreamEvent::ModeInfo(v));
         }
         if let Some(config_options) = session.config_options()
             && let Some(v) = sdk_to_snake_value(&serde_json::json!({
@@ -461,7 +461,7 @@ impl AcpAgentManager {
             // `ConfigOptionUpdate` shape used by the streaming path —
             // handshake blobs and downstream consumers see a uniform
             // structure regardless of origin.
-            self.runtime.emit(AgentStreamEvent::AcpConfigOption(v));
+            self.runtime.emit(AgentStreamEvent::ConfigOption(v));
         }
         if let Some(cmds) = session.available_commands() {
             self.runtime
@@ -559,7 +559,7 @@ struct TurnObservations {
 }
 
 /// Drain the turn-scoped receiver once, recording both the empty-turn condition
-/// and whether any `AcpDialectSignal` arrived. Preserves `is_empty_turn`'s
+/// and whether a Runtime-neutral token-pressure `ContextUsage` event arrived. Preserves `is_empty_turn`'s
 /// original semantics for `empty` (visible output → not empty; `Lagged` → not
 /// empty) while additionally surfacing the dialect signal so the empty-turn
 /// judgment can prefer accurate token-limit attribution over the auth hint.
@@ -568,7 +568,9 @@ fn drain_turn_observations(rx: &mut tokio::sync::broadcast::Receiver<AgentStream
     let mut dialect_signal = false;
     loop {
         match rx.try_recv() {
-            Ok(AgentStreamEvent::AcpDialectSignal(_)) => dialect_signal = true,
+            Ok(AgentStreamEvent::ContextUsage(value)) if value["kind"] == "token_pressure" => {
+                dialect_signal = true;
+            }
             Ok(event) => {
                 if event_is_user_visible_output(&event) {
                     empty = false;
@@ -591,11 +593,12 @@ fn event_is_user_visible_output(event: &AgentStreamEvent) -> bool {
         AgentStreamEvent::Text(_)
             | AgentStreamEvent::Thinking(_)
             | AgentStreamEvent::ToolCall(_)
-            | AgentStreamEvent::AcpToolCall(_)
+            | AgentStreamEvent::ToolResult(_)
             | AgentStreamEvent::ToolGroup(_)
             | AgentStreamEvent::Plan(_)
             | AgentStreamEvent::Permission(_)
-            | AgentStreamEvent::AcpPermission(_)
+            | AgentStreamEvent::ApprovalRequest(_)
+            | AgentStreamEvent::ApprovalComplete(_)
     )
 }
 
@@ -1203,7 +1206,7 @@ mod tests {
             session_id: Some("s1".into()),
         }))
         .unwrap();
-        tx.send(AgentStreamEvent::Finish(FinishEventData {
+        tx.send(AgentStreamEvent::RunComplete(FinishEventData {
             session_id: Some("s1".into()),
         }))
         .unwrap();
@@ -1220,7 +1223,8 @@ mod tests {
         tx.send(AgentStreamEvent::Start(StartEventData::default())).unwrap();
         tx.send(AgentStreamEvent::Text(TextEventData { content: "hi".into() }))
             .unwrap();
-        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+            .unwrap();
 
         assert!(!super::is_empty_turn(&mut rx));
     }
@@ -1395,19 +1399,19 @@ mod tests {
 
     #[tokio::test]
     async fn drain_turn_observations_flags_dialect_signal_on_empty_turn() {
-        use crate::protocol::events::{AcpDialectSignalData, AcpDialectSignalKind};
         let (tx, _) = broadcast::channel::<AgentStreamEvent>(8);
         let mut rx = tx.subscribe();
         tx.send(AgentStreamEvent::Start(StartEventData::default())).unwrap();
-        tx.send(AgentStreamEvent::AcpDialectSignal(AcpDialectSignalData {
-            kind: AcpDialectSignalKind::SessionEnd,
-        }))
+        tx.send(AgentStreamEvent::ContextUsage(serde_json::json!({
+            "kind": "token_pressure"
+        })))
         .unwrap();
-        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+            .unwrap();
 
         let obs = super::drain_turn_observations(&mut rx);
-        assert!(obs.empty, "a dialect signal is not user-visible output");
-        assert!(obs.dialect_signal, "session_end signal must be flagged");
+        assert!(obs.empty, "token pressure is not user-visible output");
+        assert!(obs.dialect_signal, "token pressure must be flagged");
     }
 
     #[tokio::test]
@@ -1415,7 +1419,8 @@ mod tests {
         let (tx, _) = broadcast::channel::<AgentStreamEvent>(8);
         let mut rx = tx.subscribe();
         tx.send(AgentStreamEvent::Start(StartEventData::default())).unwrap();
-        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+            .unwrap();
 
         let obs = super::drain_turn_observations(&mut rx);
         assert!(obs.empty);
@@ -1435,13 +1440,12 @@ mod tests {
     }
 
     #[test]
-    fn dialect_signal_is_not_user_visible_output() {
-        use crate::protocol::events::{AcpDialectSignalData, AcpDialectSignalKind};
-        assert!(!super::event_is_user_visible_output(
-            &AgentStreamEvent::AcpDialectSignal(AcpDialectSignalData {
-                kind: AcpDialectSignalKind::TokenPressure,
+    fn token_pressure_is_not_user_visible_output() {
+        assert!(!super::event_is_user_visible_output(&AgentStreamEvent::ContextUsage(
+            serde_json::json!({
+                "kind": "token_pressure"
             })
-        ));
+        )));
     }
 
     #[test]

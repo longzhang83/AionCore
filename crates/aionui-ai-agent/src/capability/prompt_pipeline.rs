@@ -1,7 +1,7 @@
 //! Thin hook-chain dispatcher for outgoing ACP prompts.
 //!
 //! Hooks never return Result — failures are surfaced via
-//! `AgentStreamEvent::AcpPromptHookWarning` through `ctx.runtime` so the
+//! `AgentStreamEvent::PromptHookWarning` through `ctx.runtime` so the
 //! frontend can render a non-blocking toast. Registration order equals
 //! execution order; each hook's output feeds the next hook's input.
 

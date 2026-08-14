@@ -15,11 +15,11 @@ fn rate_limit_regex() -> &'static Regex {
     })
 }
 
-/// Returns true when an [`AgentStreamEvent::Error`] message looks like an
+/// Returns true when an [`AgentStreamEvent::RunError`] message looks like an
 /// upstream rate-limit / quota response.
 pub fn is_rate_limited(event: &AgentStreamEvent) -> bool {
     match event {
-        AgentStreamEvent::Error(data) => rate_limit_regex().is_match(&data.message),
+        AgentStreamEvent::RunError(data) => rate_limit_regex().is_match(&data.message),
         _ => false,
     }
 }
@@ -30,7 +30,7 @@ mod tests {
     use aionui_ai_agent::protocol::events::{ErrorEventData, StartEventData};
 
     fn error_event(message: &str) -> AgentStreamEvent {
-        AgentStreamEvent::Error(ErrorEventData::legacy(message, None))
+        AgentStreamEvent::RunError(ErrorEventData::legacy(message, None))
     }
 
     #[test]
@@ -72,7 +72,7 @@ pub enum CrashReason {
 /// Returns Some(reason) if the event indicates a crash, None otherwise.
 pub fn detect_crash(event: &AgentStreamEvent) -> Option<CrashReason> {
     match event {
-        AgentStreamEvent::Error(data) => {
+        AgentStreamEvent::RunError(data) => {
             let msg = &data.message;
             if msg.contains("process exited unexpectedly") || msg.contains("process exited") {
                 Some(CrashReason::ProcessExited)
@@ -93,19 +93,19 @@ mod crash_tests {
 
     #[test]
     fn detect_crash_process_exited() {
-        let event = AgentStreamEvent::Error(ErrorEventData::legacy("process exited unexpectedly", None));
+        let event = AgentStreamEvent::RunError(ErrorEventData::legacy("process exited unexpectedly", None));
         assert_eq!(detect_crash(&event), Some(CrashReason::ProcessExited));
     }
 
     #[test]
     fn detect_crash_session_not_found() {
-        let event = AgentStreamEvent::Error(ErrorEventData::legacy("Session not found", None));
+        let event = AgentStreamEvent::RunError(ErrorEventData::legacy("Session not found", None));
         assert_eq!(detect_crash(&event), Some(CrashReason::SessionNotFound));
     }
 
     #[test]
     fn detect_crash_other_error() {
-        let event = AgentStreamEvent::Error(ErrorEventData::legacy("something else broke", None));
+        let event = AgentStreamEvent::RunError(ErrorEventData::legacy("something else broke", None));
         assert_eq!(
             detect_crash(&event),
             Some(CrashReason::Unknown("something else broke".into()))

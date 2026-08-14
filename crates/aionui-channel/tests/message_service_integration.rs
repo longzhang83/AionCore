@@ -108,7 +108,9 @@ impl IAgentTask for ScriptedAgent {
     }
 
     async fn send_message(&self, _data: SendMessageData) -> Result<(), AgentSendError> {
-        let _ = self.event_tx.send(AgentStreamEvent::Finish(FinishEventData::default()));
+        let _ = self
+            .event_tx
+            .send(AgentStreamEvent::RunComplete(FinishEventData::default()));
         Ok(())
     }
 

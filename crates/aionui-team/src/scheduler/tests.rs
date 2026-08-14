@@ -1017,7 +1017,8 @@ async fn arm_wake_timeout_finish_exits_without_firing() {
     mgr.arm_wake_timeout("worker-1", rx, counting_handler(counter.clone()));
     let_watchdog_settle().await;
 
-    tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+    tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+        .unwrap();
     wait_for_map_empty(&mgr, "worker-1", 128).await;
 
     assert_eq!(

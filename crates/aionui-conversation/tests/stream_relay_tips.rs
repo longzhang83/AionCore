@@ -66,7 +66,8 @@ async fn persist_info_tip_preserves_code_and_params() {
         supersedes_key: None,
     }))
     .unwrap();
-    tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+    tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+        .unwrap();
 
     relay.consume(rx).await;
 
@@ -126,7 +127,8 @@ async fn persist_warning_tip_preserves_supersedes_key() {
         }))
         .unwrap();
     }
-    tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+    tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+        .unwrap();
 
     relay.consume(rx).await;
 
@@ -185,7 +187,8 @@ async fn retry_totals_keep_counting_across_a_replay() {
             }))
             .unwrap();
         }
-        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+            .unwrap();
         relay.consume(rx).await;
     }
 
@@ -265,7 +268,8 @@ async fn a_plain_tip_gets_no_totals() {
         supersedes_key: None,
     }))
     .unwrap();
-    tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+    tx.send(AgentStreamEvent::RunComplete(FinishEventData::default()))
+        .unwrap();
 
     relay.consume(rx).await;
 

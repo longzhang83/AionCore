@@ -639,9 +639,7 @@ async fn run_sdk_background(
                             // `broadcast::send` is synchronous and non-blocking; a
                             // send error only means no active subscriber for this
                             // turn (nothing to correlate against), which is fine.
-                            let _ = dialect_event_tx.send(AgentStreamEvent::AcpDialectSignal(
-                                stream_event::AcpDialectSignalData { kind },
-                            ));
+                            let _ = dialect_event_tx.send(stream_event::runtime_event_from_dialect_signal(kind));
                             None
                         }
                     },
@@ -877,7 +875,7 @@ async fn emit_terminal_snapshot(
     };
     let command = registry.command_line(terminal_id).await.unwrap_or_default();
     let done = snap.exit.is_some();
-    let _ = event_tx.send(AgentStreamEvent::AcpTerminalOutput(serde_json::json!({
+    let _ = event_tx.send(AgentStreamEvent::TerminalOutput(serde_json::json!({
         "terminal_id": terminal_id,
         "command": command,
         "output": snap.output,

@@ -177,7 +177,7 @@ impl SessionRuntime {
         if already {
             return;
         }
-        let _ = self.tx.send(AgentStreamEvent::Finish(FinishEventData {
+        let _ = self.tx.send(AgentStreamEvent::RunComplete(FinishEventData {
             session_id: self.session_id(),
         }));
     }
@@ -2667,7 +2667,7 @@ fn spawn_event_pump(
                 if !config_options.is_empty()
                     && let Ok(v) = serde_json::to_value(serde_json::json!({ "config_options": config_options }))
                 {
-                    let _ = runtime.tx.send(AgentStreamEvent::AcpConfigOption(v));
+                    let _ = runtime.tx.send(AgentStreamEvent::ConfigOption(v));
                 }
                 // Slash-command catalog. claude advertises its command list in the
                 // async `initialize` response — the same late-catalog timing that
@@ -2977,7 +2977,7 @@ fn spawn_event_pump(
                     // bubble. `Detached` (process crash) is excluded — that surfaces as a
                     // crash error elsewhere, not a "the model had nothing to say" tip, and
                     // ACP likewise only tips on a completed prompt. An error result is
-                    // excluded because it already terminates as `AgentStreamEvent::Error`.
+                    // excluded because it already terminates as `AgentStreamEvent::RunError`.
                     if let SessionEvent::TurnResult {
                         is_error: false,
                         outcome,
@@ -3048,7 +3048,7 @@ fn spawn_event_pump(
                 // the empty-turn Tip below either (the relay already broke; per-turn
                 // output accumulators were reset at settlement, so the tip would be
                 // spurious).
-                if synthetic_finish_emitted && matches!(ev, AgentStreamEvent::Finish(_)) {
+                if synthetic_finish_emitted && matches!(ev, AgentStreamEvent::RunComplete(_)) {
                     tracing::info!(
                         conv_id = %conversation_id,
                         "session-pump: swallowing trailing real Finish after synthetic cancel-drain Finish"
@@ -3060,7 +3060,7 @@ fn spawn_event_pump(
                 // Finish (stream_relay.rs), so a Tips sent afterwards would never be
                 // forwarded. `pending_empty_turn_tip` is only ever set on a clean
                 // TurnResult, whose translation is exactly one Finish, so this fires once.
-                if matches!(ev, AgentStreamEvent::Finish(_))
+                if matches!(ev, AgentStreamEvent::RunComplete(_))
                     && let Some(tip) = pending_empty_turn_tip.take()
                 {
                     let _ = runtime.tx.send(AgentStreamEvent::Tips(tip));
@@ -3077,7 +3077,7 @@ fn spawn_event_pump(
                 // single bubble with no separator. SegmentBreak is consumed inside
                 // the relay (never forwarded to the WS), so it changes only bubble
                 // boundaries, not the wire contract.
-                if suppress_intermediate_finish && matches!(ev, AgentStreamEvent::Finish(_)) {
+                if suppress_intermediate_finish && matches!(ev, AgentStreamEvent::RunComplete(_)) {
                     // The turn now owes this Finish; the workflow drain (or a later
                     // real terminal) must settle it — see `finish_suppressed_pending`.
                     finish_suppressed_pending = true;
@@ -3096,7 +3096,7 @@ fn spawn_event_pump(
                 // an end-of-turn barrier: the pump persists every UsageDelta to
                 // `context_usage` and broadcasts it directly (see the UsageDelta
                 // handling above), both of which outlive the turn.
-                if let AgentStreamEvent::Finish(data) = &mut ev
+                if let AgentStreamEvent::RunComplete(data) = &mut ev
                     && data.session_id.is_none()
                 {
                     data.session_id = runtime.session_id();
@@ -3829,11 +3829,12 @@ fn event_is_user_visible_output(event: &AgentStreamEvent) -> bool {
         AgentStreamEvent::Text(_)
             | AgentStreamEvent::Thinking(_)
             | AgentStreamEvent::ToolCall(_)
-            | AgentStreamEvent::AcpToolCall(_)
+            | AgentStreamEvent::ToolResult(_)
             | AgentStreamEvent::ToolGroup(_)
             | AgentStreamEvent::Plan(_)
             | AgentStreamEvent::Permission(_)
-            | AgentStreamEvent::AcpPermission(_)
+            | AgentStreamEvent::ApprovalRequest(_)
+            | AgentStreamEvent::ApprovalComplete(_)
     )
     // Deliberately absent: WorkflowProgress. It is an out-of-band refresh of a
     // card the turn already produced, not the turn saying something — counting it
@@ -3959,7 +3960,7 @@ fn translate_event(event: SessionEvent, conversation_id: &str, terminal_result_s
             // suppression, so we suppress at the source).
             let is_cancel = matches!(outcome, aionui_session::TurnOutcome::Cancelled { .. });
             if is_error && !is_cancel && !result_text.trim().is_empty() {
-                // A genuine turn error terminates as AgentStreamEvent::Error carrying the
+                // A genuine turn error terminates as AgentStreamEvent::RunError carrying the
                 // FULL origin error model (code / ownership / retryable /
                 // feedback_recommended), NOT a plain Tips. The relay reads
                 // Error{code,retryable} to drive auto-replay + error classification
@@ -3971,9 +3972,9 @@ fn translate_event(event: SessionEvent, conversation_id: &str, terminal_result_s
                 // Error IS the terminal (relay breaks on it), so we do NOT also emit Finish.
                 let stream_error =
                     AgentSendError::from_agent_error(AgentError::bad_gateway(result_text)).into_stream_error();
-                return vec![AgentStreamEvent::Error(stream_error)];
+                return vec![AgentStreamEvent::RunError(stream_error)];
             }
-            vec![AgentStreamEvent::Finish(FinishEventData::default())]
+            vec![AgentStreamEvent::RunComplete(FinishEventData::default())]
         }
         SessionEvent::Detached { exit, redacted_summary } => {
             // A process exit is only an ERROR when it is a genuine mid-turn crash.
@@ -4008,10 +4009,10 @@ fn translate_event(event: SessionEvent, conversation_id: &str, terminal_result_s
                     if let Some(summary) = redacted_summary.filter(|s| !s.trim().is_empty()) {
                         stream_error.message = format!("{}: {summary}", stream_error.message);
                     }
-                    vec![AgentStreamEvent::Error(stream_error)]
+                    vec![AgentStreamEvent::RunError(stream_error)]
                 }
                 aionui_session::Outcome::CleanNoResult | aionui_session::Outcome::FollowResult => {
-                    vec![AgentStreamEvent::Finish(FinishEventData::default())]
+                    vec![AgentStreamEvent::RunComplete(FinishEventData::default())]
                 }
             }
         }
@@ -4050,7 +4051,7 @@ fn translate_event(event: SessionEvent, conversation_id: &str, terminal_result_s
             } else {
                 options
             };
-            vec![AgentStreamEvent::AcpPermission(
+            vec![AgentStreamEvent::ApprovalRequest(
                 crate::protocol::events::AcpPermissionEventData::Request(
                     crate::protocol::events::AcpPermissionRequestData {
                         session_id: conversation_id.to_owned(),
@@ -4136,7 +4137,7 @@ fn translate_event(event: SessionEvent, conversation_id: &str, terminal_result_s
             // Keep the raw counters too (harmless extra keys) for any richer consumer.
             usage["input_tokens"] = serde_json::json!(input_tokens);
             usage["output_tokens"] = serde_json::json!(output_tokens);
-            vec![AgentStreamEvent::AcpContextUsage(usage)]
+            vec![AgentStreamEvent::ContextUsage(usage)]
         }
         // A confirmed mode/model switch is NOT forwarded as a stream frame. The origin
         // frontend's mode/model pickers (AgentModeSelector / AcpModelSelector) track the
@@ -4221,7 +4222,7 @@ fn translate_event(event: SessionEvent, conversation_id: &str, terminal_result_s
         // StreamRelay's name_source-guarded consumer handles both paths
         // identically (translate.rs emits the same frame for real ACP agents).
         SessionEvent::SessionTitle { title } => {
-            vec![AgentStreamEvent::AcpSessionInfo(serde_json::json!({ "title": title }))]
+            vec![AgentStreamEvent::SessionInfo(serde_json::json!({ "title": title }))]
         }
         // Events with no origin-side counterpart (or purely internal) are dropped.
         // Cancel folds into the Finish emitted by the resulting terminal; Heartbeat,
@@ -4810,7 +4811,7 @@ mod translate_tests {
             false,
         );
         match events.into_iter().next() {
-            Some(AgentStreamEvent::AcpContextUsage(v)) => v,
+            Some(AgentStreamEvent::ContextUsage(v)) => v,
             other => panic!("expected AcpContextUsage, got {other:?}"),
         }
     }
@@ -4849,7 +4850,7 @@ mod translate_tests {
             false,
         );
         let v = match with.into_iter().next() {
-            Some(AgentStreamEvent::AcpContextUsage(v)) => v,
+            Some(AgentStreamEvent::ContextUsage(v)) => v,
             other => panic!("expected AcpContextUsage, got {other:?}"),
         };
         assert_eq!(v["_meta"]["input_tokens"], 1_100);
@@ -4936,6 +4937,41 @@ mod translate_tests {
     }
 
     #[test]
+    fn session_events_project_to_runtime_neutral_stream_variants() {
+        let tool_events = translate_event(
+            SessionEvent::ToolCall {
+                tool_use_id: "tool-42".into(),
+                name: "Bash".into(),
+                input: serde_json::json!({"command": "pwd"}),
+                parent_tool_use_id: None,
+                subagent: aionui_session::SubagentKind::Inline,
+            },
+            "conv-1",
+            false,
+        );
+        assert!(
+            matches!(&tool_events[..], [AgentStreamEvent::ToolCall(_)]),
+            "ToolCall must use the Runtime-neutral stream variant"
+        );
+
+        let approval_events = translate_event(
+            SessionEvent::Permission {
+                request_id: "req-42".into(),
+                kind: PermissionKind::Tool,
+                metadata: None,
+                tool_name: Some("Bash".into()),
+                input: Some(serde_json::json!({"command": "pwd"})),
+            },
+            "conv-1",
+            false,
+        );
+        assert!(
+            matches!(&approval_events[..], [AgentStreamEvent::ApprovalRequest(_)]),
+            "Permission must use the Runtime-neutral approval variant"
+        );
+    }
+
+    #[test]
     fn permission_surfaces_as_acp_permission_keyed_on_request_id() {
         let events = translate_event(
             SessionEvent::Permission {
@@ -4949,7 +4985,7 @@ mod translate_tests {
             false,
         );
         assert_eq!(events.len(), 1, "permission must project to exactly one card");
-        let crate::protocol::events::AgentStreamEvent::AcpPermission(
+        let crate::protocol::events::AgentStreamEvent::ApprovalRequest(
             crate::protocol::events::AcpPermissionEventData::Request(req),
         ) = &events[0]
         else {
@@ -4993,7 +5029,7 @@ mod translate_tests {
             "conv-1",
             false,
         );
-        let crate::protocol::events::AgentStreamEvent::AcpPermission(
+        let crate::protocol::events::AgentStreamEvent::ApprovalRequest(
             crate::protocol::events::AcpPermissionEventData::Request(req),
         ) = &events[0]
         else {
@@ -5027,7 +5063,7 @@ mod translate_tests {
             "conv-1",
             false,
         );
-        let crate::protocol::events::AgentStreamEvent::AcpPermission(
+        let crate::protocol::events::AgentStreamEvent::ApprovalRequest(
             crate::protocol::events::AcpPermissionEventData::Request(req),
         ) = &events[0]
         else {
@@ -5052,7 +5088,7 @@ mod translate_tests {
             false,
         );
         assert_eq!(events.len(), 1);
-        let crate::protocol::events::AgentStreamEvent::AcpContextUsage(v) = &events[0] else {
+        let crate::protocol::events::AgentStreamEvent::ContextUsage(v) = &events[0] else {
             panic!("expected AcpContextUsage, got {:?}", events[0]);
         };
         // Frontend ContextUsageIndicator reads `used` (not `total_tokens`) — the
@@ -5178,16 +5214,16 @@ mod translate_tests {
             false,
         );
         assert!(
-            !events.iter().any(|e| matches!(e, AgentStreamEvent::Error(_))),
+            !events.iter().any(|e| matches!(e, AgentStreamEvent::RunError(_))),
             "a cancelled turn must not emit an Error, got {events:?}"
         );
         assert!(
-            events.iter().any(|e| matches!(e, AgentStreamEvent::Finish(_))),
+            events.iter().any(|e| matches!(e, AgentStreamEvent::RunComplete(_))),
             "a cancelled turn still finishes"
         );
     }
 
-    // A genuine (non-cancel) error terminates as AgentStreamEvent::Error carrying the
+    // A genuine (non-cancel) error terminates as AgentStreamEvent::RunError carrying the
     // full origin error model (code/ownership/retryable), NOT a plain Tips and NOT a
     // Finish (Error is itself the relay terminal). This is what lets the relay
     // classify + auto-replay and the frontend render ownership/feedback.
@@ -5212,7 +5248,7 @@ mod translate_tests {
             1,
             "a real error is a single Error terminal, got {events:?}"
         );
-        let AgentStreamEvent::Error(data) = &events[0] else {
+        let AgentStreamEvent::RunError(data) = &events[0] else {
             panic!("expected Error terminal, got {:?}", events[0]);
         };
         // Classified through the origin error path → carries a code + ownership +
@@ -5222,11 +5258,11 @@ mod translate_tests {
         assert!(data.code.is_some(), "error must carry a classified code");
         assert!(data.retryable.is_some(), "error must carry a retryable flag");
         // Must NOT also emit a Finish (Error is the terminal).
-        assert!(!events.iter().any(|e| matches!(e, AgentStreamEvent::Finish(_))));
+        assert!(!events.iter().any(|e| matches!(e, AgentStreamEvent::RunComplete(_))));
     }
 
     // A mid-turn process crash (Detached with a signal / non-zero / unknown exit and
-    // NO prior terminal result) surfaces as a rich AgentStreamEvent::Error carrying the
+    // NO prior terminal result) surfaces as a rich AgentStreamEvent::RunError carrying the
     // legacy `UserAgentDisconnected` classification (code + retryable + ownership), with
     // the allowlisted redacted_summary appended to the message. This restores the ACP
     // path's `AcpError::Disconnected` terminal the direct-CLI bridge had collapsed to a
@@ -5247,7 +5283,7 @@ mod translate_tests {
             false,
         );
         assert_eq!(events.len(), 1, "a crash is a single Error terminal, got {events:?}");
-        let AgentStreamEvent::Error(data) = &events[0] else {
+        let AgentStreamEvent::RunError(data) = &events[0] else {
             panic!("expected Error terminal, got {:?}", events[0]);
         };
         // Classified through the SAME path legacy used → carries code + retryable, and
@@ -5260,7 +5296,7 @@ mod translate_tests {
             data.message
         );
         assert!(
-            !events.iter().any(|e| matches!(e, AgentStreamEvent::Finish(_))),
+            !events.iter().any(|e| matches!(e, AgentStreamEvent::RunComplete(_))),
             "Error is the terminal — must NOT also emit Finish"
         );
     }
@@ -5285,11 +5321,11 @@ mod translate_tests {
             true,
         );
         assert!(
-            !events.iter().any(|e| matches!(e, AgentStreamEvent::Error(_))),
+            !events.iter().any(|e| matches!(e, AgentStreamEvent::RunError(_))),
             "a post-terminal Detached must not emit an Error, got {events:?}"
         );
         assert!(
-            events.iter().any(|e| matches!(e, AgentStreamEvent::Finish(_))),
+            events.iter().any(|e| matches!(e, AgentStreamEvent::RunComplete(_))),
             "an absorbed teardown still finishes, got {events:?}"
         );
     }
@@ -5311,11 +5347,11 @@ mod translate_tests {
             false,
         );
         assert!(
-            !events.iter().any(|e| matches!(e, AgentStreamEvent::Error(_))),
+            !events.iter().any(|e| matches!(e, AgentStreamEvent::RunError(_))),
             "a clean exit-0 must not emit an Error, got {events:?}"
         );
         assert!(
-            events.iter().any(|e| matches!(e, AgentStreamEvent::Finish(_))),
+            events.iter().any(|e| matches!(e, AgentStreamEvent::RunComplete(_))),
             "a clean exit-0 finishes, got {events:?}"
         );
     }
@@ -5406,7 +5442,7 @@ mod translate_tests {
             "Read",
             ToolCallStatus::Running
         )));
-        assert!(!event_is_user_visible_output(&AgentStreamEvent::Finish(
+        assert!(!event_is_user_visible_output(&AgentStreamEvent::RunComplete(
             FinishEventData::default()
         )));
         assert!(!event_is_user_visible_output(&AgentStreamEvent::SegmentBreak));
@@ -5570,11 +5606,8 @@ mod persist_tests {
         assert_eq!(stored["size"], 1_000_000);
     }
 
-    /// The live frame must match what the renderer actually switches on.
-    /// `useAcpMessage.ts` handles `case 'acp_context_usage'`, reads `data.used`
-    /// into the indicator and `data.size` into `context_limit` (only when > 0), so
-    /// the tag and both key names are a hard contract — a rename silently blanks
-    /// the indicator rather than failing anything.
+    /// The live frame uses the Runtime-neutral tag while preserving the usage
+    /// payload keys consumed by the renderer.
     #[test]
     fn broadcast_frame_matches_the_renderer_contract() {
         #[derive(Default)]
@@ -5591,8 +5624,8 @@ mod persist_tests {
         let msg = sent.first().expect("one frame broadcast");
         assert_eq!(msg.name, "message.stream");
         assert_eq!(
-            msg.data["type"], "acp_context_usage",
-            "renderer switches on this exact tag"
+            msg.data["type"], "context_usage",
+            "usage frames must use the Runtime-neutral tag"
         );
         assert_eq!(msg.data["data"]["used"], 26_420);
         assert_eq!(msg.data["data"]["size"], 1_000_000, "drives context_limit");
@@ -6552,9 +6585,9 @@ mod pump_tests {
         match ev {
             AgentStreamEvent::Start(_) => "start",
             AgentStreamEvent::Text(_) => "content",
-            AgentStreamEvent::Finish(_) => "finish",
-            AgentStreamEvent::AcpConfigOption(_) => "config",
-            AgentStreamEvent::AcpContextUsage(_) => "usage",
+            AgentStreamEvent::RunComplete(_) => "finish",
+            AgentStreamEvent::ConfigOption(_) => "config",
+            AgentStreamEvent::ContextUsage(_) => "usage",
             AgentStreamEvent::SegmentBreak => "SegmentBreak",
             _ => "other",
         }
@@ -6581,7 +6614,7 @@ mod pump_tests {
         let payload = frames
             .iter()
             .find_map(|f| match f {
-                AgentStreamEvent::AcpSessionInfo(v) => Some(v.clone()),
+                AgentStreamEvent::SessionInfo(v) => Some(v.clone()),
                 _ => None,
             })
             .expect("SessionTitle must surface as an AcpSessionInfo frame");
@@ -6623,8 +6656,11 @@ mod pump_tests {
         );
         assert_eq!(seq, vec!["content", "finish"], "got {seq:?}");
         // The Finish carries the CLI session id learned from BackendBound.
-        let finish = frames.iter().rev().find(|f| matches!(f, AgentStreamEvent::Finish(_)));
-        let AgentStreamEvent::Finish(data) = finish.expect("finish present") else {
+        let finish = frames
+            .iter()
+            .rev()
+            .find(|f| matches!(f, AgentStreamEvent::RunComplete(_)));
+        let AgentStreamEvent::RunComplete(data) = finish.expect("finish present") else {
             unreachable!()
         };
         assert_eq!(
@@ -6666,7 +6702,9 @@ mod pump_tests {
             matches!(f, AgentStreamEvent::ToolCall(d)
                 if d.call_id == "call-1" && d.status == ToolCallStatus::Canceled && d.name == "Bash")
         });
-        let finish_pos = frames.iter().position(|f| matches!(f, AgentStreamEvent::Finish(_)));
+        let finish_pos = frames
+            .iter()
+            .position(|f| matches!(f, AgentStreamEvent::RunComplete(_)));
         let canceled_pos = canceled_pos.expect("open tool call must be closed with a Canceled frame");
         let finish_pos = finish_pos.expect("cancelled turn still finishes");
         assert!(
@@ -6748,7 +6786,7 @@ mod pump_tests {
         let config = frames
             .iter()
             .find_map(|f| match f {
-                AgentStreamEvent::AcpConfigOption(v) => Some(v),
+                AgentStreamEvent::ConfigOption(v) => Some(v),
                 _ => None,
             })
             .expect("CatalogUpdated must project to an AcpConfigOption frame");
@@ -7084,7 +7122,7 @@ mod pump_tests {
         // message) reach the frontend before it.
         let finish_count = frames
             .iter()
-            .filter(|f| matches!(f, AgentStreamEvent::Finish(_)))
+            .filter(|f| matches!(f, AgentStreamEvent::RunComplete(_)))
             .count();
         assert_eq!(
             finish_count, 1,
@@ -7097,7 +7135,7 @@ mod pump_tests {
         );
         // The single Finish is LAST — the completion text precedes it.
         assert!(
-            matches!(frames.last(), Some(AgentStreamEvent::Finish(_))),
+            matches!(frames.last(), Some(AgentStreamEvent::RunComplete(_))),
             "the terminal Finish comes after the workflow completion message, got {seq:?}"
         );
         // The suppressed launch result emits exactly one SegmentBreak so the relay
@@ -7385,7 +7423,7 @@ mod pump_tests {
         );
         let finish = frames
             .iter()
-            .position(|f| matches!(f, AgentStreamEvent::Finish(_)))
+            .position(|f| matches!(f, AgentStreamEvent::RunComplete(_)))
             .expect("the clean turn's Finish");
         let settle = frames
             .iter()
@@ -7469,7 +7507,7 @@ mod pump_tests {
         let seq: Vec<&str> = frames.iter().map(frame_name).collect();
         let finishes = frames
             .iter()
-            .filter(|f| matches!(f, AgentStreamEvent::Finish(_)))
+            .filter(|f| matches!(f, AgentStreamEvent::RunComplete(_)))
             .count();
         assert_eq!(finishes, 1, "one turn, one Finish, got {seq:?}");
         assert!(
@@ -7511,7 +7549,7 @@ mod pump_tests {
         let seq: Vec<&str> = frames.iter().map(frame_name).collect();
         let finishes = frames
             .iter()
-            .filter(|f| matches!(f, AgentStreamEvent::Finish(_)))
+            .filter(|f| matches!(f, AgentStreamEvent::RunComplete(_)))
             .count();
         assert_eq!(finishes, 2, "launch turn + report turn, got {seq:?}");
         assert!(
@@ -7674,7 +7712,7 @@ mod pump_tests {
             .expect("a progress frame");
         let finish = frames
             .iter()
-            .position(|f| matches!(f, AgentStreamEvent::Finish(_)))
+            .position(|f| matches!(f, AgentStreamEvent::RunComplete(_)))
             .expect("the owed Finish");
         assert!(
             last_progress < finish,
@@ -7834,7 +7872,7 @@ mod pump_tests {
         ];
         let frames = drain_script(script).await;
         assert!(
-            frames.iter().any(|f| matches!(f, AgentStreamEvent::Error(_))),
+            frames.iter().any(|f| matches!(f, AgentStreamEvent::RunError(_))),
             "an error result terminates the turn even while a workflow is in flight, got {:?}",
             frames.iter().map(frame_name).collect::<Vec<_>>()
         );
@@ -7910,7 +7948,7 @@ mod pump_tests {
         let seq: Vec<&str> = frames.iter().map(frame_name).collect();
         let finish_count = frames
             .iter()
-            .filter(|f| matches!(f, AgentStreamEvent::Finish(_)))
+            .filter(|f| matches!(f, AgentStreamEvent::RunComplete(_)))
             .count();
         assert_eq!(
             finish_count, 1,
@@ -7924,7 +7962,7 @@ mod pump_tests {
             .iter()
             .rfind(|f| !matches!(f, AgentStreamEvent::WorkflowProgress(_)));
         assert!(
-            matches!(last_turn_frame, Some(AgentStreamEvent::Finish(_))),
+            matches!(last_turn_frame, Some(AgentStreamEvent::RunComplete(_))),
             "the settled Finish is the turn's terminal frame, got {seq:?}"
         );
         // The Task tool call left open by the kill is closed as Canceled BEFORE the
@@ -7935,7 +7973,7 @@ mod pump_tests {
             .unwrap_or_else(|| panic!("open Task call must be closed as Canceled, got {seq:?}"));
         let finish_idx = frames
             .iter()
-            .position(|f| matches!(f, AgentStreamEvent::Finish(_)))
+            .position(|f| matches!(f, AgentStreamEvent::RunComplete(_)))
             .unwrap();
         assert!(
             cancel_idx < finish_idx,
@@ -7995,7 +8033,7 @@ mod pump_tests {
             frames
                 .iter()
                 .rfind(|f| !matches!(f, AgentStreamEvent::WorkflowProgress(_)))
-                .is_some_and(|f| matches!(f, AgentStreamEvent::Finish(_))),
+                .is_some_and(|f| matches!(f, AgentStreamEvent::RunComplete(_))),
             "the clean result's Finish must flow while a background bash is alive, got {seq:?}"
         );
         assert!(
@@ -8051,7 +8089,7 @@ mod pump_tests {
         let seq: Vec<&str> = frames.iter().map(frame_name).collect();
         let finish_count = frames
             .iter()
-            .filter(|f| matches!(f, AgentStreamEvent::Finish(_)))
+            .filter(|f| matches!(f, AgentStreamEvent::RunComplete(_)))
             .count();
         assert_eq!(finish_count, 1, "trailing real Finish is swallowed, got {seq:?}");
         assert!(
@@ -8164,7 +8202,7 @@ mod pump_tests {
         );
         let finish_count = frames
             .iter()
-            .filter(|f| matches!(f, AgentStreamEvent::Finish(_)))
+            .filter(|f| matches!(f, AgentStreamEvent::RunComplete(_)))
             .count();
         assert!(
             finish_count >= 2,
@@ -8922,7 +8960,7 @@ mod force_kill_tests {
         loop {
             match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
                 Ok(Ok(ev)) => match ev {
-                    AgentStreamEvent::Finish(_) | AgentStreamEvent::Error(_) => return Some(ev),
+                    AgentStreamEvent::RunComplete(_) | AgentStreamEvent::RunError(_) => return Some(ev),
                     _ => continue,
                 },
                 _ => return None,
@@ -8953,7 +8991,7 @@ mod force_kill_tests {
         // (a) clean Finish broadcast — NOT a crash Error.
         let terminal = next_terminal(&mut rx).await.expect("a terminal frame after kill");
         assert!(
-            matches!(terminal, AgentStreamEvent::Finish(_)),
+            matches!(terminal, AgentStreamEvent::RunComplete(_)),
             "kill must broadcast a clean Finish (not Error), got {terminal:?}"
         );
         // (b) runtime converged to Finished.
@@ -8984,7 +9022,7 @@ mod force_kill_tests {
         let inst = AgentInstance::Session(Arc::clone(&task));
         inst.kill_and_wait(Some(AgentKillReason::UserCancelTimeout)).await;
         let first = next_terminal(&mut rx).await.expect("first Finish");
-        assert!(matches!(first, AgentStreamEvent::Finish(_)));
+        assert!(matches!(first, AgentStreamEvent::RunComplete(_)));
         assert_eq!(IAgentTask::status(task.as_ref()), Some(ConversationStatus::Finished));
 
         // Second force-kill → emit_finish_once is a no-op in the Finished state.

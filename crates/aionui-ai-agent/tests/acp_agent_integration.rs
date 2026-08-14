@@ -178,21 +178,22 @@ fn event_type_name(event: &AgentStreamEvent) -> &'static str {
         AgentStreamEvent::Thinking(_) => "Thinking",
         AgentStreamEvent::Plan(_) => "Plan",
         AgentStreamEvent::Permission(_) => "Permission",
-        AgentStreamEvent::AcpPermission(_) => "AcpPermission",
+        AgentStreamEvent::ApprovalRequest(_) => "ApprovalRequest",
+        AgentStreamEvent::ApprovalComplete(_) => "ApprovalComplete",
         AgentStreamEvent::Ask(_) => "Ask",
-        AgentStreamEvent::AcpToolCall(_) => "AcpToolCall",
+        AgentStreamEvent::ToolResult(_) => "ToolResult",
         AgentStreamEvent::AvailableCommands(_) => "AvailableCommands",
         AgentStreamEvent::SkillSuggest(_) => "SkillSuggest",
         AgentStreamEvent::CronTrigger(_) => "CronTrigger",
-        AgentStreamEvent::AcpModelInfo(_) => "AcpModelInfo",
-        AgentStreamEvent::AcpModeInfo(_) => "AcpModeInfo",
-        AgentStreamEvent::AcpConfigOption(_) => "AcpConfigOption",
-        AgentStreamEvent::AcpSessionInfo(_) => "AcpSessionInfo",
-        AgentStreamEvent::AcpContextUsage(_) => "AcpContextUsage",
-        AgentStreamEvent::AcpTerminalOutput(_) => "AcpTerminalOutput",
-        AgentStreamEvent::AcpPromptHookWarning(_) => "AcpPromptHookWarning",
-        AgentStreamEvent::Finish(_) => "Finish",
-        AgentStreamEvent::Error(_) => "Error",
+        AgentStreamEvent::ModelInfo(_) => "ModelInfo",
+        AgentStreamEvent::ModeInfo(_) => "ModeInfo",
+        AgentStreamEvent::ConfigOption(_) => "ConfigOption",
+        AgentStreamEvent::SessionInfo(_) => "SessionInfo",
+        AgentStreamEvent::ContextUsage(_) => "ContextUsage",
+        AgentStreamEvent::TerminalOutput(_) => "TerminalOutput",
+        AgentStreamEvent::PromptHookWarning(_) => "PromptHookWarning",
+        AgentStreamEvent::RunComplete(_) => "RunComplete",
+        AgentStreamEvent::RunError(_) => "RunError",
         AgentStreamEvent::System(_) => "System",
         AgentStreamEvent::RequestTrace(_) => "RequestTrace",
         AgentStreamEvent::SlashCommandsUpdated(_) => "SlashCommandsUpdated",
@@ -200,7 +201,6 @@ fn event_type_name(event: &AgentStreamEvent) -> &'static str {
         AgentStreamEvent::SegmentBreak => "SegmentBreak",
         AgentStreamEvent::BackendTurnBound(_) => "BackendTurnBound",
         AgentStreamEvent::WorkflowProgress(_) => "WorkflowProgress",
-        AgentStreamEvent::AcpDialectSignal(_) => "AcpDialectSignal",
     }
 }
 
@@ -241,7 +241,7 @@ async fn acp_agent_receives_stream_events() {
     .await;
 
     // Wait for finish event, collecting all events along the way
-    let events = wait_for_event(&mut rx, |e| matches!(e, AgentStreamEvent::Finish(_))).await;
+    let events = wait_for_event(&mut rx, |e| matches!(e, AgentStreamEvent::RunComplete(_))).await;
 
     assert!(events.len() >= 2, "Expected at least 2 events, got {}", events.len());
 
@@ -288,7 +288,7 @@ async fn acp_agent_status_transitions() {
     assert_eq!(agent.status(), Some(ConversationStatus::Running));
 
     // Wait for Finish event
-    wait_for_event(&mut rx, |e| matches!(e, AgentStreamEvent::Finish(_))).await;
+    wait_for_event(&mut rx, |e| matches!(e, AgentStreamEvent::RunComplete(_))).await;
     assert_eq!(agent.status(), Some(ConversationStatus::Finished));
 }
 
@@ -302,7 +302,7 @@ async fn acp_agent_error_event_sets_finished() {
     )
     .await;
 
-    wait_for_event(&mut rx, |e| matches!(e, AgentStreamEvent::Error(_))).await;
+    wait_for_event(&mut rx, |e| matches!(e, AgentStreamEvent::RunError(_))).await;
     assert_eq!(agent.status(), Some(ConversationStatus::Finished));
 }
 
@@ -316,7 +316,7 @@ async fn acp_agent_model_info_captured() {
     )
     .await;
 
-    wait_for_event(&mut rx, |e| matches!(e, AgentStreamEvent::AcpModelInfo(_))).await;
+    wait_for_event(&mut rx, |e| matches!(e, AgentStreamEvent::ModelInfo(_))).await;
 
     // Route through the public `AgentInstance` API rather than reaching
     // into the private `AcpAgentManager::model()`: the ai-agent crate only
@@ -406,12 +406,12 @@ async fn acp_agent_multiple_event_types() {
     )
     .await;
 
-    let events = wait_for_event(&mut rx, |e| matches!(e, AgentStreamEvent::Finish(_))).await;
+    let events = wait_for_event(&mut rx, |e| matches!(e, AgentStreamEvent::RunComplete(_))).await;
 
     assert!(events.len() >= 4, "Expected 4+ events, got {}", events.len());
 
     assert!(matches!(&events[0], AgentStreamEvent::Start(d) if d.session_id == Some("sess-multi".into())));
     assert!(matches!(&events[1], AgentStreamEvent::Thinking(d) if d.content == "Analyzing..."));
     assert!(matches!(&events[2], AgentStreamEvent::Text(d) if d.content == "Result"));
-    assert!(matches!(&events[3], AgentStreamEvent::Finish(d) if d.session_id == Some("sess-multi".into())));
+    assert!(matches!(&events[3], AgentStreamEvent::RunComplete(d) if d.session_id == Some("sess-multi".into())));
 }
