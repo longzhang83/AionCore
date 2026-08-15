@@ -4,7 +4,7 @@ use aionui_common::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::acp::RuntimeConfigOptionDto;
+use crate::runtime_config::RuntimeConfigOptionDto;
 use crate::chat_file::ChatFileRef;
 
 /// Per-MCP snapshot status stored in `conversation.extra`.

@@ -1,8 +1,8 @@
 #![warn(clippy::disallowed_types)]
 
 //! All HTTP request/response DTOs shared across the API surface.
-mod acp;
-mod acp_prompt_hook;
+mod runtime_config;
+mod prompt_hook;
 mod agent_build_extra;
 mod agent_discovery;
 mod agent_error;
@@ -35,14 +35,14 @@ mod team_mcp;
 mod team_tools;
 mod websocket;
 
-pub use acp::{
+pub use runtime_config::{
     AgentModeResponse, ConfigOptionConfirmation, DetectCliRequest, DetectCliResponse, GetConfigOptionsResponse,
     GetModelInfoResponse, ModelInfoEntry, ModelInfoPayload, ProbeModelRequest, RuntimeConfigOptionDto,
     RuntimeConfigSelectOptionDto, RuntimeEnvResponse, SetConfigOptionRequest, SetConfigOptionResponse, SetModeRequest,
     SetModelRequest, SideQuestionRequest, SideQuestionResponse, TryConnectCustomAgentRequest,
     TryConnectCustomAgentResponse, WorkspaceBrowseQuery, WorkspaceEntry,
 };
-pub use acp_prompt_hook::PromptHookWarningPayload;
+pub use prompt_hook::PromptHookWarningPayload;
 pub use agent_build_extra::{
     AionrsBuildExtra, ForkSpec, RuntimeBuildConfig, RuntimeModelInfo, SessionMcpServer, SessionMcpTransport,
     SlashCommandCompletionBehavior, SlashCommandItem,
