@@ -13,9 +13,10 @@ use axum::extract::{Extension, Json, Path, State};
 use axum::routing::{get, patch, post, put};
 
 use aionui_api_types::{
-    AgentLogoEntry, AgentManagementRow, AgentMetadata, AgentOverridesResponse, ApiResponse, CustomAgentUpsertRequest,
-    DeleteCustomAgentResponse, ProviderHealthCheckRequest, ProviderHealthCheckResponse, SetAgentOverridesRequest,
-    SetEnabledRequest, TryConnectCustomAgentRequest, TryConnectCustomAgentResponse,
+    AgentLogoEntry, AgentManagementRow, AgentMetadata, AgentOverridesResponse, AgentWarmupRequest, AgentWarmupResponse,
+    ApiResponse, CustomAgentUpsertRequest, DeleteCustomAgentResponse, ProviderHealthCheckRequest,
+    ProviderHealthCheckResponse, SetAgentOverridesRequest, SetEnabledRequest, TryConnectCustomAgentRequest,
+    TryConnectCustomAgentResponse,
 };
 use aionui_auth::CurrentUser;
 use aionui_common::ApiError;
@@ -27,6 +28,7 @@ pub fn agent_routes(state: AgentRouterState) -> Router {
     Router::new()
         .route("/api/agents/logos", get(list_agent_logos))
         .route("/api/agents/management", get(list_management_agents))
+        .route("/api/agents/warmup", post(warmup_agents))
         .route("/api/agents/{id}/health-check", post(health_check_by_id))
         .route("/api/agents/provider-health-check", post(provider_health_check))
         .route("/api/agents/{id}/enabled", patch(set_agent_enabled))
@@ -61,6 +63,21 @@ async fn list_management_agents(
         state
             .service
             .list_management_agents(&user.id)
+            .await
+            .map_err(agent_error_to_api_error)?,
+    )))
+}
+
+async fn warmup_agents(
+    State(state): State<AgentRouterState>,
+    Extension(user): Extension<CurrentUser>,
+    body: Result<Json<AgentWarmupRequest>, JsonRejection>,
+) -> Result<Json<ApiResponse<AgentWarmupResponse>>, ApiError> {
+    let Json(req) = body.map_err(ApiError::from)?;
+    Ok(Json(ApiResponse::ok(
+        state
+            .service
+            .warmup_agents(&user.id, req)
             .await
             .map_err(agent_error_to_api_error)?,
     )))

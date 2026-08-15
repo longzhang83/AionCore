@@ -12,10 +12,15 @@
 //! ACP health-check responsibilities, plus support for the custom-agent
 //! CRUD endpoints (see `services::custom`).
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use aionui_api_types::{AgentLogoEntry, AgentManagementRow, ProviderHealthCheckRequest, ProviderHealthCheckResponse};
+use aionui_api_types::{
+    AgentLogoEntry, AgentManagementRow, AgentSource, AgentWarmupRequest, AgentWarmupResponse, AgentWarmupResult,
+    AgentWarmupStatus, ProviderHealthCheckRequest, ProviderHealthCheckResponse,
+};
+use aionui_common::AgentType;
 use aionui_db::IProviderRepository;
 use aionui_realtime::EventBroadcaster;
 
@@ -195,6 +200,218 @@ impl AgentService {
             },
             env_override,
         })
+    }
+
+    pub async fn warmup_agents(
+        &self,
+        user_id: &str,
+        req: AgentWarmupRequest,
+    ) -> Result<AgentWarmupResponse, AgentError> {
+        let mut results = Vec::with_capacity(req.backends.len());
+        let mut seen = HashSet::new();
+
+        for raw_backend in req.backends {
+            let backend = raw_backend.trim().to_lowercase();
+            if backend.is_empty() || !seen.insert(backend.clone()) {
+                continue;
+            }
+
+            results.push(self.warmup_backend(user_id, &backend).await);
+        }
+
+        Ok(AgentWarmupResponse { results })
+    }
+
+    async fn warmup_backend(&self, user_id: &str, backend: &str) -> AgentWarmupResult {
+        let Some(meta) = self.registry.find_builtin_by_backend(backend).await else {
+            return AgentWarmupResult {
+                backend: backend.to_owned(),
+                status: AgentWarmupStatus::Skipped,
+                agent_id: None,
+                error: Some("agent backend is not registered".into()),
+            };
+        };
+
+        if meta.agent_type != AgentType::Acp || meta.agent_source != AgentSource::Builtin {
+            return AgentWarmupResult {
+                backend: backend.to_owned(),
+                status: AgentWarmupStatus::Skipped,
+                agent_id: Some(meta.id),
+                error: Some("agent backend is not a builtin ACP agent".into()),
+            };
+        }
+
+        let Some(command) = meta.resolved_command.clone() else {
+            return AgentWarmupResult {
+                backend: backend.to_owned(),
+                status: AgentWarmupStatus::Skipped,
+                agent_id: Some(meta.id),
+                error: Some("agent CLI is not available".into()),
+            };
+        };
+
+        let mut env: HashMap<String, String> = meta
+            .env
+            .iter()
+            .map(|entry| (entry.name.clone(), entry.value.clone()))
+            .collect();
+        if meta.backend.as_deref() == Some("claude") {
+            env.extend(crate::cc_switch::read_claude_provider_env());
+        }
+
+        match crate::protocol::custom_agent_probe::runtime_initialize(command, &meta.args, &env).await {
+            Ok(handshake) => {
+                if handshake.agent_capabilities.is_some() || handshake.auth_methods.is_some() {
+                    self.registry
+                        .catalog_sender()
+                        .send_partial(user_id.to_owned(), meta.id.clone(), handshake);
+                }
+                AgentWarmupResult {
+                    backend: backend.to_owned(),
+                    status: AgentWarmupStatus::Ready,
+                    agent_id: Some(meta.id),
+                    error: None,
+                }
+            }
+            Err(error) => AgentWarmupResult {
+                backend: backend.to_owned(),
+                status: AgentWarmupStatus::Failed,
+                agent_id: Some(meta.id),
+                error: Some(error),
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use aionui_api_types::{AgentWarmupReason, AgentWarmupRequest, AgentWarmupStatus};
+    use aionui_db::{
+        IAgentMetadataRepository, IProviderRepository, SqliteAgentMetadataRepository, SqliteProviderRepository,
+        UpsertAgentMetadataParams,
+    };
+    use aionui_realtime::EventBroadcaster;
+
+    use super::*;
+
+    struct NoopBroadcaster;
+
+    impl EventBroadcaster for NoopBroadcaster {
+        fn broadcast(&self, _msg: aionui_api_types::WebSocketMessage<serde_json::Value>) {}
+    }
+
+    async fn setup_service() -> (Arc<AgentService>, Arc<dyn IAgentMetadataRepository>) {
+        let db = aionui_db::init_database_memory().await.unwrap();
+        let repo: Arc<dyn IAgentMetadataRepository> = Arc::new(SqliteAgentMetadataRepository::new(db.pool().clone()));
+        let provider_repo: Arc<dyn IProviderRepository> = Arc::new(SqliteProviderRepository::new(db.pool().clone()));
+        let registry = AgentRegistry::new(repo.clone());
+        registry.hydrate().await.unwrap();
+        (
+            AgentService::new(
+                registry,
+                Arc::new(NoopBroadcaster),
+                provider_repo,
+                [0; 32],
+                PathBuf::from(std::env::temp_dir()),
+            ),
+            repo,
+        )
+    }
+
+    fn missing_builtin_params<'a>(id: &'a str, backend: &'a str) -> UpsertAgentMetadataParams<'a> {
+        UpsertAgentMetadataParams {
+            id,
+            icon: None,
+            name: "Missing Warmup Agent",
+            name_i18n: None,
+            description: Some("missing warmup test row"),
+            description_i18n: None,
+            backend: Some(backend),
+            agent_type: "acp",
+            agent_source: "builtin",
+            agent_source_info: Some(r#"{"binary_name":"aionui-definitely-missing-warmup"}"#),
+            enabled: true,
+            command: Some("aionui-definitely-missing-warmup"),
+            args: Some("[]"),
+            env: Some("[]"),
+            native_skills_dirs: None,
+            behavior_policy: None,
+            yolo_id: None,
+            agent_capabilities: None,
+            auth_methods: None,
+            config_options: None,
+            available_modes: None,
+            available_models: None,
+            available_commands: None,
+            sort_order: 9900,
+        }
+    }
+
+    #[tokio::test]
+    async fn warmup_empty_backends_returns_empty_results() {
+        let (service, _repo) = setup_service().await;
+
+        let resp = service
+            .warmup_agents(
+                "system_default_user",
+                AgentWarmupRequest {
+                    backends: vec![],
+                    reason: AgentWarmupReason::Idle,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(resp.results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn warmup_unknown_backend_returns_structured_skip() {
+        let (service, _repo) = setup_service().await;
+
+        let resp = service
+            .warmup_agents(
+                "system_default_user",
+                AgentWarmupRequest {
+                    backends: vec!["not-real-agent".into()],
+                    reason: AgentWarmupReason::UserSelect,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.results.len(), 1);
+        assert_eq!(resp.results[0].backend, "not-real-agent");
+        assert_eq!(resp.results[0].status, AgentWarmupStatus::Skipped);
+        assert!(resp.results[0].error.as_deref().unwrap().contains("not registered"));
+    }
+
+    #[tokio::test]
+    async fn warmup_missing_builtin_cli_returns_structured_skip() {
+        let (service, repo) = setup_service().await;
+        repo.upsert(&missing_builtin_params("missing-warmup", "missing-warmup"))
+            .await
+            .unwrap();
+        service.registry.hydrate().await.unwrap();
+
+        let resp = service
+            .warmup_agents(
+                "system_default_user",
+                AgentWarmupRequest {
+                    backends: vec!["missing-warmup".into()],
+                    reason: AgentWarmupReason::BeforeSend,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.results.len(), 1);
+        assert_eq!(resp.results[0].status, AgentWarmupStatus::Skipped);
+        assert_eq!(resp.results[0].agent_id.as_deref(), Some("missing-warmup"));
+        assert!(resp.results[0].error.as_deref().unwrap().contains("not available"));
     }
 }
 

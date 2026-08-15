@@ -13,10 +13,11 @@
 //! Both paths produce identical outcomes / error text.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use aionui_api_types::{AgentHandshake, TryConnectCustomAgentResponse};
-use aionui_common::{CommandSpec, EnvVar};
+use aionui_common::{CommandSpec, EnvVar, normalize_keys_to_snake_case};
 use aionui_runtime::{NodeRuntimeProgressReporter, ResolvedCommand, ensure_runtime_command_with_reporter};
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, warn};
@@ -141,7 +142,6 @@ async fn spawn_probe_process(
         name: name.to_string_lossy().into_owned(),
         value: value.to_string_lossy().into_owned(),
     }));
-
     let spec = CommandSpec {
         command: resolved.program,
         args: final_args,
@@ -152,6 +152,85 @@ async fn spawn_probe_process(
     CliAgentProcess::spawn_for_sdk(spec)
         .await
         .map_err(|e| format!("spawn failed: {e}"))
+}
+
+/// Run only the Runtime protocol `initialize` handshake for an already
+/// resolved CLI. Warmup intentionally stops before `session/new`: its contract
+/// is to pre-initialize capabilities and authentication metadata, not to open a
+/// throwaway agent session.
+pub(crate) async fn runtime_initialize(
+    resolved: PathBuf,
+    args: &[String],
+    env: &HashMap<String, String>,
+) -> Result<AgentHandshake, String> {
+    let spec = CommandSpec {
+        command: resolved,
+        args: args.to_vec(),
+        env: env
+            .iter()
+            .map(|(name, value)| EnvVar {
+                name: name.clone(),
+                value: value.clone(),
+            })
+            .collect(),
+        cwd: Some(std::env::temp_dir().to_string_lossy().into_owned()),
+    };
+    let proc = CliAgentProcess::spawn_for_sdk(spec)
+        .await
+        .map_err(|e| format!("spawn failed: {e}"))?;
+
+    let outcome = run_initialize(&proc).await;
+    if let Err(error) = proc.kill(PROBE_KILL_GRACE).await {
+        warn!(pid = proc.pid(), error = %error, "warmup failed to kill process group");
+    }
+    outcome
+}
+
+async fn run_initialize(proc: &CliAgentProcess) -> Result<AgentHandshake, String> {
+    let (stdin, stdout) = proc
+        .take_stdio()
+        .await
+        .ok_or_else(|| "stdio not available after spawn_for_sdk".to_string())?;
+
+    let (event_tx, _event_rx) = broadcast::channel(16);
+    let (permission_tx, _permission_rx) = mpsc::channel(4);
+    let (notification_tx, _notification_rx) = mpsc::channel(4);
+    let connect = RuntimeProtocol::connect(
+        stdin,
+        stdout,
+        event_tx,
+        permission_tx,
+        notification_tx,
+        "agent-warmup",
+        None,
+    );
+
+    tokio::select! {
+        biased;
+        res = connect => {
+            let protocol = res.map_err(|e| format!("ACP initialize failed: {e}"))?;
+            let handshake = AgentHandshake {
+                agent_capabilities: protocol.agent_capabilities().and_then(sdk_to_snake_value),
+                auth_methods: protocol.auth_methods().and_then(sdk_to_snake_value),
+                ..Default::default()
+            };
+            drop(protocol);
+            Ok(handshake)
+        }
+        exit = proc.wait_for_exit() => {
+            let stderr = proc.take_stderr().await;
+            let stderr = stderr.trim();
+            let status = match exit {
+                Some(s) => format!("{s}"),
+                None => "unknown".to_string(),
+            };
+            if stderr.is_empty() {
+                Err(format!("CLI exited before ACP initialize completed (status={status})"))
+            } else {
+                Err(format!("CLI exited before ACP initialize completed (status={status}): {stderr}"))
+            }
+        }
+    }
 }
 
 /// Result of the Step 2 probe (`initialize` + `session/new`).
@@ -261,6 +340,12 @@ async fn run_handshake(proc: &CliAgentProcess) -> ProbeOutcome {
     // caller tears down the session along with the CLI.
     drop(protocol);
     outcome
+}
+
+fn sdk_to_snake_value<T: serde::Serialize>(value: T) -> Option<serde_json::Value> {
+    let mut v = serde_json::to_value(value).ok()?;
+    normalize_keys_to_snake_case(&mut v);
+    Some(v)
 }
 
 #[cfg(test)]
