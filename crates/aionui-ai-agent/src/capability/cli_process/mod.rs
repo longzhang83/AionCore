@@ -218,7 +218,7 @@ impl CliAgentProcess {
     /// Peek the last `max_lines` newline-delimited lines from the stderr ring
     /// buffer **without draining**.
     ///
-    /// Used by error-augmentation paths (`AcpAgentManager::send_message`) that
+    /// Used by error-augmentation paths (`RuntimeAgentManager::send_message`) that
     /// need to surface tracing-level error context the SDK didn't include in
     /// its JSON-RPC response. Returns an owned `String`; the buffer lock is
     /// held for the duration of this call (microseconds at the bounded sizes
@@ -226,7 +226,7 @@ impl CliAgentProcess {
     ///
     /// `max_lines == 0` returns an empty string. The returned string has no
     /// trailing newline — the caller may append one if they want.
-    #[allow(dead_code)] // Called by error-augmentation path in AcpAgentManager::send_message (Task 5)
+    #[allow(dead_code)] // Called by error-augmentation path in RuntimeAgentManager::send_message (Task 5)
     pub async fn peek_stderr_tail(&self, max_lines: usize) -> String {
         if max_lines == 0 {
             return String::new();

@@ -1,5 +1,5 @@
 use crate::error::AgentError;
-use crate::manager::acp::AcpAgentManager;
+use crate::manager::acp::RuntimeAgentManager;
 use crate::manager::acp::runtime_mode::agent_metadata_uses_meta_resume;
 use crate::protocol::events::{
     AgentStreamEvent, AvailableCommandsEventData, ErrorEventData, SessionAssignedEventData, StartEventData, TipType,
@@ -32,7 +32,7 @@ pub(super) enum PromptOutcome {
     WarningTip { session_id: String, tips: TipsEventData },
 }
 
-impl AcpAgentManager {
+impl RuntimeAgentManager {
     /// Establish a fresh ACP session (session/new) and apply desired
     /// mode/model/config via reconcile. Does NOT send a prompt and
     /// does NOT emit Start/Finish — callers wrap that around if needed.
@@ -798,14 +798,14 @@ mod tests {
     //! Contract tests for the post-`warmup_session` session invariant.
     //!
     //! The integration-test harness in `tests/acp_agent_integration.rs`
-    //! cannot drive `AcpAgentManager` through a JSON-RPC mock today (all
+    //! cannot drive `RuntimeAgentManager` through a JSON-RPC mock today (all
     //! existing ACP tests there are `#[ignore]` for the same reason), so we
     //! pin the observable contract at the aggregate-root layer instead:
     //! whatever `warmup_session` does internally, the session aggregate
     //! must end up with `is_opened() == true` and a populated
     //! `session_id()` — the same terminal state the real `open_session_new`
     //! / `open_session_resume` helpers leave behind.
-    use crate::manager::acp::{AcpSession, RuntimeSessionEvent};
+    use crate::manager::acp::{RuntimeAgentSession, RuntimeSessionEvent};
     use crate::protocol::runtime_error::RuntimeError;
     use crate::shared_kernel::SessionId as DomainSessionId;
     use crate::types::SendMessageData;
@@ -962,8 +962,8 @@ mod tests {
         assert_eq!(priced.cost.as_ref().map(|c| c.amount), Some(0.5));
     }
 
-    fn make_session() -> AcpSession {
-        AcpSession::new(None, None, Default::default())
+    fn make_session() -> RuntimeAgentSession {
+        RuntimeAgentSession::new(None, None, Default::default())
     }
 
     /// `open_session_resume` reads `session.agent_capabilities().load_session`

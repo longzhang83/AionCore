@@ -469,3 +469,28 @@ Session/MCP/API/App/Team：
 - `/Users/zhanglong/.cargo/bin/cargo fmt --all -- --check` 与 `git diff --check` 通过。
 
 未纳入本切片：`AcpAgentManager`、`AcpSession`、数据库 `acp_session`、ACP wire/SDK 术语，以及 Slice 3b 及之后的迁移。
+
+---
+
+## 12. V3 A1 clean-cut Slice 3b 进度（2026-08-15）
+
+状态：已实现并验证。
+
+- manager 核心类型改名：`AcpAgentManager -> RuntimeAgentManager`、
+  `AcpSession -> RuntimeAgentSession`；`RuntimeSessionEvent` 保持 Slice 3a 的名称。
+- `agent.rs` 的本地启动辅助类型改名：`AcpStartupConnection -> RuntimeStartupConnection`、
+  `AcpStartupConnectError -> RuntimeStartupConnectError`。所有 crate 内类型引用、测试与
+  `manager/acp/mod.rs` re-export 已同步。
+- `manager/acp/` 目录、数据库/持久化 `acp_session` 命名、DB 列名以及 ACP wire/SDK 的
+  事实性术语均保持不变；未改变 wire、DB、serde、控制流或日志。
+- 未新增日志：这是由编译与既有 manager 单元测试充分覆盖的纯类型重命名。
+
+验证：
+
+- `/Users/zhanglong/.cargo/bin/cargo check -p aionui-ai-agent` 通过（exit 0）。
+- `GOCACHE=/tmp/aionui-gocache /Users/zhanglong/.cargo/bin/cargo test -p aionui-ai-agent --lib manager::`
+  通过（340 passed / 0 failed，exit 0）。测试期间有既有 npm 缓存权限警告，未影响测试结果。
+- `git diff --check` 通过；全 crate `src/` 已无旧核心类型或启动辅助类型标识。
+
+未纳入本切片：`AcpSessionBuildContext`、`AcpSkillManager`、API DTO、数据库 `acp_session`、
+ACP wire/SDK 术语以及后续 clean-cut slices。

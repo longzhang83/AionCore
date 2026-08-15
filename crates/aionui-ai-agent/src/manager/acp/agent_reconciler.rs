@@ -1,4 +1,4 @@
-use crate::manager::acp::AcpAgentManager;
+use crate::manager::acp::RuntimeAgentManager;
 
 use crate::manager::acp::error_mapping::is_acp_session_not_found;
 use crate::manager::acp::runtime_mode::normalize_requested_mode_for_available_values;
@@ -13,7 +13,7 @@ const MAX_RECONCILE_ACTIONS: usize = 8;
 
 /// Actions the session driver must execute to align CLI state with user intent.
 ///
-/// Produced by `AcpSession::plan_reconcile` — a pure function that compares
+/// Produced by `RuntimeAgentSession::plan_reconcile` — a pure function that compares
 /// desired vs observed and returns a list of idempotent, order-independent ops.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReconcileAction {
@@ -22,8 +22,8 @@ pub enum ReconcileAction {
     SetConfigOption { key: ConfigKey, value: ConfigValue },
 }
 
-impl AcpAgentManager {
-    /// Execute reconcile actions produced by `AcpSession::plan_reconcile`.
+impl RuntimeAgentManager {
+    /// Execute reconcile actions produced by `RuntimeAgentSession::plan_reconcile`.
     ///
     /// Compares the aggregate's desired state against what the CLI has
     /// reported as current, then issues the minimal set of SDK calls
@@ -281,7 +281,7 @@ impl AcpAgentManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manager::acp::AcpSession;
+    use crate::manager::acp::RuntimeAgentSession;
     use std::collections::HashMap;
 
     #[test]
@@ -297,7 +297,7 @@ mod tests {
 
     #[test]
     fn reconcile_set_config_option_ack_must_not_be_modeled_as_observed_event() {
-        let mut session = AcpSession::new(
+        let mut session = RuntimeAgentSession::new(
             None,
             None,
             HashMap::from([(ConfigKey::new("reasoning_effort"), ConfigValue::new("high"))]),

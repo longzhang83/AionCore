@@ -1,6 +1,6 @@
 //! Built-in `PreSendHook`s for the ACP prompt pipeline.
 //!
-//! Each hook reads a one-shot flag on `AcpSession` (or a `pending_*`
+//! Each hook reads a one-shot flag on `RuntimeAgentSession` (or a `pending_*`
 //! field), consumes it, and prepends its block to the prompt. Failures
 //! are reported via `ctx.runtime.emit(AgentStreamEvent::PromptHookWarning(..))`
 //! and the prompt is returned in a gracefully-degraded form.
@@ -55,7 +55,7 @@ pub(crate) fn emit_hook_warning(ctx: &PromptCtx<'_>, hook: &'static str, message
 #[cfg(test)]
 mod tests {
     //! Full-path hook tests live in tests/prompt_pipeline_integration.rs
-    //! where a real AcpSession + RuntimeSessionParams + AgentRuntime triple
+    //! where a real RuntimeAgentSession + RuntimeSessionParams + AgentRuntime triple
     //! is already wired for assertion. This module keeps unit-level
     //! property checks around the helpers that don't need ctx.
     use super::*;

@@ -11,7 +11,7 @@ use super::{ConfigKey, ConfigValue, ModeId, ModelId};
 /// the CLI's session response after initialization.
 ///
 /// Shared between the factory (seeds `RuntimeSessionParams`), the aggregate
-/// root (`AcpSession::preload_persisted`), and the persistence consumer
+/// root (`RuntimeAgentSession::preload_persisted`), and the persistence consumer
 /// (`RuntimeSessionSyncService::load_snapshot_state`), so it lives in
 /// `shared_kernel` rather than any of those layers.
 #[derive(Debug, Clone, Default)]

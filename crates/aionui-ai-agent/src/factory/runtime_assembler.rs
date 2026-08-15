@@ -15,7 +15,7 @@ pub struct WorkspaceInfo {
 /// All pre-computed parameters needed to create and drive an ACP session.
 ///
 /// Assembled once by `assemble_acp_params` in the factory layer; the
-/// `AcpAgentManager` reads from this but never mutates it. By front-loading
+/// `RuntimeAgentManager` reads from this but never mutates it. By front-loading
 /// the decision logic (which MCP servers to inject, what preset context to
 /// compose) we keep the manager focused on execution + state.
 #[derive(Debug, Clone)]

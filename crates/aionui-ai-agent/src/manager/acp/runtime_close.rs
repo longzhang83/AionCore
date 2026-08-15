@@ -1,4 +1,4 @@
-//! Close-path helpers for `AcpAgentManager`.
+//! Close-path helpers for `RuntimeAgentManager`.
 //!
 //! Centralises the logic that turns a `send_message` failure into a
 //! [`CloseReason`] so the next user-facing toast can show something
@@ -15,7 +15,7 @@
 //! is logged via `tracing` only.
 
 use crate::error::AgentError;
-use crate::manager::acp::AcpAgentManager;
+use crate::manager::acp::RuntimeAgentManager;
 use crate::manager::acp::agent::{exit_status_parts, user_facing_message};
 use crate::protocol::runtime_error::CloseReason;
 
@@ -43,7 +43,7 @@ fn log_acp_process_exit(
     );
 }
 
-impl AcpAgentManager {
+impl RuntimeAgentManager {
     /// If `err` is the "SDK gave us default Internal error with no data" shape,
     /// peek the child's recent stderr and try to surface a more informative
     /// message. Returns `None` when augmentation does not apply or finds nothing.
@@ -133,7 +133,7 @@ impl AcpAgentManager {
 mod tests {
     //! Compositional tests for `build_close_reason_from_error`.
     //!
-    //! We can't construct a real `AcpAgentManager` in a unit test (it
+    //! We can't construct a real `RuntimeAgentManager` in a unit test (it
     //! needs the ACP SDK + catalog plumbing), but we CAN exercise the
     //! same branch logic against a real `CliAgentProcess`. Keep these
     //! helpers aligned with the production implementation: same
@@ -228,7 +228,7 @@ mod tests {
         }
     }
 
-    /// Mirror of `AcpAgentManager::build_close_reason_from_error` against a
+    /// Mirror of `RuntimeAgentManager::build_close_reason_from_error` against a
     /// bare `CliAgentProcess` — the same two branches, the same peek size,
     /// the same extractor module path. Keep this aligned with the production
     /// helper or these tests stop reflecting reality.
@@ -245,7 +245,7 @@ mod tests {
             };
         }
         // Branch 2 — process alive. Inline the augment_with_stderr logic so
-        // this helper does not need to construct a real `AcpAgentManager`.
+        // this helper does not need to construct a real `RuntimeAgentManager`.
         const SDK_DEFAULT_BAD_GATEWAY_PREFIX: &str = "Bad gateway: Agent internal error (code ";
         let display = err.to_string();
         let is_default_internal = display.starts_with(SDK_DEFAULT_BAD_GATEWAY_PREFIX) && display.ends_with(')');

@@ -399,7 +399,7 @@ mod tests {
 
     /// A minimal mock agent for testing task manager logic. Lives behind
     /// the `AgentInstance::Mock` trait-object variant so we don't have to
-    /// stand up a real `AcpAgentManager` just to exercise lifecycle
+    /// stand up a real `RuntimeAgentManager` just to exercise lifecycle
     /// dispatch.
     struct MockAgent {
         agent_type: AgentType,

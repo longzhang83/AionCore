@@ -3,7 +3,7 @@
 //!
 //! Phase 1 of the session-model port (see
 //! `protocols/design/session-model-port-to-origin-plan.md`). ONLY claude and codex
-//! run through this; every other backend keeps the existing `AcpAgentManager` path.
+//! run through this; every other backend keeps the existing `RuntimeAgentManager` path.
 //!
 //! Shape: hold the `SessionBackend`, spawn one translator task that drains its
 //! `events()` (`SessionEnvelope` → `SessionEvent`) and re-broadcasts as
@@ -1278,7 +1278,7 @@ impl IAgentTask for SessionAgentTask {
 }
 
 impl SessionAgentTask {
-    /// Awaitable force-kill (aligns with `AcpAgentManager::kill_and_wait`): the
+    /// Awaitable force-kill (aligns with `RuntimeAgentManager::kill_and_wait`): the
     /// awaitable teardown entry the `UserCancel` watchdog uses. For a
     /// `UserCancelTimeout` kill it emits the clean `Finish` synchronously FIRST
     /// (so the gate recovers before the returned future is even polled), then

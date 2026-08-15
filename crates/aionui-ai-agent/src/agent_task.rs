@@ -17,7 +17,7 @@ use aionui_common::{AgentKillReason, AgentType, ConversationStatus, TimestampMs}
 use tokio::sync::broadcast;
 
 use crate::error::AgentError;
-use crate::manager::acp::{AcpAgentManager, RequiredFullAutoApplication};
+use crate::manager::acp::{RequiredFullAutoApplication, RuntimeAgentManager};
 use crate::manager::aionrs::AionrsAgentManager;
 use crate::protocol::events::AgentStreamEvent;
 use crate::protocol::runtime_send_error::RuntimeSendError;
@@ -176,7 +176,7 @@ pub trait IMockAgent: IAgentTask {
 /// type, which is the compile-time pressure we want.
 #[derive(Clone)]
 pub enum AgentInstance {
-    Acp(Arc<AcpAgentManager>),
+    Acp(Arc<RuntimeAgentManager>),
     Aionrs(Arc<AionrsAgentManager>),
     /// clean-slate direct-CLI session model (claude / codex / antigravity).
     /// Wraps an `aionui_session::SessionBackend` via [`SessionAgentTask`],

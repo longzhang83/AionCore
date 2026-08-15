@@ -18,7 +18,7 @@ fn snapshot_option<'a>(snapshot: &'a ConfigSnapshot, option_id: &str) -> &'a aio
 
 #[test]
 fn config_snapshot_supplements_missing_mode_from_non_empty_runtime_catalog() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.apply_advertised_modes(SessionModeState::new(
         "full-access",
         vec![
@@ -57,7 +57,7 @@ fn config_snapshot_supplements_missing_mode_from_non_empty_runtime_catalog() {
 
 #[test]
 fn config_snapshot_supplements_missing_mode_from_preloaded_catalog_using_desired_current() {
-    let mut session = AcpSession::new(Some(ModeId::new("full-access")), None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(Some(ModeId::new("full-access")), None, HashMap::new());
     session.preload_advertised_catalogs(
         Some(SessionModeState::new(
             "auto",
@@ -92,7 +92,7 @@ fn config_snapshot_supplements_missing_mode_from_preloaded_catalog_using_desired
 
 #[test]
 fn config_snapshot_keeps_preloaded_mode_catalog_when_resume_load_advertises_empty_modes() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.preload_persisted(&PersistedSessionState {
         current_mode_id: Some(ModeId::new("full-access")),
         ..Default::default()
@@ -132,7 +132,7 @@ fn config_snapshot_keeps_preloaded_mode_catalog_when_resume_load_advertises_empt
 
 #[test]
 fn persisted_preload_keeps_catalogs_preloaded_from_metadata() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.preload_advertised_catalogs(
         Some(SessionModeState::new(
             "auto",
@@ -177,7 +177,7 @@ fn persisted_preload_keeps_catalogs_preloaded_from_metadata() {
 
 #[test]
 fn config_snapshot_keeps_preloaded_model_catalog_when_resume_load_advertises_empty_models() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.preload_persisted(&PersistedSessionState {
         current_model_id: Some(ModelId::new("gpt-5.5")),
         ..Default::default()
@@ -216,7 +216,7 @@ fn config_snapshot_keeps_preloaded_model_catalog_when_resume_load_advertises_emp
 
 #[test]
 fn preload_advertised_catalogs_reports_seeded_catalog_counts() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
 
     let summary = session.preload_advertised_catalogs(
         Some(SessionModeState::new(
@@ -245,7 +245,7 @@ fn preload_advertised_catalogs_reports_seeded_catalog_counts() {
 
 #[test]
 fn config_snapshot_supplements_missing_model_from_non_empty_runtime_catalog() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.apply_advertised_models(LegacySessionModelState::new(
         "gpt-5",
         vec![
@@ -280,7 +280,7 @@ fn config_snapshot_supplements_missing_model_from_non_empty_runtime_catalog() {
 
 #[test]
 fn config_snapshot_keeps_real_mode_option_without_runtime_merge() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.apply_advertised_modes(SessionModeState::new(
         "runtime-build",
         vec![
@@ -310,7 +310,7 @@ fn config_snapshot_keeps_real_mode_option_without_runtime_merge() {
 
 #[test]
 fn config_snapshot_keeps_real_model_option_without_runtime_merge() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.apply_advertised_models(LegacySessionModelState::new(
         "runtime-model",
         vec![
@@ -340,7 +340,7 @@ fn config_snapshot_keeps_real_model_option_without_runtime_merge() {
 
 #[test]
 fn config_snapshot_does_not_supplement_mode_from_empty_runtime_catalog() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.apply_advertised_modes(SessionModeState::new("full-access", Vec::new()));
     session.drain_events();
 
@@ -361,7 +361,7 @@ fn config_snapshot_does_not_supplement_mode_from_empty_runtime_catalog() {
 
 #[test]
 fn config_snapshot_does_not_supplement_model_from_empty_runtime_catalog() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.apply_advertised_models(LegacySessionModelState::new("gpt-5", Vec::new()));
     session.drain_events();
 
@@ -382,7 +382,7 @@ fn config_snapshot_does_not_supplement_model_from_empty_runtime_catalog() {
 
 #[test]
 fn config_snapshot_does_not_supplement_thought_level() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.apply_advertised_modes(SessionModeState::new("build", vec![SessionMode::new("build", "Build")]));
     session.apply_advertised_models(LegacySessionModelState::new(
         "gpt-5",
@@ -406,7 +406,7 @@ fn config_snapshot_does_not_supplement_thought_level() {
 
 #[test]
 fn config_snapshot_synthetic_mode_resolves_to_legacy_set_mode() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.apply_advertised_modes(SessionModeState::new(
         "read-only",
         vec![
@@ -435,7 +435,7 @@ fn config_snapshot_synthetic_mode_resolves_to_legacy_set_mode() {
 
 #[test]
 fn config_snapshot_synthetic_model_resolves_to_legacy_set_model() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.apply_advertised_models(LegacySessionModelState::new(
         "gpt-4.1",
         vec![
@@ -464,7 +464,7 @@ fn config_snapshot_synthetic_model_resolves_to_legacy_set_model() {
 
 #[test]
 fn config_snapshot_real_mode_and_model_resolve_to_set_config_option() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.apply_advertised_modes(SessionModeState::new(
         "runtime-build",
         vec![SessionMode::new("runtime-build", "Runtime Build")],

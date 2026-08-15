@@ -5,7 +5,7 @@ use crate::capability::prompt_pipeline::PromptPipeline;
 use crate::capability::skill_manager::AcpSkillManager;
 use crate::error::AgentError;
 use crate::factory::runtime_assembler::RuntimeSessionParams;
-use crate::manager::acp::{AcpSession, PermissionRouter, RuntimeSessionEvent, SessionNewPreludeHook};
+use crate::manager::acp::{PermissionRouter, RuntimeAgentSession, RuntimeSessionEvent, SessionNewPreludeHook};
 use crate::manager::process_registry::{register_session_process, unregister_agent_process};
 use crate::protocol::events::AgentStreamEvent;
 use crate::protocol::npx_cache_repair::CorruptNpxCacheRepair;
@@ -87,7 +87,7 @@ use super::runtime_mode::{RequiredFullAutoMode, resolve_required_full_auto_mode}
 const ACP_KILL_GRACE_MS: u64 = 500;
 const OBSERVED_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(10);
 
-struct AcpStartupConnection {
+struct RuntimeStartupConnection {
     process: Arc<CliAgentProcess>,
     protocol: RuntimeProtocol,
     permission_rx: mpsc::Receiver<PermissionRequest>,
@@ -120,7 +120,7 @@ pub(super) fn exit_status_parts(exit: Option<std::process::ExitStatus>) -> (Opti
     (status.code(), None)
 }
 
-enum AcpStartupConnectError {
+enum RuntimeStartupConnectError {
     Agent(AgentError),
     StartupCrash {
         exit_code: Option<i32>,
@@ -129,7 +129,7 @@ enum AcpStartupConnectError {
     },
 }
 
-impl AcpStartupConnectError {
+impl RuntimeStartupConnectError {
     fn into_agent_error(self) -> AgentError {
         match self {
             Self::Agent(error) => error,
@@ -149,13 +149,13 @@ impl AcpStartupConnectError {
 async fn spawn_and_connect_acp(
     params: &RuntimeSessionParams,
     runtime: &AgentRuntime,
-) -> Result<AcpStartupConnection, AgentError> {
+) -> Result<RuntimeStartupConnection, AgentError> {
     let mut corrupt_npx_cache_repair = CorruptNpxCacheRepair::default();
 
     loop {
         match spawn_and_connect_acp_once(params, runtime).await {
             Ok(connection) => return Ok(connection),
-            Err(AcpStartupConnectError::StartupCrash {
+            Err(RuntimeStartupConnectError::StartupCrash {
                 exit_code,
                 signal,
                 stderr,
@@ -207,11 +207,11 @@ fn register_spawned_process(
 async fn spawn_and_connect_acp_once(
     params: &RuntimeSessionParams,
     runtime: &AgentRuntime,
-) -> Result<AcpStartupConnection, AcpStartupConnectError> {
+) -> Result<RuntimeStartupConnection, RuntimeStartupConnectError> {
     let process = Arc::new(
         CliAgentProcess::spawn_for_sdk(params.command_spec.clone())
             .await
-            .map_err(AcpStartupConnectError::Agent)?,
+            .map_err(RuntimeStartupConnectError::Agent)?,
     );
     register_spawned_process(
         &params.data_dir,
@@ -225,12 +225,12 @@ async fn spawn_and_connect_acp_once(
             params.command_spec.args.join(" ")
         )),
     )
-    .map_err(AcpStartupConnectError::Agent)?;
+    .map_err(RuntimeStartupConnectError::Agent)?;
     let (stdin, stdout) = process.take_stdio().await.ok_or_else(|| {
         error!(conversation_id = %params.conversation_id, "Failed to take stdio from CLI process");
         process.force_kill_tree();
         let _ = unregister_agent_process(&params.data_dir, process.pid());
-        AcpStartupConnectError::Agent(AgentError::internal("Failed to take stdio from CLI process"))
+        RuntimeStartupConnectError::Agent(AgentError::internal("Failed to take stdio from CLI process"))
     })?;
 
     let (notification_tx, notification_rx) = mpsc::channel::<SessionNotification>(256);
@@ -264,7 +264,7 @@ async fn spawn_and_connect_acp_once(
                 "Agent process exited before ACP handshake completed"
             );
             let _ = unregister_agent_process(&params.data_dir, process.pid());
-            return Err(AcpStartupConnectError::StartupCrash { exit_code, signal, stderr });
+            return Err(RuntimeStartupConnectError::StartupCrash { exit_code, signal, stderr });
         }
         res = &mut connect_fut => res.map_err(|e| {
             error!(
@@ -274,11 +274,11 @@ async fn spawn_and_connect_acp_once(
             );
             process.force_kill_tree();
             let _ = unregister_agent_process(&params.data_dir, process.pid());
-            AcpStartupConnectError::Agent(AgentError::from(e))
+            RuntimeStartupConnectError::Agent(AgentError::from(e))
         })?,
     };
 
-    Ok(AcpStartupConnection {
+    Ok(RuntimeStartupConnection {
         process,
         protocol,
         permission_rx,
@@ -337,7 +337,7 @@ fn has_persisted_config_for_category(
 }
 
 fn seed_startup_config_preferences(
-    session: &mut AcpSession,
+    session: &mut RuntimeAgentSession,
     params: &RuntimeSessionParams,
     initial_config: &HashMap<ConfigKey, ConfigValue>,
 ) {
@@ -379,7 +379,7 @@ fn seed_startup_config_preferences(
 }
 
 fn preload_metadata_catalogs(
-    session: &mut AcpSession,
+    session: &mut RuntimeAgentSession,
     agent_id: &str,
     agent_backend: Option<&str>,
     handshake: &AgentHandshake,
@@ -481,7 +481,7 @@ fn matched_slash_command(raw_user_input: &str, commands: &[AvailableCommand]) ->
 /// the `agent-client-protocol` SDK's JSON-RPC transport, replacing the
 /// previous hand-crafted JSON-over-stdin/stdout approach.
 fn mark_session_opened_after_protocol_ready(
-    session: &mut AcpSession,
+    session: &mut RuntimeAgentSession,
     sid: String,
     protocol_connected: bool,
     conversation_id: &str,
@@ -509,7 +509,7 @@ pub enum RequiredFullAutoApplication {
     Skipped { resolved: String },
 }
 
-pub struct AcpAgentManager {
+pub struct RuntimeAgentManager {
     /// Pre-computed, immutable session parameters assembled by the factory.
     pub(super) params: Arc<RuntimeSessionParams>,
 
@@ -517,7 +517,7 @@ pub struct AcpAgentManager {
     /// Single in-memory source of truth for session lifecycle, modes,
     /// models, config, and all runtime data previously split across
     /// `AcpRuntimeSnapshot` and `AcpState`.
-    pub(super) session: RwLock<AcpSession>,
+    pub(super) session: RwLock<RuntimeAgentSession>,
 
     /// Shared runtime holding status, last_activity, and the event
     /// broadcast channel. `pub(super)` so sibling modules (session_flow,
@@ -556,7 +556,7 @@ pub struct AcpAgentManager {
     session_lock: Mutex<()>,
 }
 
-impl AcpAgentManager {
+impl RuntimeAgentManager {
     /// Create a new ACP agent manager by spawning a CLI subprocess and
     /// establishing an ACP protocol connection.
     ///
@@ -577,7 +577,7 @@ impl AcpAgentManager {
         ),
         AgentError,
     > {
-        let (this, domain_event_rx, notification_rx) = AcpAgentManager::new(params, skill_manager).await?;
+        let (this, domain_event_rx, notification_rx) = RuntimeAgentManager::new(params, skill_manager).await?;
         this.init(catalog_tx).await;
         Ok((this, domain_event_rx, notification_rx))
     }
@@ -600,7 +600,7 @@ impl AcpAgentManager {
         let runtime = AgentRuntime::new(params.conversation_id.clone(), params.workspace.path.clone(), 256);
 
         let startup = spawn_and_connect_acp(&params, &runtime).await?;
-        let AcpStartupConnection {
+        let RuntimeStartupConnection {
             process,
             protocol,
             permission_rx,
@@ -624,7 +624,7 @@ impl AcpAgentManager {
         );
 
         let startup_config_seed_base = initial_config.clone();
-        let mut session = AcpSession::new(initial_mode, initial_model, initial_config);
+        let mut session = RuntimeAgentSession::new(initial_mode, initial_model, initial_config);
         preload_metadata_catalogs(
             &mut session,
             &params.metadata.id,
@@ -666,7 +666,7 @@ impl AcpAgentManager {
 
         // Seed the observed/advertised layers (observed mode/model, cached
         // context_usage) from the persisted snapshot. Desired fields are
-        // already populated via `AcpSession::new`.
+        // already populated via `RuntimeAgentSession::new`.
         if let Some(snapshot) = self.params.session_snapshot.as_ref() {
             let mut session = self.session.write().await;
             session.preload_persisted(snapshot);
@@ -685,8 +685,8 @@ impl AcpAgentManager {
     }
 }
 
-impl AcpAgentManager {
-    fn record_user_cancel_request(runtime: &AgentRuntime, session: &mut AcpSession) {
+impl RuntimeAgentManager {
+    fn record_user_cancel_request(runtime: &AgentRuntime, session: &mut RuntimeAgentSession) {
         session.record_close_reason(Some(CloseReason::UserCancel));
         runtime.bump_activity();
     }
@@ -1160,7 +1160,7 @@ impl AcpAgentManager {
     }
 }
 
-impl AcpAgentManager {
+impl RuntimeAgentManager {
     /// Current ACP session ID, if a session has been established.
     pub async fn session_id(&self) -> Option<String> {
         self.session.read().await.session_id().map(ToOwned::to_owned)
@@ -1195,7 +1195,7 @@ impl AcpAgentManager {
     }
 }
 
-impl AcpAgentManager {
+impl RuntimeAgentManager {
     /// Ensure the ACP session is opened with the CLI. Does not send a
     /// prompt. Returns the session id that subsequent prompts should use
     /// (may differ from the input when claude-meta-resume rewrites it).
@@ -1246,7 +1246,7 @@ impl AcpAgentManager {
     ///
     /// The prompt is passed through `self.pipeline.pre_send` before being
     /// forwarded to the CLI. Each hook in the pipeline reads one-shot flags
-    /// on `AcpSession` (e.g. `pending_session_new_prelude`,
+    /// on `RuntimeAgentSession` (e.g. `pending_session_new_prelude`,
     /// flags) and prepends the appropriate block when set.
     async fn ensure_session_and_send(&self, data: &SendMessageData) -> Result<PromptOutcome, AcpSendFailure> {
         let sid = self.ensure_session_opened().await.map_err(AcpSendFailure::from)?;
@@ -1344,7 +1344,7 @@ impl AcpAgentManager {
     }
 
     /// Pre-open the ACP session without sending a prompt. Called by the
-    /// factory after `AcpAgentManager::build` so runtime preparation returns
+    /// factory after `RuntimeAgentManager::build` so runtime preparation returns
     /// only after the session is ready to accept `set_mode` / `set_model`
     /// / `prompt`. Idempotent — if already opened, returns immediately.
     #[tracing::instrument(skip_all, fields(conversation_id = %self.params.conversation_id))]
@@ -1391,7 +1391,7 @@ fn log_idle_acp_cancel_skipped(conversation_id: &str, backend: &str, pid: u32) {
 }
 
 #[async_trait::async_trait]
-impl crate::agent_task::IAgentTask for AcpAgentManager {
+impl crate::agent_task::IAgentTask for RuntimeAgentManager {
     fn agent_type(&self) -> AgentType {
         AgentType::Acp
     }
@@ -1635,7 +1635,7 @@ impl crate::agent_task::IAgentTask for AcpAgentManager {
     }
 }
 
-impl AcpAgentManager {
+impl RuntimeAgentManager {
     pub fn kill_and_wait(
         &self,
         reason: Option<AgentKillReason>,
@@ -1685,7 +1685,7 @@ mod tests {
     use crate::agent_runtime::AgentRuntime;
     use crate::error::AgentError;
     use crate::manager::acp::runtime_config::ConfigSnapshot;
-    use crate::manager::acp::{AcpAgentManager, AcpSession};
+    use crate::manager::acp::{RuntimeAgentManager, RuntimeAgentSession};
     use crate::protocol::runtime_error::{CloseReason, RuntimeError};
     use crate::shared_kernel::{ConfigKey, ConfigValue, ModeId, SessionId as DomainSessionId};
     use agent_client_protocol::schema::v1::{
@@ -1901,7 +1901,7 @@ mod tests {
 
     #[test]
     fn preload_metadata_catalogs_seeds_mode_catalog_for_partial_session_config_options() {
-        let mut session = AcpSession::new(Some(ModeId::new("full-access")), None, HashMap::new());
+        let mut session = RuntimeAgentSession::new(Some(ModeId::new("full-access")), None, HashMap::new());
         let handshake = AgentHandshake {
             available_modes: Some(json!({
                 "current_mode_id": "auto",
@@ -1964,7 +1964,7 @@ mod tests {
 
     #[test]
     fn warmup_does_not_mark_opened_when_protocol_disconnected_after_open() {
-        let mut session = AcpSession::new(None, None, Default::default());
+        let mut session = RuntimeAgentSession::new(None, None, Default::default());
         session.set_session_id(DomainSessionId::new("sess-disconnected"));
 
         let err = super::mark_session_opened_after_protocol_ready(
@@ -2001,9 +2001,9 @@ mod tests {
     async fn acp_cancel_request_records_user_cancel_without_terminal_finish() {
         let runtime = AgentRuntime::new("conv-1", "/tmp/workspace", 8);
         let mut rx = runtime.subscribe();
-        let mut session = AcpSession::new(None, None, Default::default());
+        let mut session = RuntimeAgentSession::new(None, None, Default::default());
 
-        AcpAgentManager::record_user_cancel_request(&runtime, &mut session);
+        RuntimeAgentManager::record_user_cancel_request(&runtime, &mut session);
 
         assert!(matches!(session.last_close_reason(), Some(CloseReason::UserCancel)));
         assert_eq!(runtime.status(), None);
@@ -2013,14 +2013,14 @@ mod tests {
 
     // ---- augment_with_stderr behavioral tests ------------------------------
     //
-    // We can't easily construct a real AcpAgentManager in a unit test (it
+    // We can't easily construct a real RuntimeAgentManager in a unit test (it
     // needs the full ACP plumbing). Instead we test the *composition* of
     // Task 3's peek_stderr_tail + Task 4's extract_error_message + this
     // task's "SDK default Display" shape detection by spawning a real
     // CliAgentProcess that writes the chosen stderr, then running the same
     // detection+peek+extract pipeline against it.
     //
-    // The helper below MIRRORS `AcpAgentManager::augment_with_stderr`. If
+    // The helper below MIRRORS `RuntimeAgentManager::augment_with_stderr`. If
     // you change the production helper (e.g. the prefix string, peek line
     // count, or extractor module path) update this helper to match.
 
@@ -2120,7 +2120,7 @@ mod tests {
 
     #[test]
     fn session_command_loading_preserves_empty_turn_meta() {
-        let mut session = AcpSession::new(None, None, Default::default());
+        let mut session = RuntimeAgentSession::new(None, None, Default::default());
         let mut command = AvailableCommand::new("review", "Review the current diff");
         command.meta = Some(
             serde_json::from_value(json!({

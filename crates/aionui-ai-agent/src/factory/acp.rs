@@ -6,7 +6,7 @@ use crate::factory::AgentFactoryDeps;
 use crate::factory::context::FactoryContext;
 use crate::factory::runtime_assembler::{WorkspaceInfo, assemble_acp_params};
 use crate::factory::runtime_launch_policy::{RuntimeLaunchPolicyInput, apply_acp_launch_policy};
-use crate::manager::acp::{AcpAgentManager, CatalogForwarder};
+use crate::manager::acp::{CatalogForwarder, RuntimeAgentManager};
 use crate::registry::AgentRegistry;
 use crate::session_context::AcpSessionBuildContext;
 use agent_client_protocol::schema::v1::{
@@ -34,7 +34,7 @@ pub(crate) enum BackendRoute {
     DirectCli,
     /// agy — direct-CLI via its own factory (does NOT speak ACP).
     Antigravity,
-    /// A real ACP vendor: the `AcpAgentManager` handshake path.
+    /// A real ACP vendor: the `RuntimeAgentManager` handshake path.
     AcpManager,
 }
 
@@ -92,7 +92,7 @@ pub(super) async fn build(
 
     // Session-model port: claude/codex ALWAYS run through the clean-slate direct-CLI
     // SessionBackend (SessionAgentTask), NOT the ACP manager. Every other ACP vendor
-    // keeps the AcpAgentManager path below. There is no fallback: a claude/codex
+    // keeps the RuntimeAgentManager path below. There is no fallback: a claude/codex
     // build that yields no instance is a hard error, not a silent drop to ACP. The
     // build inputs mirror clean-slate `build_runtime` 1:1 (resume anchor, mode/model
     // precedence, MCP + preset + skills init surface, cc-switch env, codex sandbox/approval).
@@ -117,7 +117,7 @@ pub(super) async fn build(
                 broadcaster: deps.broadcaster.clone(),
                 // G5: keyed by the resolved catalog row so the discovered
                 // modes/models/commands refresh the `/api/agents` picker (the
-                // AcpAgentManager path does this via CatalogForwarder; the session
+                // RuntimeAgentManager path does this via CatalogForwarder; the session
                 // path polls capabilities() directly since its stream carries no
                 // catalog events).
                 catalog_writeback: Some((meta.id.clone(), deps.agent_registry.catalog_sender())),
@@ -143,7 +143,7 @@ pub(super) async fn build(
         tracing::info!(
             conversation_id = %ctx.conversation_id,
             backend = %backend_label,
-            "session-port: routing conversation through the direct-CLI SessionAgentTask (not AcpAgentManager)"
+            "session-port: routing conversation through the direct-CLI SessionAgentTask (not RuntimeAgentManager)"
         );
         return Ok(instance);
     }
@@ -238,7 +238,7 @@ pub(super) async fn build(
     let skill_mgr = deps.skill_manager.clone();
     let catalog_tx = deps.agent_registry.catalog_sender();
 
-    let (agent, domain_rx, notification_rx) = AcpAgentManager::build(params, skill_mgr, &catalog_tx).await?;
+    let (agent, domain_rx, notification_rx) = RuntimeAgentManager::build(params, skill_mgr, &catalog_tx).await?;
 
     let arc = Arc::new(agent);
     arc.start_permission_handler();
@@ -251,7 +251,7 @@ pub(super) async fn build(
     );
 
     // Desired (mode/model/config) are seeded from `params.session_snapshot`
-    // inside `AcpAgentManager::new`. The CLI-assigned session id is still
+    // inside `RuntimeAgentManager::new`. The CLI-assigned session id is still
     // loaded here so the first turn after a task rebuild takes the resume
     // path.
     if let Some(sid) = build_context.session_id {

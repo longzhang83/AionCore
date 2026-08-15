@@ -103,7 +103,7 @@ pub struct AgentRegistry {
     repo: Arc<dyn IAgentMetadataRepository>,
     by_id: RwLock<HashMap<String, AgentMetadata>>,
     unavailable_reasons: RwLock<HashMap<String, UnavailableReason>>,
-    /// MPSC sender shared with every forwarder in every `AcpAgentManager`.
+    /// MPSC sender shared with every forwarder in every `RuntimeAgentManager`.
     /// Draining happens in a single background task owned by this
     /// registry, so DB writes for the same (id, field) serialize.
     catalog_tx: mpsc::Sender<CatalogSyncMessage>,
@@ -254,7 +254,7 @@ impl AgentRegistry {
 
 impl AgentRegistry {
     /// Sender end of the catalog-sync MPSC, cloned by each
-    /// `AcpAgentManager` forwarder.
+    /// `RuntimeAgentManager` forwarder.
     pub fn catalog_sender(&self) -> CatalogSender {
         CatalogSender {
             tx: self.catalog_tx.clone(),
@@ -1432,7 +1432,7 @@ fn encode_optional(value: &Option<Value>, field: &str) -> Result<Option<String>,
     }
 }
 
-/// Cloneable handle each `AcpAgentManager` holds to forward ACP events
+/// Cloneable handle each `RuntimeAgentManager` holds to forward ACP events
 /// into the registry's background consumer task. Dropping it is cheap
 /// and does not affect the consumer — the registry itself keeps one
 /// sender alive for the life of the process.

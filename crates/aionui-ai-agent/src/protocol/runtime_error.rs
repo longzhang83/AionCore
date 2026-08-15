@@ -11,10 +11,10 @@ use aionui_common::AgentKillReason;
 /// must never land here.
 ///
 /// Lifecycle:
-/// - writer: `AcpSession::record_close_reason`, called by the manager when
+/// - writer: `RuntimeAgentSession::record_close_reason`, called by the manager when
 ///   a close path runs (`send_message` Err, `cancel`, `kill`, post-init
 ///   process exit detection).
-/// - reader: `AcpSession::last_close_reason`, drained by the manager when
+/// - reader: `RuntimeAgentSession::last_close_reason`, drained by the manager when
 ///   composing the user-facing error message for the next toast.
 /// - invalidation: cleared on `clear_session_id` and on
 ///   `record_close_reason(None)` so a rebuilt session starts fresh.

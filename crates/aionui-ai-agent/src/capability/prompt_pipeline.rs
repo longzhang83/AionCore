@@ -8,13 +8,13 @@
 use crate::agent_runtime::AgentRuntime;
 use crate::capability::skill_manager::AcpSkillManager;
 use crate::factory::runtime_assembler::RuntimeSessionParams;
-use crate::manager::acp::AcpSession;
+use crate::manager::acp::RuntimeAgentSession;
 use std::sync::Arc;
 
 /// Read/write slice handed to each hook. `session` is a mutable borrow
 /// so hooks can consume one-shot flags.
 pub struct PromptCtx<'a> {
-    pub session: &'a mut AcpSession,
+    pub session: &'a mut RuntimeAgentSession,
     pub params: &'a RuntimeSessionParams,
     pub skill_manager: &'a Arc<AcpSkillManager>,
     pub runtime: &'a AgentRuntime,

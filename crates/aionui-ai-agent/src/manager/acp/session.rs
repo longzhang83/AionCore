@@ -71,7 +71,7 @@ impl CatalogPreloadSummary {
 /// All mutations happen through aggregate methods which may emit domain
 /// events (collected in `pending_events` and drained by the driver).
 #[derive(Debug, Clone)]
-pub struct AcpSession {
+pub struct RuntimeAgentSession {
     session_id: Option<SessionId>,
     opened: bool,
     desired: Desired,
@@ -84,7 +84,7 @@ pub struct AcpSession {
     /// its `Drop` on every exit path — success, error, RPC timeout,
     /// future-cancel, and panic unwind. This removes the ELECTRON-3MS deadlock
     /// where a hung `set_config_option` RPC left the lease stuck until runtime
-    /// recovery rebuilt the session. Cloning `AcpSession` shares the flag
+    /// recovery rebuilt the session. Cloning `RuntimeAgentSession` shares the flag
     /// (transient in-flight state); no invariant depends on it being distinct.
     config_set_in_flight: Arc<AtomicBool>,
     pending_events: Vec<RuntimeSessionEvent>,
@@ -92,7 +92,7 @@ pub struct AcpSession {
     /// should receive preset_context / skill-index injection.
     ///
     /// Lifecycle:
-    /// - writer: `AcpAgentManager::open_session_new` after a successful
+    /// - writer: `RuntimeAgentManager::open_session_new` after a successful
     ///   `session/new` handshake.
     /// - reader: `SessionNewPreludeHook` via `take_pending_session_new_prelude`.
     /// - invalidation: any `take_*` call drains it to `false`.
@@ -149,7 +149,7 @@ pub(crate) enum PendingStartupConfigSeedResult {
     },
 }
 
-impl AcpSession {
+impl RuntimeAgentSession {
     pub fn new(
         initial_mode: Option<ModeId>,
         initial_model: Option<ModelId>,
@@ -174,7 +174,7 @@ impl AcpSession {
     }
 }
 
-impl AcpSession {
+impl RuntimeAgentSession {
     /// Atomically claim the single-flight config lease. Returns a RAII guard
     /// on success (releases the lease on drop), or `None` when a config update
     /// is already in flight — preserving the `rejected_in_progress` semantics.
@@ -194,7 +194,7 @@ impl AcpSession {
 }
 
 // ─── Session Id and Session Opened ───────────────────────────────────────────────────────
-impl AcpSession {
+impl RuntimeAgentSession {
     pub fn session_id(&self) -> Option<&str> {
         self.session_id.as_ref().map(SessionId::as_str)
     }
@@ -245,7 +245,7 @@ impl AcpSession {
     }
 
     /// Drain the last close reason. Called by the close-path handler in
-    /// `AcpAgentManager` right before broadcasting the `Error` event so
+    /// `RuntimeAgentManager` right before broadcasting the `Error` event so
     /// the same reason is not re-rendered on a follow-up request.
     pub fn take_close_reason(&mut self) -> Option<CloseReason> {
         self.last_close_reason.take()
@@ -281,7 +281,7 @@ impl AcpSession {
 }
 
 // ─── Getters Setters desired ───────────────────────────────────────────────────────
-impl AcpSession {
+impl RuntimeAgentSession {
     pub fn desired_mode(&self) -> Option<&str> {
         self.desired.mode_id.as_ref().map(ModeId::as_str)
     }
@@ -500,7 +500,7 @@ impl AcpSession {
 }
 
 // ─── Getters observed ───────────────────────────────────────────────────────
-impl AcpSession {
+impl RuntimeAgentSession {
     pub fn observed_mode(&self) -> Option<&str> {
         self.observed.mode_id.as_ref().map(ModeId::as_str)
     }
@@ -519,7 +519,7 @@ impl AcpSession {
 }
 
 // ─── Getters advertised ───────────────────────────────────────────────────────
-impl AcpSession {
+impl RuntimeAgentSession {
     pub fn modes(&self) -> Option<&SessionModeState> {
         self.advertised.modes.as_ref()
     }
@@ -569,7 +569,7 @@ impl AcpSession {
 }
 
 // ─── Observations (from CLI responses/notifications) ───────────────
-impl AcpSession {
+impl RuntimeAgentSession {
     /// Record the CLI's current mode. Updates both `observed.mode_id` and
     /// the `advertised.modes.current_mode_id` (available_modes preserved);
     /// emits `ObservedModeSynced` when the value actually changed.
@@ -817,7 +817,7 @@ impl AcpSession {
     }
 }
 
-impl AcpSession {
+impl RuntimeAgentSession {
     /// Seed the aggregate with persisted user choices from DB.
     /// Called on resume paths before the CLI session/load response arrives.
     pub fn preload_persisted(&mut self, state: &PersistedSessionState) {
@@ -924,7 +924,7 @@ impl AcpSession {
 }
 
 // ─── Reconcile ─────────────────────────────────────────────────────
-impl AcpSession {
+impl RuntimeAgentSession {
     /// Produce a list of actions needed to align CLI state with user intent.
     /// Pure function — no side effects. The driver executes the actions.
     pub fn plan_reconcile(&self) -> Vec<ReconcileAction> {

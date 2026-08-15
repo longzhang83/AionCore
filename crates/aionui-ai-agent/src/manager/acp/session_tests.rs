@@ -1,4 +1,4 @@
-//! Unit tests for `AcpSession`. Pulled out of `session.rs` so that file
+//! Unit tests for `RuntimeAgentSession`. Pulled out of `session.rs` so that file
 //! stays under the 1000-line per-file budget. Linked via
 //! `#[path = "session_tests.rs"] mod tests;` from `session.rs`, so
 //! `super::*` resolves to the `session` module's private scope.
@@ -8,8 +8,8 @@ use agent_client_protocol::schema::v1::{SessionConfigOptionCategory, SessionConf
 
 use super::*;
 
-fn make_session() -> AcpSession {
-    AcpSession::new(Some(ModeId::new("default")), None, HashMap::new())
+fn make_session() -> RuntimeAgentSession {
+    RuntimeAgentSession::new(Some(ModeId::new("default")), None, HashMap::new())
 }
 
 #[test]
@@ -49,7 +49,7 @@ fn mark_opened_emits_once() {
 
 #[test]
 fn config_set_guard_rejects_second_in_flight_update_and_releases() {
-    let mut session = AcpSession::new(None, None, Default::default());
+    let mut session = RuntimeAgentSession::new(None, None, Default::default());
 
     let first = session.try_begin_config_set();
     assert!(first.is_some());
@@ -63,7 +63,7 @@ fn config_set_guard_rejects_second_in_flight_update_and_releases() {
 
 #[test]
 fn config_set_guard_releases_on_scope_exit() {
-    let mut session = AcpSession::new(None, None, Default::default());
+    let mut session = RuntimeAgentSession::new(None, None, Default::default());
     {
         let _guard = session.try_begin_config_set().expect("first claim succeeds");
         assert!(
@@ -82,7 +82,7 @@ fn config_set_guard_releases_on_panic_unwind() {
     // Mirrors acp.rs::replay_suppression_guard_clears_on_panic_unwind: a panic
     // while the lease is held must still run the guard's Drop and free it.
     // Relies on panic = "unwind" (the default); would not run under "abort".
-    let mut session = AcpSession::new(None, None, Default::default());
+    let mut session = RuntimeAgentSession::new(None, None, Default::default());
 
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _guard = session.try_begin_config_set().expect("first claim succeeds");
@@ -101,7 +101,7 @@ async fn config_set_guard_releases_on_future_cancel() {
     // The key RAII payoff over `timeout + explicit end`: cancelling the future
     // that holds the lease (client disconnect / turn cancel) still releases it
     // via Drop. See spec §10.2.
-    let mut session = AcpSession::new(None, None, Default::default());
+    let mut session = RuntimeAgentSession::new(None, None, Default::default());
 
     let guard = session.try_begin_config_set().expect("first claim succeeds");
     let held = async move {
@@ -158,7 +158,7 @@ fn config_set_failure_path_leaves_three_layer_state_and_reconcile_untouched() {
 
 #[test]
 fn config_options_snapshot_is_empty_without_real_or_legacy_catalog() {
-    let session = AcpSession::new(None, None, Default::default());
+    let session = RuntimeAgentSession::new(None, None, Default::default());
     let snapshot = session.config_snapshot();
     assert!(snapshot.options.is_empty());
 }
@@ -312,7 +312,7 @@ fn confirm_mode_aligns_desired_and_current() {
 #[test]
 fn confirm_model_aligns_desired_and_current() {
     use super::super::legacy_runtime_model::LegacyModelEntry;
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.apply_advertised_models(LegacySessionModelState::new(
         "claude-sonnet-4",
         vec![
@@ -361,7 +361,7 @@ fn confirm_mode_preserves_available_mode_catalog() {
 #[test]
 fn confirm_model_preserves_available_model_catalog() {
     use super::super::legacy_runtime_model::LegacyModelEntry;
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.apply_advertised_models(LegacySessionModelState::new(
         "claude-sonnet-4",
         vec![
@@ -406,7 +406,7 @@ fn apply_observed_config_emits_on_change_and_is_idempotent() {
 
 #[test]
 fn apply_observed_config_closes_plan_reconcile_drift() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.set_desired_config(ConfigKey::new("reasoning"), ConfigValue::new("high"));
     assert_eq!(
         session.plan_reconcile(),
@@ -447,7 +447,7 @@ fn plan_reconcile_empty_when_aligned() {
 
 #[test]
 fn plan_reconcile_detects_config_drift() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.set_desired_config(ConfigKey::new("reasoning"), ConfigValue::new("high"));
     let actions = session.plan_reconcile();
     assert_eq!(
@@ -461,7 +461,7 @@ fn plan_reconcile_detects_config_drift() {
 
 #[test]
 fn plan_reconcile_config_aligned_when_observed_matches() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.set_desired_config(ConfigKey::new("reasoning"), ConfigValue::new("high"));
 
     session.apply_advertised_config_options(vec![SessionConfigOption::select(
@@ -581,7 +581,7 @@ fn apply_observed_model_does_not_change_desired_model() {
 
 #[test]
 fn plan_reconcile_detects_model_drift() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.set_desired_model(ModelId::new("claude-opus-4"));
     session.apply_observed_model(ModelId::new("claude-sonnet-4"));
     let actions = session.plan_reconcile();
@@ -595,7 +595,7 @@ fn plan_reconcile_detects_model_drift() {
 
 #[test]
 fn plan_reconcile_model_aligned_when_observed_matches() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.set_desired_model(ModelId::new("claude-opus-4"));
     session.apply_observed_model(ModelId::new("claude-opus-4"));
     assert!(session.plan_reconcile().is_empty());
@@ -603,7 +603,7 @@ fn plan_reconcile_model_aligned_when_observed_matches() {
 
 #[test]
 fn new_with_initial_model_sets_desired_model() {
-    let session = AcpSession::new(None, Some(ModelId::new("claude-opus-4")), HashMap::new());
+    let session = RuntimeAgentSession::new(None, Some(ModelId::new("claude-opus-4")), HashMap::new());
     assert_eq!(session.desired_model(), Some("claude-opus-4"));
 }
 
@@ -611,7 +611,7 @@ fn new_with_initial_model_sets_desired_model() {
 fn clear_invalid_desired_model_drops_stale_initial_model() {
     use super::super::legacy_runtime_model::LegacyModelEntry;
 
-    let mut session = AcpSession::new(None, Some(ModelId::new("deepseek-v4-pro")), HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, Some(ModelId::new("deepseek-v4-pro")), HashMap::new());
     session.apply_advertised_models(LegacySessionModelState::new(
         "opus",
         vec![
@@ -634,7 +634,7 @@ fn clear_invalid_desired_model_drops_stale_initial_model() {
 
 #[test]
 fn clear_invalid_desired_mode_drops_stale_initial_mode_without_changing_current() {
-    let mut session = AcpSession::new(Some(ModeId::new("legacy-plan")), None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(Some(ModeId::new("legacy-plan")), None, HashMap::new());
     session.apply_advertised_modes(SessionModeState::new(
         "code",
         vec![SessionMode::new("default", "Default"), SessionMode::new("code", "Code")],
@@ -653,7 +653,7 @@ fn clear_invalid_desired_mode_drops_stale_initial_mode_without_changing_current(
 
 #[test]
 fn apply_advertised_config_options_emits_observed_config_synced_on_change() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.apply_advertised_config_options(vec![SessionConfigOption::select(
         "reasoning",
         "Reasoning",
@@ -678,7 +678,7 @@ fn apply_advertised_config_options_emits_observed_config_synced_on_change() {
 
 #[test]
 fn apply_advertised_config_options_idempotent_when_unchanged() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     let options = vec![SessionConfigOption::select(
         "reasoning",
         "Reasoning",
@@ -701,7 +701,7 @@ fn apply_advertised_config_options_idempotent_when_unchanged() {
 
 #[test]
 fn apply_advertised_config_options_derives_missing_mode_and_model_catalogs() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
 
     session.apply_advertised_config_options(vec![
         SessionConfigOption::select(
@@ -739,7 +739,7 @@ fn apply_advertised_config_options_derives_missing_mode_and_model_catalogs() {
 
 #[test]
 fn apply_advertised_config_options_falls_back_to_existing_catalogs_when_config_options_have_no_catalogs() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.apply_advertised_modes(SessionModeState::new(
         "build",
         vec![SessionMode::new("build", "Build"), SessionMode::new("plan", "Plan")],
@@ -775,7 +775,7 @@ fn apply_advertised_config_options_falls_back_to_existing_catalogs_when_config_o
 
 #[test]
 fn apply_advertised_config_options_prefers_config_option_catalogs_over_existing_catalogs() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.apply_advertised_modes(SessionModeState::new(
         "available-mode",
         vec![SessionMode::new("available-mode", "Available Mode")],
@@ -961,7 +961,7 @@ fn apply_advertised_config_options_preserves_confirmed_explicit_model_when_curre
 fn set_desired_mode_plus_plan_reconcile_produces_set_mode_action() {
     // Startup/recovery reconcile still turns pending intent into a
     // ReconcileAction::SetMode when desired and observed diverge.
-    let mut session = AcpSession::new(None, None, Default::default());
+    let mut session = RuntimeAgentSession::new(None, None, Default::default());
     session.apply_advertised_modes(SessionModeState::new(
         "default".to_owned(),
         vec![SessionMode::new("default", "Default"), SessionMode::new("plan", "Plan")],
@@ -984,7 +984,7 @@ fn set_desired_mode_plus_plan_reconcile_produces_set_mode_action() {
 
 #[test]
 fn pending_model_seed_resolves_category_to_raw_config_key_and_suppresses_legacy_set_model() {
-    let mut session = AcpSession::new(None, Some(ModelId::new("openai/gpt-5")), HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, Some(ModelId::new("openai/gpt-5")), HashMap::new());
     session.seed_pending_startup_config(SessionConfigOptionCategory::Model, ConfigValue::new("openai/gpt-5"));
 
     session.apply_advertised_config_options(vec![
@@ -1020,7 +1020,7 @@ fn pending_model_seed_resolves_category_to_raw_config_key_and_suppresses_legacy_
 
 #[test]
 fn pending_mode_seed_resolves_category_to_raw_config_key_and_suppresses_legacy_set_mode() {
-    let mut session = AcpSession::new(Some(ModeId::new("build")), None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(Some(ModeId::new("build")), None, HashMap::new());
     session.seed_pending_startup_config(SessionConfigOptionCategory::Mode, ConfigValue::new("build"));
 
     session.apply_advertised_config_options(vec![
@@ -1056,7 +1056,7 @@ fn pending_mode_seed_resolves_category_to_raw_config_key_and_suppresses_legacy_s
 
 #[test]
 fn pending_mode_seed_maps_full_access_to_agent_full_access_when_catalog_selects_it() {
-    let mut session = AcpSession::new(Some(ModeId::new("full-access")), None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(Some(ModeId::new("full-access")), None, HashMap::new());
     session.seed_pending_startup_config(SessionConfigOptionCategory::Mode, ConfigValue::new("full-access"));
 
     session.apply_advertised_config_options(vec![
@@ -1095,7 +1095,7 @@ fn pending_mode_seed_maps_full_access_to_agent_full_access_when_catalog_selects_
 
 #[test]
 fn pending_mode_seed_maps_agent_full_access_to_full_access_when_legacy_catalog_selects_it() {
-    let mut session = AcpSession::new(Some(ModeId::new("agent-full-access")), None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(Some(ModeId::new("agent-full-access")), None, HashMap::new());
     session.seed_pending_startup_config(SessionConfigOptionCategory::Mode, ConfigValue::new("agent-full-access"));
 
     session.apply_advertised_config_options(vec![
@@ -1134,7 +1134,7 @@ fn pending_mode_seed_maps_agent_full_access_to_full_access_when_legacy_catalog_s
 
 #[test]
 fn pending_model_seed_falls_back_to_legacy_set_model_when_model_config_option_is_absent() {
-    let mut session = AcpSession::new(None, Some(ModelId::new("openai/gpt-5")), HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, Some(ModelId::new("openai/gpt-5")), HashMap::new());
     session.seed_pending_startup_config(SessionConfigOptionCategory::Model, ConfigValue::new("openai/gpt-5"));
 
     session.apply_advertised_modes(SessionModeState::new("build".to_owned(), vec![]));
@@ -1156,7 +1156,7 @@ fn pending_model_seed_falls_back_to_legacy_set_model_when_model_config_option_is
 
 #[test]
 fn pending_mode_seed_falls_back_to_legacy_set_mode_when_mode_config_option_is_absent() {
-    let mut session = AcpSession::new(Some(ModeId::new("build")), None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(Some(ModeId::new("build")), None, HashMap::new());
     session.seed_pending_startup_config(SessionConfigOptionCategory::Mode, ConfigValue::new("build"));
 
     session.apply_advertised_models(LegacySessionModelState::new("gpt-5".to_owned(), vec![]));
@@ -1178,7 +1178,7 @@ fn pending_mode_seed_falls_back_to_legacy_set_mode_when_mode_config_option_is_ab
 
 #[test]
 fn pending_mode_seed_uses_legacy_set_mode_when_preloaded_catalog_is_supplemental_only() {
-    let mut session = AcpSession::new(Some(ModeId::new("full-access")), None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(Some(ModeId::new("full-access")), None, HashMap::new());
     session.preload_advertised_catalogs(
         Some(SessionModeState::new(
             "auto",
@@ -1219,7 +1219,7 @@ fn pending_mode_seed_uses_legacy_set_mode_when_preloaded_catalog_is_supplemental
 
 #[test]
 fn pending_model_seed_is_dropped_without_legacy_fallback_when_model_config_option_rejects_value() {
-    let mut session = AcpSession::new(None, Some(ModelId::new("openai/gpt-5")), HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, Some(ModelId::new("openai/gpt-5")), HashMap::new());
     session.seed_pending_startup_config(SessionConfigOptionCategory::Model, ConfigValue::new("openai/gpt-5"));
 
     session.apply_advertised_config_options(vec![
@@ -1243,7 +1243,7 @@ fn pending_model_seed_is_dropped_without_legacy_fallback_when_model_config_optio
 
 #[test]
 fn startup_model_seed_prevents_opencode_default_model_config_from_remaining_selected() {
-    let mut session = AcpSession::new(None, Some(ModelId::new("openai/gpt-5")), HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, Some(ModelId::new("openai/gpt-5")), HashMap::new());
     session.seed_pending_startup_config(SessionConfigOptionCategory::Model, ConfigValue::new("openai/gpt-5"));
 
     session.apply_advertised_config_options(vec![
@@ -1306,7 +1306,7 @@ fn startup_model_seed_prevents_opencode_default_model_config_from_remaining_sele
 
 #[test]
 fn pending_thought_level_seed_resolves_category_to_raw_config_key() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.seed_pending_startup_config(SessionConfigOptionCategory::ThoughtLevel, ConfigValue::new("high"));
 
     session.apply_advertised_config_options(vec![
@@ -1342,7 +1342,7 @@ fn pending_thought_level_seed_resolves_category_to_raw_config_key() {
 
 #[test]
 fn pending_thought_level_seed_resolves_alias_when_category_is_missing() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.seed_pending_startup_config(SessionConfigOptionCategory::ThoughtLevel, ConfigValue::new("high"));
 
     session.apply_advertised_config_options(vec![SessionConfigOption::select(
@@ -1376,7 +1376,7 @@ fn pending_thought_level_seed_resolves_alias_when_category_is_missing() {
 
 #[test]
 fn pending_thought_level_seed_waits_for_late_config_option_after_model_change() {
-    let mut session = AcpSession::new(None, Some(ModelId::new("openai/gpt-5.5")), HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, Some(ModelId::new("openai/gpt-5.5")), HashMap::new());
     session.seed_pending_startup_config(SessionConfigOptionCategory::Model, ConfigValue::new("openai/gpt-5.5"));
     session.seed_pending_startup_config(SessionConfigOptionCategory::ThoughtLevel, ConfigValue::new("medium"));
 
@@ -1455,7 +1455,7 @@ fn pending_thought_level_seed_waits_for_late_config_option_after_model_change() 
 
 #[test]
 fn pending_thought_level_seed_waits_when_option_is_unavailable() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.seed_pending_startup_config(SessionConfigOptionCategory::ThoughtLevel, ConfigValue::new("high"));
 
     assert_eq!(
@@ -1475,7 +1475,7 @@ fn pending_thought_level_seed_waits_when_option_is_unavailable() {
 
 #[test]
 fn pending_thought_level_seed_is_dropped_when_value_is_not_selectable() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.seed_pending_startup_config(SessionConfigOptionCategory::ThoughtLevel, ConfigValue::new("xhigh"));
     session.apply_advertised_config_options(vec![
         SessionConfigOption::select(
@@ -1502,7 +1502,7 @@ fn pending_thought_level_seed_is_dropped_when_value_is_not_selectable() {
 
 #[test]
 fn pending_thought_level_seed_does_not_reconcile_when_observed_already_matches() {
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.seed_pending_startup_config(SessionConfigOptionCategory::ThoughtLevel, ConfigValue::new("high"));
     session.apply_advertised_config_options(vec![
         SessionConfigOption::select(

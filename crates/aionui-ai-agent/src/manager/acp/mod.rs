@@ -14,11 +14,11 @@ pub(crate) mod runtime_mode;
 mod runtime_session_flow;
 pub mod session;
 
-pub use agent::AcpAgentManager;
 pub use agent::RequiredFullAutoApplication;
+pub use agent::RuntimeAgentManager;
 pub use agent_reconciler::ReconcileAction;
 pub use approval_router::PermissionRouter;
 pub use prompt_hook::SessionNewPreludeHook;
 pub use runtime_catalog_forwarder::CatalogForwarder;
 pub use runtime_event_tracker::RuntimeSessionEvent;
-pub use session::AcpSession;
+pub use session::RuntimeAgentSession;

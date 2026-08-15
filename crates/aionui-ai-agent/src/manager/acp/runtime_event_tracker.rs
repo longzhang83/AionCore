@@ -1,4 +1,4 @@
-use crate::manager::acp::{AcpAgentManager, AcpSession};
+use crate::manager::acp::{RuntimeAgentManager, RuntimeAgentSession};
 use crate::protocol::events::AgentStreamEvent;
 use agent_client_protocol::schema::v1::{SessionModeState, SessionNotification, UsageUpdate};
 
@@ -13,7 +13,7 @@ use crate::shared_kernel::{ConfigKey, ConfigValue, ModeId, ModelId, SessionId};
 
 use super::runtime_config_catalog::extract_config_options_from_value;
 
-/// Domain events emitted by the `AcpSession` aggregate.
+/// Domain events emitted by the `RuntimeAgentSession` aggregate.
 ///
 /// These capture *intent* changes (user wants mode X) and *observation*
 /// arrivals (CLI reported mode Y) separately — persistence consumers can
@@ -52,9 +52,9 @@ pub enum RuntimeSessionEvent {
     },
 }
 
-impl AcpAgentManager {
+impl RuntimeAgentManager {
     /// Consume SDK session/update notifications and apply their effects to
-    /// the AcpSession aggregate.
+    /// the RuntimeAgentSession aggregate.
     ///
     /// This is the **sole** writer of observed/advertised session state from
     /// the CLI side (target.md §7.2). It intentionally consumes a dedicated
@@ -89,7 +89,7 @@ impl AcpAgentManager {
         }
     }
 
-    /// Mirror a stream event into the `AcpSession` aggregate's observed/advertised
+    /// Mirror a stream event into the `RuntimeAgentSession` aggregate's observed/advertised
     /// layer and forward any resulting domain events to the persistence consumer.
     async fn apply_event_to_session(&self, event: &AgentStreamEvent) {
         match event {
@@ -142,7 +142,7 @@ impl AcpAgentManager {
 
     /// Drain pending domain events from the session aggregate and
     /// forward them to the persistence consumer via the mpsc channel.
-    pub(super) async fn commit_session_changes(&self, session: &mut AcpSession) {
+    pub(super) async fn commit_session_changes(&self, session: &mut RuntimeAgentSession) {
         for event in session.drain_events() {
             let _ = self.domain_event_tx.send(event).await;
         }
@@ -153,7 +153,7 @@ impl AcpAgentManager {
 mod tests {
     use super::*;
     use crate::manager::acp::runtime_event_tracker::RuntimeSessionEvent;
-    use crate::manager::acp::session::AcpSession;
+    use crate::manager::acp::session::RuntimeAgentSession;
     use crate::shared_kernel::{ModeId, ModelId};
     use agent_client_protocol::schema::v1::SessionModeState;
 
@@ -179,7 +179,7 @@ mod tests {
 
     // ── Test 1 ──────────────────────────────────────────────────────────────
     //
-    // Verify that a single `apply_observed_mode` call on AcpSession produces
+    // Verify that a single `apply_observed_mode` call on RuntimeAgentSession produces
     // exactly one `ObservedModeSynced` event, and calling it again with the
     // same value produces no additional event (idempotent).
     //
@@ -191,7 +191,7 @@ mod tests {
 
     #[test]
     fn apply_observed_mode_emits_exactly_one_event() {
-        let mut session = AcpSession::new(None, None, Default::default());
+        let mut session = RuntimeAgentSession::new(None, None, Default::default());
 
         // First apply: should emit one event
         session.apply_observed_mode(ModeId::new("plan"));
@@ -226,7 +226,7 @@ mod tests {
         // is emitted so the persistence consumer writes the new value to
         // `session_config.runtime`. Re-applying with the same current id
         // is a no-op.
-        let mut session = AcpSession::new(None, None, Default::default());
+        let mut session = RuntimeAgentSession::new(None, None, Default::default());
         let modes = SessionModeState::new("plan".to_owned(), vec![]);
         session.apply_advertised_modes(modes.clone());
         let events = session.drain_events();
@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn apply_observed_model_emits_exactly_one_event_then_idempotent() {
-        let mut session = AcpSession::new(None, None, Default::default());
+        let mut session = RuntimeAgentSession::new(None, None, Default::default());
 
         session.apply_observed_model(ModelId::new("claude-3-5-sonnet"));
         let events = session.drain_events();
@@ -275,7 +275,7 @@ mod tests {
         // This is a compile-only guard. We verify that the function has
         // the expected signature via type inference — if the signature
         // changes to take no arguments, this won't compile.
-        fn _assert_method_exists(_: impl Fn(&Arc<AcpAgentManager>, mpsc::Receiver<SessionNotification>)) {}
+        fn _assert_method_exists(_: impl Fn(&Arc<RuntimeAgentManager>, mpsc::Receiver<SessionNotification>)) {}
 
         _assert_method_exists(|m, rx| {
             m.start_session_event_tracker(rx);

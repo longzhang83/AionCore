@@ -1,4 +1,4 @@
-//! Close-reason lifecycle tests for `AcpSession`.
+//! Close-reason lifecycle tests for `RuntimeAgentSession`.
 //!
 //! Pulled out of `session.rs` to keep that file under the 1000-line
 //! per-file budget while keeping the assertions co-located with the

@@ -20,7 +20,7 @@ use crate::registry::CatalogSender;
 /// `agent_metadata` catalog so the stored handshake blob stays in sync
 /// with what the CLI is actually advertising.
 ///
-/// One task per `AcpAgentManager`; the task exits automatically when
+/// One task per `RuntimeAgentManager`; the task exits automatically when
 /// the broadcast channel closes (i.e. the manager is dropped).
 pub struct CatalogForwarder;
 
@@ -97,7 +97,7 @@ fn catalog_partial_from_event(event: &AgentStreamEvent) -> Option<AgentHandshake
 ///
 /// The availability probe opens a real session (that is how it tells "reachable
 /// but unauthorized" apart from other failures) and therefore already holds the
-/// modes/models/config the agent advertises — but it has no `AcpAgentManager`, so
+/// modes/models/config the agent advertises — but it has no `RuntimeAgentManager`, so
 /// nothing emits the events `catalog_partial_from_event` feeds on. Without this
 /// the catalog is discarded and the picker stays empty until the user opens a
 /// conversation with the agent.
