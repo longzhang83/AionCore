@@ -511,7 +511,7 @@ impl SessionAgentTask {
         }
     }
 
-    // ── enum-level helpers forwarded from AgentInstance::Session ──────────
+    // ── enum-level helpers forwarded from AgentInstance::DirectCliSession ──────────
     // Backed by the backend's cheap sync `capabilities()` snapshot (reflects
     // late model/mode/config discovery) and `dispatch` for mutations.
 
@@ -1304,7 +1304,7 @@ impl SessionAgentTask {
 }
 
 /// Open a claude/codex `SessionBackend` via the clean-slate connection and wrap it
-/// as an `AgentInstance::Session`. Called from the runtime factory when the resolved
+/// as an `AgentInstance::DirectCliSession`. Called from the runtime factory when the resolved
 /// backend is claude/codex and a spawner is available. `backend_label` is the
 /// authoritative vendor ("claude"/"codex"); other labels return `None` so the caller
 /// falls back to the legacy manager path.
@@ -1601,7 +1601,7 @@ pub async fn build_antigravity_instance(
         None,
         Some(broadcaster),
     );
-    Ok(crate::agent_task::AgentInstance::Session(task))
+    Ok(crate::agent_task::AgentInstance::DirectCliSession(task))
 }
 
 /// claude/codex session started through the runtime factory is byte-equivalent to one
@@ -1887,7 +1887,7 @@ pub async fn build_session_instance(
         // already stopped listening — the claude case (usage rides `result`).
         Some(broadcaster),
     );
-    Ok(Some(crate::agent_task::AgentInstance::Session(task)))
+    Ok(Some(crate::agent_task::AgentInstance::DirectCliSession(task)))
 }
 
 fn resolve_session_cli_program(
@@ -9024,7 +9024,7 @@ mod force_kill_tests {
         // An orchestrator legitimately holds a clone of the Arc for the whole turn.
         let orchestrator_hold = Arc::clone(&task);
 
-        let inst = AgentInstance::Session(Arc::clone(&task));
+        let inst = AgentInstance::DirectCliSession(Arc::clone(&task));
         inst.kill_and_wait(Some(AgentKillReason::UserCancelTimeout)).await;
 
         // (a) clean Finish broadcast — NOT a crash Error.
@@ -9058,7 +9058,7 @@ mod force_kill_tests {
         let mut rx = IAgentTask::subscribe(task.as_ref());
         start_turn(task.as_ref()).await;
 
-        let inst = AgentInstance::Session(Arc::clone(&task));
+        let inst = AgentInstance::DirectCliSession(Arc::clone(&task));
         inst.kill_and_wait(Some(AgentKillReason::UserCancelTimeout)).await;
         let first = next_terminal(&mut rx).await.expect("first Finish");
         assert!(matches!(first, AgentStreamEvent::RunComplete(_)));
@@ -9080,7 +9080,7 @@ mod force_kill_tests {
         let mut rx = IAgentTask::subscribe(task.as_ref());
         start_turn(task.as_ref()).await;
 
-        let inst = AgentInstance::Session(Arc::clone(&task));
+        let inst = AgentInstance::DirectCliSession(Arc::clone(&task));
         inst.kill_and_wait(Some(AgentKillReason::IdleTimeout)).await;
         assert_eq!(
             counter.load(Ordering::SeqCst),

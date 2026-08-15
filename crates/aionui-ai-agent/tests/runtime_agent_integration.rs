@@ -325,7 +325,7 @@ async fn runtime_agent_model_info_captured() {
     // into the private `RuntimeAgentManager::model()`: the ai-agent crate only
     // exposes `AgentInstance` to downstream callers, so tests should
     // exercise the same surface.
-    let instance = AgentInstance::Acp(agent.clone());
+    let instance = AgentInstance::ProtocolAdapterAgent(agent.clone());
     let resp = instance.get_model().await.expect("get_model should succeed");
     let info = resp.model_info.expect("Model info should be captured");
     assert_eq!(info.current_model_id.as_deref(), Some("claude-sonnet-4"));

@@ -1,7 +1,7 @@
 //! T7/T8 (spec §10.1/§10.5/§10.6, plan §5): conversation-layer convergence of a
 //! `UserCancelTimeout` force-kill on the direct-CLI (`SessionAgentTask`) path.
 //!
-//! Builds a REAL `AgentInstance::Session` over a never-ending fake `SessionBackend`
+//! Builds a REAL `AgentInstance::DirectCliSession` over a never-ending fake `SessionBackend`
 //! (the turn never finishes on its own — the ELECTRON-3RW window). Cancelling the
 //! turn then force-killing it must (T7) drive the real `StreamRelay` to a CLEAN
 //! `Finish` terminal and let the runtime state converge back to `Idle`
@@ -100,7 +100,7 @@ async fn user_cancel_kill_converges_session_turn_to_idle() {
     let bus = Arc::new(BroadcastEventBus::new(64));
 
     let task = session_task();
-    let inst = AgentInstance::Session(Arc::clone(&task));
+    let inst = AgentInstance::DirectCliSession(Arc::clone(&task));
 
     // Claim the turn + mark cancelling → the stuck, gated state (log E4–E8).
     let runtime = Arc::new(ConversationRuntimeStateService::default());
@@ -164,7 +164,7 @@ async fn kill_broadcasts_turn_completed_scoped_to_conversation() {
     let mut ws_rx = bus.subscribe();
 
     let task = session_task();
-    let inst = AgentInstance::Session(Arc::clone(&task));
+    let inst = AgentInstance::DirectCliSession(Arc::clone(&task));
 
     let rx = IAgentTask::subscribe(task.as_ref());
     let relay = StreamRelay::new(

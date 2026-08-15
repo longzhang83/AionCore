@@ -605,8 +605,8 @@ impl ConversationService {
     /// agent titles and get none.
     pub(crate) fn ensure_background_watcher(&self, user_id: &str, conversation_id: &str, agent: &AgentInstance) {
         let (instance_ptr, title_only) = match agent {
-            AgentInstance::Session(task) => (Arc::as_ptr(task) as usize, false),
-            AgentInstance::Acp(mgr) => (Arc::as_ptr(mgr) as usize, true),
+            AgentInstance::DirectCliSession(task) => (Arc::as_ptr(task) as usize, false),
+            AgentInstance::ProtocolAdapterAgent(mgr) => (Arc::as_ptr(mgr) as usize, true),
             _ => return,
         };
         let mut map = match self.background_watchers.lock() {
@@ -3665,7 +3665,7 @@ impl ConversationService {
             });
         };
         let killed = match &agent {
-            AgentInstance::Acp(mgr) => mgr.kill_client_terminal(terminal_id).await,
+            AgentInstance::ProtocolAdapterAgent(mgr) => mgr.kill_client_terminal(terminal_id).await,
             // Client-hosted terminals only exist on the ACP path.
             _ => false,
         };

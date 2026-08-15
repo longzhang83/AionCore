@@ -59,7 +59,7 @@ async fn handle_hook(
         n => n,
     };
 
-    let Some(AgentInstance::Session(task)) = state.task_manager.get_task(&conversation_id) else {
+    let Some(AgentInstance::DirectCliSession(task)) = state.task_manager.get_task(&conversation_id) else {
         // The conversation was closed or rebuilt while agy was mid-tool.
         tracing::warn!(
             conversation_id = %conversation_id,

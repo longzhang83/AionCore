@@ -264,7 +264,7 @@ pub(super) async fn build(
     // the caller sees "warmed up" == "ready for PUT /mode | /model".
     arc.warmup_session().await?;
 
-    let instance = AgentInstance::Acp(Arc::clone(&arc));
+    let instance = AgentInstance::ProtocolAdapterAgent(Arc::clone(&arc));
 
     // Hand the service the domain event receiver so it can
     // persist user intent changes without reverse-engineering
@@ -1199,27 +1199,25 @@ mod tests {
         assert!(servers.is_empty());
     }
 
-    /// Antigravity arrives on the runtime factory because the renderer puts every
-    /// non-aionrs agent on the ACP chat surface — but agy does not speak ACP.
-    /// Routing it to the manager makes the initialize handshake time out and the
-    /// user sees "The selected Agent failed to start", with a fully working agy
-    /// installed. Verified end-to-end from the AionUi UI.
     #[test]
-    fn antigravity_never_routes_to_the_runtime_manager() {
-        assert_eq!(route_for_backend(Some("antigravity")), BackendRoute::Antigravity);
-    }
-
-    #[test]
-    fn claude_and_codex_keep_the_direct_cli_route() {
+    fn route_for_backend_preserves_all_runtime_dispatch_paths() {
         assert_eq!(route_for_backend(Some("claude")), BackendRoute::DirectCli);
         assert_eq!(route_for_backend(Some("codex")), BackendRoute::DirectCli);
-    }
-
-    #[test]
-    fn a_runtime_vendor_still_reaches_the_manager() {
-        // The default must stay the manager: every other vendor DOES speak ACP.
+        assert_eq!(route_for_backend(Some("antigravity")), BackendRoute::Antigravity);
         assert_eq!(route_for_backend(Some("gemini")), BackendRoute::RuntimeManager);
         assert_eq!(route_for_backend(Some("opencode")), BackendRoute::RuntimeManager);
         assert_eq!(route_for_backend(None), BackendRoute::RuntimeManager);
+    }
+
+    #[test]
+    fn factory_constructors_return_semantic_dispatcher_variants() {
+        fn assert_direct_cli_factory(
+            _factory: fn(Arc<crate::session_agent::SessionAgentTask>) -> AgentInstance,
+        ) {
+        }
+        fn assert_protocol_adapter_factory(_factory: fn(Arc<RuntimeAgentManager>) -> AgentInstance) {}
+
+        assert_direct_cli_factory(AgentInstance::DirectCliSession);
+        assert_protocol_adapter_factory(AgentInstance::ProtocolAdapterAgent);
     }
 }

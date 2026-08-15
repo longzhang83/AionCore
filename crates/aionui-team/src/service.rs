@@ -2260,7 +2260,7 @@ impl TeamSessionService {
 async fn set_active_agent_session_mode(instance: &AgentInstance, mode: &str) -> Result<(), AgentError> {
     #[allow(unreachable_patterns)]
     match instance {
-        AgentInstance::Acp(_) => instance.set_config_option("mode", mode).await.map(|_| ()),
+        AgentInstance::ProtocolAdapterAgent(_) => instance.set_config_option("mode", mode).await.map(|_| ()),
         AgentInstance::Aionrs(manager) => manager.set_mode(mode).await,
         _ => instance.set_config_option("mode", mode).await.map(|_| ()),
     }
