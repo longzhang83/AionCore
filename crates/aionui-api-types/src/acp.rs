@@ -21,7 +21,7 @@ pub struct DetectCliResponse {
 
 /// Response for ACP environment variables.
 #[derive(Debug, Serialize)]
-pub struct AcpEnvResponse {
+pub struct RuntimeEnvResponse {
     pub env: HashMap<String, String>,
 }
 
@@ -54,7 +54,7 @@ pub struct ModelInfoEntry {
 /// Frontend-compatible model info response.
 ///
 /// Maps from the SDK's camelCase `SessionModelState` to the snake_case
-/// `AcpModelInfo` format the renderer expects.
+/// `RuntimeModelInfo` format the renderer expects.
 #[derive(Debug, Serialize)]
 pub struct GetModelInfoResponse {
     pub model_info: Option<ModelInfoPayload>,
@@ -62,7 +62,7 @@ pub struct GetModelInfoResponse {
 
 /// A single select option inside an ACP config option.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AcpConfigSelectOptionDto {
+pub struct RuntimeConfigSelectOptionDto {
     pub value: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -74,7 +74,7 @@ pub struct AcpConfigSelectOptionDto {
 
 /// Frontend-facing ACP config option. Always serializes with snake_case field names.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AcpConfigOptionDto {
+pub struct RuntimeConfigOptionDto {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -89,7 +89,7 @@ pub struct AcpConfigOptionDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_value: Option<String>,
     #[serde(default)]
-    pub options: Vec<AcpConfigSelectOptionDto>,
+    pub options: Vec<RuntimeConfigSelectOptionDto>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -106,16 +106,16 @@ pub struct SetConfigOptionRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetConfigOptionsResponse {
-    pub config_options: Vec<AcpConfigOptionDto>,
+    pub config_options: Vec<RuntimeConfigOptionDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SetConfigOptionResponse {
     pub confirmation: ConfigOptionConfirmation,
-    pub config_options: Option<Vec<AcpConfigOptionDto>>,
+    pub config_options: Option<Vec<RuntimeConfigOptionDto>>,
 }
 
-/// Inner model info payload matching the frontend's `AcpModelInfo` type.
+/// Inner model info payload matching the frontend's `RuntimeModelInfo` type.
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelInfoPayload {
     pub current_model_id: Option<String>,
@@ -241,7 +241,7 @@ mod tests {
     #[test]
     fn config_options_response_serializes_snake_case() {
         let resp = GetConfigOptionsResponse {
-            config_options: vec![AcpConfigOptionDto {
+            config_options: vec![RuntimeConfigOptionDto {
                 id: "reasoning_effort".to_owned(),
                 name: Some("Reasoning Effort".to_owned()),
                 label: None,
@@ -249,7 +249,7 @@ mod tests {
                 category: Some("thought_level".to_owned()),
                 option_type: "select".to_owned(),
                 current_value: Some("high".to_owned()),
-                options: vec![AcpConfigSelectOptionDto {
+                options: vec![RuntimeConfigSelectOptionDto {
                     value: "high".to_owned(),
                     name: Some("High".to_owned()),
                     label: None,
@@ -330,7 +330,7 @@ mod tests {
 
     #[test]
     fn env_response_serde() {
-        let resp = AcpEnvResponse {
+        let resp = RuntimeEnvResponse {
             env: HashMap::from([("PATH".into(), "/usr/bin".into()), ("HOME".into(), "/home/user".into())]),
         };
         let json = serde_json::to_value(&resp).unwrap();

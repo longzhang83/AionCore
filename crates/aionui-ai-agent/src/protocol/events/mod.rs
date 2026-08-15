@@ -7,17 +7,15 @@ use serde::{Deserialize, Serialize};
 
 pub use aionui_api_types::AgentStreamErrorData as ErrorEventData;
 
-pub use permission::{
-    AcpPermissionOptionData, AcpPermissionOptionKind, AcpPermissionToolCall, ApprovalRequestEventData,
-};
+pub use permission::{ApprovalOptionData, ApprovalOptionKind, ApprovalRequestEventData, ApprovalToolCall};
 pub use session_updates::{
     AgentStatusEventData, AvailableCommandsEventData, CronTriggerEventData, PlanEventData, SkillSuggestEventData,
     ThinkingEventData,
 };
 pub use tool_call::{
-    AcpToolCallContentItem, AcpToolCallKind, AcpToolCallLocationItem, AcpToolCallStatus, AcpToolCallTextBlock,
-    AcpToolCallTextBlockType, ToolCallEventData, ToolCallStatus, ToolGroupEntry, ToolGroupStatus, ToolResultEventData,
-    ToolResultStatus,
+    ProtocolToolCallStatus, ToolCallEventData, ToolCallKind, ToolCallStatus, ToolGroupEntry, ToolGroupStatus,
+    ToolLocationItem, ToolResultContentItem, ToolResultEventData, ToolResultStatus, ToolResultTextBlock,
+    ToolResultTextBlockType,
 };
 pub(crate) use translate::{permission_request_to_event_data, session_notification_to_events};
 
@@ -164,7 +162,7 @@ pub struct FinishEventData {
 /// layer before the stock ACP schema can hard-reject it as `-32602`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum AcpDialectSignalKind {
+pub enum DialectSignalKind {
     /// Non-standard `session_end` terminal marker (carries `stopReason:"end_turn"`).
     SessionEnd,
     /// Emergency auto-compaction / max-token pressure notification
@@ -202,14 +200,14 @@ pub struct WorkflowProgressData {
 
 /// Data used while translating absorbed ACP dialect notifications into Runtime-neutral events.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AcpDialectSignalData {
-    pub kind: AcpDialectSignalKind,
+pub struct DialectSignalData {
+    pub kind: DialectSignalKind,
 }
 
-pub(crate) fn runtime_event_from_dialect_signal(kind: AcpDialectSignalKind) -> AgentStreamEvent {
+pub(crate) fn runtime_event_from_dialect_signal(kind: DialectSignalKind) -> AgentStreamEvent {
     match kind {
-        AcpDialectSignalKind::SessionEnd => AgentStreamEvent::RunComplete(FinishEventData::default()),
-        AcpDialectSignalKind::TokenPressure => AgentStreamEvent::ContextUsage(serde_json::json!({
+        DialectSignalKind::SessionEnd => AgentStreamEvent::RunComplete(FinishEventData::default()),
+        DialectSignalKind::TokenPressure => AgentStreamEvent::ContextUsage(serde_json::json!({
             "kind": "token_pressure",
         })),
     }

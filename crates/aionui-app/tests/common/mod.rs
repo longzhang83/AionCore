@@ -200,7 +200,7 @@ impl IMockAgent for NoopMockAgent {
         &self,
     ) -> Result<aionui_api_types::GetConfigOptionsResponse, aionui_ai_agent::AgentError> {
         Ok(aionui_api_types::GetConfigOptionsResponse {
-            config_options: vec![aionui_api_types::AcpConfigOptionDto {
+            config_options: vec![aionui_api_types::RuntimeConfigOptionDto {
                 id: "model".to_owned(),
                 name: Some("Model".to_owned()),
                 label: None,
@@ -208,7 +208,7 @@ impl IMockAgent for NoopMockAgent {
                 category: Some("model".to_owned()),
                 option_type: "select".to_owned(),
                 current_value: Some("mock-model".to_owned()),
-                options: vec![aionui_api_types::AcpConfigSelectOptionDto {
+                options: vec![aionui_api_types::RuntimeConfigSelectOptionDto {
                     value: "mock-model".to_owned(),
                     name: Some("Mock Model".to_owned()),
                     label: Some("Mock Model".to_owned()),
@@ -225,7 +225,7 @@ impl IMockAgent for NoopMockAgent {
     ) -> Result<aionui_api_types::SetConfigOptionResponse, aionui_ai_agent::AgentError> {
         Ok(aionui_api_types::SetConfigOptionResponse {
             confirmation: aionui_api_types::ConfigOptionConfirmation::Observed,
-            config_options: Some(vec![aionui_api_types::AcpConfigOptionDto {
+            config_options: Some(vec![aionui_api_types::RuntimeConfigOptionDto {
                 id: "model".to_owned(),
                 name: Some("Model".to_owned()),
                 label: None,
@@ -233,7 +233,7 @@ impl IMockAgent for NoopMockAgent {
                 category: Some("model".to_owned()),
                 option_type: "select".to_owned(),
                 current_value: Some("mock-model-updated".to_owned()),
-                options: vec![aionui_api_types::AcpConfigSelectOptionDto {
+                options: vec![aionui_api_types::RuntimeConfigSelectOptionDto {
                     value: "mock-model-updated".to_owned(),
                     name: Some("Mock Model Updated".to_owned()),
                     label: Some("Mock Model Updated".to_owned()),

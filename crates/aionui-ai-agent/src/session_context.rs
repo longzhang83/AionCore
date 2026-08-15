@@ -1,4 +1,4 @@
-use aionui_api_types::{AcpBuildExtra, AionrsBuildExtra, TeamSessionBinding};
+use aionui_api_types::{AionrsBuildExtra, RuntimeBuildConfig, TeamSessionBinding};
 use aionui_common::{AgentType, ProviderWithModel};
 
 use crate::shared_kernel::PersistedSessionState;
@@ -47,7 +47,7 @@ pub enum AgentSessionKind {
 
 #[derive(Debug, Clone)]
 pub struct AcpSessionBuildContext {
-    pub config: AcpBuildExtra,
+    pub config: RuntimeBuildConfig,
     pub team: Option<TeamSessionBinding>,
     pub belongs_to_team: bool,
     pub session_id: Option<String>,
@@ -61,7 +61,7 @@ pub struct AcpSessionBuildContext {
 /// separate so the two never share a factory path (agy does not speak ACP).
 #[derive(Debug, Clone)]
 pub struct AntigravitySessionBuildContext {
-    pub config: AcpBuildExtra,
+    pub config: RuntimeBuildConfig,
     pub team: Option<TeamSessionBinding>,
     pub belongs_to_team: bool,
     /// The agy conversation id to resume, when this session has run before.

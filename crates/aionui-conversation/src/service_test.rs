@@ -19,8 +19,8 @@ use aionui_ai_agent::{
 };
 
 use aionui_api_types::{
-    AcpConfigOptionDto, AgentErrorCode, AgentModeResponse, ConfigOptionConfirmation, ConversationArtifactKind,
-    ConversationResponse, GetConfigOptionsResponse, GetModelInfoResponse, ModelInfoEntry, ModelInfoPayload,
+    AgentErrorCode, AgentModeResponse, ConfigOptionConfirmation, ConversationArtifactKind, ConversationResponse,
+    GetConfigOptionsResponse, GetModelInfoResponse, ModelInfoEntry, ModelInfoPayload, RuntimeConfigOptionDto,
     SetConfigOptionRequest, SetConfigOptionResponse,
 };
 use aionui_api_types::{
@@ -2977,7 +2977,7 @@ struct MockAgent {
     stopped: Mutex<bool>,
     mode: Mutex<String>,
     model_id: Mutex<String>,
-    config_options: Arc<Mutex<Vec<AcpConfigOptionDto>>>,
+    config_options: Arc<Mutex<Vec<RuntimeConfigOptionDto>>>,
     set_config_option_calls: Arc<Mutex<Vec<(String, String)>>>,
     set_config_option_error: Arc<Mutex<Option<AgentError>>>,
     set_config_option_response: Arc<Mutex<Option<SetConfigOptionResponse>>>,
@@ -3065,7 +3065,7 @@ impl MockAgent {
         }
     }
 
-    fn with_config_options(self, options: Vec<AcpConfigOptionDto>) -> Self {
+    fn with_config_options(self, options: Vec<RuntimeConfigOptionDto>) -> Self {
         *self.config_options.lock().unwrap() = options;
         self
     }
@@ -4057,7 +4057,7 @@ async fn get_config_options_returns_active_agent_snapshot() {
     let task_mgr = Arc::new(MockTaskManager::new());
     let (svc, _broadcaster, _repo) = make_service_with_mock_task_manager(task_mgr.clone());
     let conv = svc.create("user_1", make_create_req()).await.unwrap();
-    let agent = MockAgent::new(&conv.id).with_config_options(vec![AcpConfigOptionDto {
+    let agent = MockAgent::new(&conv.id).with_config_options(vec![RuntimeConfigOptionDto {
         id: "model".to_owned(),
         name: Some("Model".to_owned()),
         label: None,
@@ -4196,7 +4196,7 @@ async fn ensure_runtime_uses_existing_agent_snapshot_without_recovery() {
     let task_mgr = Arc::new(MockTaskManager::new());
     let (svc, _broadcaster, _repo) = make_service_with_mock_task_manager(task_mgr.clone());
     let conv = svc.create("user_1", make_create_req()).await.unwrap();
-    let agent = MockAgent::new(&conv.id).with_config_options(vec![AcpConfigOptionDto {
+    let agent = MockAgent::new(&conv.id).with_config_options(vec![RuntimeConfigOptionDto {
         id: "model".to_owned(),
         name: Some("Model".to_owned()),
         label: None,
@@ -4224,16 +4224,18 @@ async fn set_config_option_returns_observed_confirmation() {
     let task_mgr = Arc::new(MockTaskManager::new());
     let (svc, _broadcaster, _repo) = make_service_with_mock_task_manager(task_mgr.clone());
     let conv = svc.create("user_1", make_create_req()).await.unwrap();
-    let agent = Arc::new(MockAgent::new(&conv.id).with_config_options(vec![AcpConfigOptionDto {
-        id: "reasoning_effort".to_owned(),
-        name: Some("Reasoning Effort".to_owned()),
-        label: None,
-        description: None,
-        category: Some("thought_level".to_owned()),
-        option_type: "select".to_owned(),
-        current_value: Some("high".to_owned()),
-        options: Vec::new(),
-    }]));
+    let agent = Arc::new(
+        MockAgent::new(&conv.id).with_config_options(vec![RuntimeConfigOptionDto {
+            id: "reasoning_effort".to_owned(),
+            name: Some("Reasoning Effort".to_owned()),
+            label: None,
+            description: None,
+            category: Some("thought_level".to_owned()),
+            option_type: "select".to_owned(),
+            current_value: Some("high".to_owned()),
+            options: Vec::new(),
+        }]),
+    );
     task_mgr.insert_agent(&conv.id, AgentInstance::Mock(agent.clone()));
 
     let result = svc
@@ -4318,20 +4320,21 @@ async fn run_agent_turn_applies_required_runtime_mode_after_stream_subscription(
     let conv = svc.create("user_1", make_create_req()).await.unwrap();
     broadcaster.take_events();
 
-    let agent = Arc::new(
-        MockAgent::new(&conv.id)
-            .with_mode("yolo")
-            .with_config_options(vec![AcpConfigOptionDto {
-                id: "mode".to_owned(),
-                name: Some("Mode".to_owned()),
-                label: None,
-                description: None,
-                category: Some("mode".to_owned()),
-                option_type: "select".to_owned(),
-                current_value: Some("yolo".to_owned()),
-                options: Vec::new(),
-            }]),
-    );
+    let agent =
+        Arc::new(
+            MockAgent::new(&conv.id)
+                .with_mode("yolo")
+                .with_config_options(vec![RuntimeConfigOptionDto {
+                    id: "mode".to_owned(),
+                    name: Some("Mode".to_owned()),
+                    label: None,
+                    description: None,
+                    category: Some("mode".to_owned()),
+                    option_type: "select".to_owned(),
+                    current_value: Some("yolo".to_owned()),
+                    options: Vec::new(),
+                }]),
+        );
     task_mgr.insert_agent(&conv.id, AgentInstance::Mock(agent.clone()));
 
     let outcome = svc
@@ -8295,7 +8298,7 @@ async fn cron_required_runtime_mode_wins_over_resolved_permission_seed() {
     let agent = Arc::new(
         MockAgent::new(&row.id)
             .with_mode("yolo")
-            .with_config_options(vec![AcpConfigOptionDto {
+            .with_config_options(vec![RuntimeConfigOptionDto {
                 id: "mode".to_owned(),
                 name: Some("Mode".to_owned()),
                 label: None,

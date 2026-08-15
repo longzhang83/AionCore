@@ -1,7 +1,7 @@
 use crate::cc_switch;
 use crate::manager::acp::mode_normalize::normalize_requested_mode;
 use crate::shared_kernel::PersistedSessionState;
-use aionui_api_types::{AcpBuildExtra, AgentMetadata};
+use aionui_api_types::{AgentMetadata, RuntimeBuildConfig};
 use aionui_common::CommandSpec;
 
 const CODEX_CONFIG_FLAG: &str = "-c";
@@ -11,7 +11,7 @@ const CODEX_WINDOWS_UNELEVATED_SANDBOX: &str = "windows.sandbox=\"unelevated\"";
 
 pub(super) struct AcpLaunchPolicyInput<'a> {
     pub metadata: &'a AgentMetadata,
-    pub config: &'a AcpBuildExtra,
+    pub config: &'a RuntimeBuildConfig,
     pub session_snapshot: Option<&'a PersistedSessionState>,
     pub runtime_env: &'a [(String, String)],
 }
@@ -57,7 +57,7 @@ fn append_claude_provider_env(command_spec: &mut CommandSpec, metadata: &AgentMe
 
 fn initial_mode_from_build_context(
     metadata: &AgentMetadata,
-    config: &AcpBuildExtra,
+    config: &RuntimeBuildConfig,
     session_snapshot: Option<&PersistedSessionState>,
 ) -> Option<String> {
     session_snapshot
@@ -155,7 +155,7 @@ mod tests {
             cwd: None,
         };
         let metadata = agent_metadata_with_backend(Some("codex"));
-        let config = AcpBuildExtra {
+        let config = RuntimeBuildConfig {
             session_mode: Some("full-access".into()),
             ..Default::default()
         };
@@ -201,7 +201,7 @@ mod tests {
             cwd: None,
         };
         let metadata = agent_metadata_with_backend(Some("codex"));
-        let config = AcpBuildExtra {
+        let config = RuntimeBuildConfig {
             session_mode: Some("agent-full-access".into()),
             ..Default::default()
         };
@@ -248,7 +248,7 @@ mod tests {
             &mut command_spec,
             AcpLaunchPolicyInput {
                 metadata: &metadata,
-                config: &AcpBuildExtra::default(),
+                config: &RuntimeBuildConfig::default(),
                 session_snapshot: Some(&snapshot),
                 runtime_env: &[],
             },
@@ -277,7 +277,7 @@ mod tests {
             cwd: None,
         };
         let metadata = agent_metadata_with_backend(Some("claude"));
-        let config = AcpBuildExtra::default();
+        let config = RuntimeBuildConfig::default();
 
         apply_acp_launch_policy(
             &mut command_spec,
@@ -298,7 +298,7 @@ mod tests {
             current_mode_id: Some(crate::shared_kernel::ModeId::new("full-access")),
             ..Default::default()
         };
-        let config = AcpBuildExtra {
+        let config = RuntimeBuildConfig {
             session_mode: Some("auto".into()),
             ..Default::default()
         };

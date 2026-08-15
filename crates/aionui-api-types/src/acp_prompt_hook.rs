@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 /// transform a prompt. Hook name and message travel as plain strings so
 /// the frontend can render a toast without owning the hook enum.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AcpPromptHookWarningPayload {
+pub struct PromptHookWarningPayload {
     /// Stable hook identifier, e.g. "session_new_prelude".
     pub hook: String,
     /// Human-readable failure description.
@@ -17,7 +17,7 @@ mod tests {
 
     #[test]
     fn serializes_to_snake_case_hook_and_message() {
-        let p = AcpPromptHookWarningPayload {
+        let p = PromptHookWarningPayload {
             hook: "session_new_prelude".into(),
             message: "discover_by_names failed".into(),
         };
@@ -28,12 +28,12 @@ mod tests {
 
     #[test]
     fn round_trip_preserves_fields() {
-        let p = AcpPromptHookWarningPayload {
+        let p = PromptHookWarningPayload {
             hook: "model_identity_reminder".into(),
             message: "".into(),
         };
         let s = serde_json::to_string(&p).unwrap();
-        let back: AcpPromptHookWarningPayload = serde_json::from_str(&s).unwrap();
+        let back: PromptHookWarningPayload = serde_json::from_str(&s).unwrap();
         assert_eq!(back, p);
     }
 }

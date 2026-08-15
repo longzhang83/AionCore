@@ -17,7 +17,7 @@ pub struct NameValuePair {
 }
 
 // ---------------------------------------------------------------------------
-// AcpSessionMcpServer
+// RuntimeSessionMcpServer
 // ---------------------------------------------------------------------------
 
 /// ACP session MCP server configuration.
@@ -29,7 +29,7 @@ pub struct NameValuePair {
 /// - **Http / Sse**: URL-based MCP servers (url + optional headers)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
-pub enum AcpSessionMcpServer {
+pub enum RuntimeSessionMcpServer {
     Stdio {
         name: String,
         command: String,
@@ -53,7 +53,7 @@ pub enum AcpSessionMcpServer {
 }
 
 // ---------------------------------------------------------------------------
-// AcpMcpCapabilities
+// RuntimeMcpCapabilities
 // ---------------------------------------------------------------------------
 
 /// ACP backend MCP capability declaration.
@@ -61,20 +61,20 @@ pub enum AcpSessionMcpServer {
 /// Describes which transport types the ACP backend supports for
 /// spawning MCP servers during a session.
 #[derive(Debug, Clone, PartialEq)]
-pub struct AcpMcpCapabilities {
+pub struct RuntimeMcpCapabilities {
     pub stdio: bool,
     pub http: bool,
     pub sse: bool,
 }
 
-impl AcpMcpCapabilities {
+impl RuntimeMcpCapabilities {
     /// Returns true if no transport type is supported.
     pub fn is_empty(&self) -> bool {
         !self.stdio && !self.http && !self.sse
     }
 }
 
-impl Default for AcpMcpCapabilities {
+impl Default for RuntimeMcpCapabilities {
     fn default() -> Self {
         Self {
             stdio: true,
@@ -111,28 +111,31 @@ pub struct ImageGenConfig {
 /// Looks for capabilities under `mcp_capabilities`, `mcpCapabilities`,
 /// or `mcp` keys. Returns default capabilities (stdio only) when the
 /// field is missing or not an object.
-pub fn parse_acp_mcp_capabilities(response: &serde_json::Value) -> AcpMcpCapabilities {
+pub fn parse_acp_mcp_capabilities(response: &serde_json::Value) -> RuntimeMcpCapabilities {
     let caps = response
         .get("mcp_capabilities")
         .or_else(|| response.get("mcpCapabilities"))
         .or_else(|| response.get("mcp"));
 
     let Some(caps) = caps else {
-        return AcpMcpCapabilities::default();
+        return RuntimeMcpCapabilities::default();
     };
 
     let http = bool_field(caps, "http");
     let sse = bool_field(caps, "sse");
     let stdio = bool_field(caps, "stdio") || http || sse;
 
-    AcpMcpCapabilities { stdio, http, sse }
+    RuntimeMcpCapabilities { stdio, http, sse }
 }
 
 /// Build ACP session MCP server configs from domain servers.
 ///
 /// Filters to only enabled servers whose transport type is supported
 /// by the ACP backend, then converts to the ACP wire format.
-pub fn build_session_mcp_servers(servers: &[McpServer], capabilities: &AcpMcpCapabilities) -> Vec<AcpSessionMcpServer> {
+pub fn build_session_mcp_servers(
+    servers: &[McpServer],
+    capabilities: &RuntimeMcpCapabilities,
+) -> Vec<RuntimeSessionMcpServer> {
     servers
         .iter()
         .filter(|s| s.enabled)
@@ -145,17 +148,17 @@ pub fn build_session_mcp_servers(servers: &[McpServer], capabilities: &AcpMcpCap
 /// Returns `None` if the ACP backend doesn't support stdio transport
 /// or if `command` is empty.
 pub fn build_builtin_image_gen_server(
-    capabilities: &AcpMcpCapabilities,
+    capabilities: &RuntimeMcpCapabilities,
     command: &str,
     config: &ImageGenConfig,
-) -> Option<AcpSessionMcpServer> {
+) -> Option<RuntimeSessionMcpServer> {
     if !capabilities.stdio || command.is_empty() {
         return None;
     }
 
     let env = build_image_gen_env(config);
 
-    Some(AcpSessionMcpServer::Stdio {
+    Some(RuntimeSessionMcpServer::Stdio {
         name: "aionui-image-generation".into(),
         command: command.to_owned(),
         args: Vec::new(),
@@ -172,24 +175,26 @@ fn bool_field(value: &serde_json::Value, key: &str) -> bool {
     value.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
 }
 
-/// Convert a domain `McpServer` to `AcpSessionMcpServer`.
+/// Convert a domain `McpServer` to `RuntimeSessionMcpServer`.
 ///
 /// Returns `None` if the server's transport type is not supported
 /// by the given capabilities.
-fn convert_server(server: &McpServer, capabilities: &AcpMcpCapabilities) -> Option<AcpSessionMcpServer> {
+fn convert_server(server: &McpServer, capabilities: &RuntimeMcpCapabilities) -> Option<RuntimeSessionMcpServer> {
     match &server.transport {
-        McpServerTransport::Stdio { command, args, env } if capabilities.stdio => Some(AcpSessionMcpServer::Stdio {
-            name: server.name.clone(),
-            command: command.clone(),
-            args: args.clone(),
-            env: hashmap_to_pairs(env),
-        }),
-        McpServerTransport::Http { url, headers } if capabilities.http => Some(AcpSessionMcpServer::Http {
+        McpServerTransport::Stdio { command, args, env } if capabilities.stdio => {
+            Some(RuntimeSessionMcpServer::Stdio {
+                name: server.name.clone(),
+                command: command.clone(),
+                args: args.clone(),
+                env: hashmap_to_pairs(env),
+            })
+        }
+        McpServerTransport::Http { url, headers } if capabilities.http => Some(RuntimeSessionMcpServer::Http {
             name: server.name.clone(),
             url: url.clone(),
             headers: hashmap_to_pairs(headers),
         }),
-        McpServerTransport::Sse { url, headers } if capabilities.sse => Some(AcpSessionMcpServer::Sse {
+        McpServerTransport::Sse { url, headers } if capabilities.sse => Some(RuntimeSessionMcpServer::Sse {
             name: server.name.clone(),
             url: url.clone(),
             headers: hashmap_to_pairs(headers),
@@ -288,19 +293,19 @@ mod tests {
         }
     }
 
-    fn all_caps() -> AcpMcpCapabilities {
-        AcpMcpCapabilities {
+    fn all_caps() -> RuntimeMcpCapabilities {
+        RuntimeMcpCapabilities {
             stdio: true,
             http: true,
             sse: true,
         }
     }
 
-    // -- AcpMcpCapabilities ---------------------------------------------------
+    // -- RuntimeMcpCapabilities ---------------------------------------------------
 
     #[test]
     fn capabilities_default_is_stdio_only() {
-        let caps = AcpMcpCapabilities::default();
+        let caps = RuntimeMcpCapabilities::default();
         assert!(caps.stdio);
         assert!(!caps.http);
         assert!(!caps.sse);
@@ -308,13 +313,13 @@ mod tests {
 
     #[test]
     fn capabilities_is_empty() {
-        let empty = AcpMcpCapabilities {
+        let empty = RuntimeMcpCapabilities {
             stdio: false,
             http: false,
             sse: false,
         };
         assert!(empty.is_empty());
-        assert!(!AcpMcpCapabilities::default().is_empty());
+        assert!(!RuntimeMcpCapabilities::default().is_empty());
     }
 
     // -- parse_acp_mcp_capabilities -------------------------------------------
@@ -354,7 +359,7 @@ mod tests {
     fn parse_missing_capabilities_returns_default() {
         let resp = serde_json::json!({ "other": "data" });
         let caps = parse_acp_mcp_capabilities(&resp);
-        assert_eq!(caps, AcpMcpCapabilities::default());
+        assert_eq!(caps, RuntimeMcpCapabilities::default());
     }
 
     #[test]
@@ -398,7 +403,7 @@ mod tests {
         assert!(result.is_some());
         let acp = result.unwrap();
         match acp {
-            AcpSessionMcpServer::Stdio {
+            RuntimeSessionMcpServer::Stdio {
                 name,
                 command,
                 args,
@@ -421,7 +426,7 @@ mod tests {
         let result = convert_server(&server, &all_caps());
         assert!(result.is_some());
         match result.unwrap() {
-            AcpSessionMcpServer::Http { name, url, headers } => {
+            RuntimeSessionMcpServer::Http { name, url, headers } => {
                 assert_eq!(name, "http-test");
                 assert_eq!(url, "https://example.com/mcp");
                 assert_eq!(headers.len(), 1);
@@ -438,7 +443,7 @@ mod tests {
         let result = convert_server(&server, &all_caps());
         assert!(result.is_some());
         match result.unwrap() {
-            AcpSessionMcpServer::Sse { name, url, headers, .. } => {
+            RuntimeSessionMcpServer::Sse { name, url, headers, .. } => {
                 assert_eq!(name, "sse-test");
                 assert_eq!(url, "https://example.com/sse");
                 assert!(headers.is_empty());
@@ -449,7 +454,7 @@ mod tests {
 
     #[test]
     fn convert_skips_unsupported_transport() {
-        let stdio_only = AcpMcpCapabilities {
+        let stdio_only = RuntimeMcpCapabilities {
             stdio: true,
             http: false,
             sse: false,
@@ -472,14 +477,14 @@ mod tests {
         let result = build_session_mcp_servers(&servers, &all_caps());
         assert_eq!(result.len(), 1);
         match &result[0] {
-            AcpSessionMcpServer::Stdio { name, .. } => assert_eq!(name, "enabled"),
+            RuntimeSessionMcpServer::Stdio { name, .. } => assert_eq!(name, "enabled"),
             _ => panic!("expected Stdio"),
         }
     }
 
     #[test]
     fn build_filters_by_capabilities() {
-        let caps = AcpMcpCapabilities {
+        let caps = RuntimeMcpCapabilities {
             stdio: true,
             http: false,
             sse: true,
@@ -501,7 +506,7 @@ mod tests {
 
     #[test]
     fn build_no_capabilities_returns_empty() {
-        let no_caps = AcpMcpCapabilities {
+        let no_caps = RuntimeMcpCapabilities {
             stdio: false,
             http: false,
             sse: false,
@@ -530,7 +535,7 @@ mod tests {
         let result = build_builtin_image_gen_server(&caps, "/usr/bin/img-gen", &config);
         assert!(result.is_some());
         match result.unwrap() {
-            AcpSessionMcpServer::Stdio {
+            RuntimeSessionMcpServer::Stdio {
                 name,
                 command,
                 args,
@@ -558,7 +563,7 @@ mod tests {
         let result = build_builtin_image_gen_server(&caps, "img-gen", &config);
         assert!(result.is_some());
         match result.unwrap() {
-            AcpSessionMcpServer::Stdio { env, .. } => {
+            RuntimeSessionMcpServer::Stdio { env, .. } => {
                 assert_eq!(env.len(), 2);
                 // Sorted alphabetically: API_URL before MODEL
                 assert_eq!(env[0].name, "AIONUI_IMG_API_URL");
@@ -572,7 +577,7 @@ mod tests {
 
     #[test]
     fn builtin_image_gen_no_stdio_returns_none() {
-        let caps = AcpMcpCapabilities {
+        let caps = RuntimeMcpCapabilities {
             stdio: false,
             http: true,
             sse: true,
@@ -598,7 +603,7 @@ mod tests {
         let result = build_builtin_image_gen_server(&caps, "img-gen", &config);
         assert!(result.is_some());
         match result.unwrap() {
-            AcpSessionMcpServer::Stdio { env, .. } => {
+            RuntimeSessionMcpServer::Stdio { env, .. } => {
                 assert!(env.is_empty());
             }
             _ => panic!("expected Stdio"),
@@ -632,7 +637,7 @@ mod tests {
 
     #[test]
     fn stdio_serialization_roundtrip() {
-        let server = AcpSessionMcpServer::Stdio {
+        let server = RuntimeSessionMcpServer::Stdio {
             name: "test".into(),
             command: "npx".into(),
             args: vec!["-y".into()],
@@ -642,13 +647,13 @@ mod tests {
             }],
         };
         let json = serde_json::to_string(&server).unwrap();
-        let parsed: AcpSessionMcpServer = serde_json::from_str(&json).unwrap();
+        let parsed: RuntimeSessionMcpServer = serde_json::from_str(&json).unwrap();
         assert_eq!(server, parsed);
     }
 
     #[test]
     fn http_serialization_roundtrip() {
-        let server = AcpSessionMcpServer::Http {
+        let server = RuntimeSessionMcpServer::Http {
             name: "http-test".into(),
             url: "https://example.com/mcp".into(),
             headers: vec![NameValuePair {
@@ -657,26 +662,26 @@ mod tests {
             }],
         };
         let json = serde_json::to_string(&server).unwrap();
-        let parsed: AcpSessionMcpServer = serde_json::from_str(&json).unwrap();
+        let parsed: RuntimeSessionMcpServer = serde_json::from_str(&json).unwrap();
         assert_eq!(server, parsed);
     }
 
     #[test]
     fn sse_serialization_roundtrip() {
-        let server = AcpSessionMcpServer::Sse {
+        let server = RuntimeSessionMcpServer::Sse {
             name: "sse-test".into(),
             url: "https://example.com/sse".into(),
             headers: vec![],
         };
         let json = serde_json::to_string(&server).unwrap();
         assert!(!json.contains("headers")); // skip_serializing_if
-        let parsed: AcpSessionMcpServer = serde_json::from_str(&json).unwrap();
+        let parsed: RuntimeSessionMcpServer = serde_json::from_str(&json).unwrap();
         assert_eq!(server, parsed);
     }
 
     #[test]
     fn stdio_json_has_type_field() {
-        let server = AcpSessionMcpServer::Stdio {
+        let server = RuntimeSessionMcpServer::Stdio {
             name: "test".into(),
             command: "npx".into(),
             args: vec![],
@@ -690,7 +695,7 @@ mod tests {
 
     #[test]
     fn http_json_has_type_field() {
-        let server = AcpSessionMcpServer::Http {
+        let server = RuntimeSessionMcpServer::Http {
             name: "h".into(),
             url: "https://example.com".into(),
             headers: vec![],
@@ -701,7 +706,7 @@ mod tests {
 
     #[test]
     fn sse_json_has_type_field() {
-        let server = AcpSessionMcpServer::Sse {
+        let server = RuntimeSessionMcpServer::Sse {
             name: "s".into(),
             url: "https://example.com".into(),
             headers: vec![],

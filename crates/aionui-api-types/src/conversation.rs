@@ -4,7 +4,7 @@ use aionui_common::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::acp::AcpConfigOptionDto;
+use crate::acp::RuntimeConfigOptionDto;
 use crate::chat_file::ChatFileRef;
 
 /// Per-MCP snapshot status stored in `conversation.extra`.
@@ -70,7 +70,7 @@ pub struct CreateConversationRequest {
 ///
 /// Forks the conversation at `message_id` (inclusive) into a NEW conversation
 /// that inherits the parent's workspace/agent/history. The backend session
-/// materializes lazily on the fork's first open (see `AcpBuildExtra.fork`).
+/// materializes lazily on the fork's first open (see `RuntimeBuildConfig.fork`).
 #[derive(Debug, Deserialize)]
 pub struct ForkConversationRequest {
     /// The fork point: a message in the parent conversation (inclusive).
@@ -197,7 +197,7 @@ pub struct ConversationRuntimeSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EnsureConversationRuntimeResponse {
     pub recovered: bool,
-    pub config_options: Vec<AcpConfigOptionDto>,
+    pub config_options: Vec<RuntimeConfigOptionDto>,
     pub runtime: ConversationRuntimeSummary,
 }
 

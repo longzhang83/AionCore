@@ -22,7 +22,7 @@
 //! lines 8798 / 523), not inferred — see AGENTS.md "only assert what an
 //! approved source proves".
 
-use crate::protocol::events::AcpDialectSignalKind;
+use crate::protocol::events::DialectSignalKind;
 use serde_json::Value;
 
 /// What the tolerant layer decides to do with one incoming JSON-RPC line.
@@ -31,7 +31,7 @@ pub(crate) enum LineDisposition {
     Forward(String),
     /// A recognised CodeBuddy dialect notification: absorb it (never reaches the
     /// SDK, so no `-32602`) and raise the corresponding internal signal.
-    Absorb(AcpDialectSignalKind),
+    Absorb(DialectSignalKind),
 }
 
 /// The `_meta` key CodeBuddy uses to tag an emergency-compaction notification.
@@ -60,7 +60,7 @@ pub(crate) fn classify_incoming_line(line: &str) -> LineDisposition {
 
     // (a) `session_end` terminal marker — an unknown `sessionUpdate` variant.
     if update.get("sessionUpdate").and_then(Value::as_str) == Some("session_end") {
-        return LineDisposition::Absorb(AcpDialectSignalKind::SessionEnd);
+        return LineDisposition::Absorb(DialectSignalKind::SessionEnd);
     }
 
     // (b) emergency compaction: identified by the codebuddy compact markers, NOT
@@ -76,7 +76,7 @@ pub(crate) fn classify_incoming_line(line: &str) -> LineDisposition {
         .and_then(Value::as_str)
         .is_some_and(|id| id.starts_with(COMPACT_MESSAGE_ID_PREFIX));
     if has_compact_meta || has_compact_message_id {
-        return LineDisposition::Absorb(AcpDialectSignalKind::TokenPressure);
+        return LineDisposition::Absorb(DialectSignalKind::TokenPressure);
     }
 
     // (c) everything else — including other unknown variants and malformed
@@ -112,7 +112,7 @@ pub(crate) fn absorbed_log_context(line: &str) -> (Option<String>, Option<String
 mod tests {
     use super::*;
 
-    fn absorb_kind(line: &str) -> Option<AcpDialectSignalKind> {
+    fn absorb_kind(line: &str) -> Option<DialectSignalKind> {
         match classify_incoming_line(line) {
             LineDisposition::Absorb(kind) => Some(kind),
             LineDisposition::Forward(forwarded) => {
@@ -132,19 +132,19 @@ mod tests {
 
     #[test]
     fn session_end_is_absorbed_as_session_end_signal() {
-        assert_eq!(absorb_kind(SESSION_END_LINE), Some(AcpDialectSignalKind::SessionEnd));
+        assert_eq!(absorb_kind(SESSION_END_LINE), Some(DialectSignalKind::SessionEnd));
     }
 
     #[test]
     fn compact_maxtoken_is_absorbed_as_token_pressure() {
-        assert_eq!(absorb_kind(COMPACT_LINE), Some(AcpDialectSignalKind::TokenPressure));
+        assert_eq!(absorb_kind(COMPACT_LINE), Some(DialectSignalKind::TokenPressure));
     }
 
     #[test]
     fn compact_detected_by_message_id_prefix_alone() {
         // Even without the compactType meta, a `compact-maxtoken` messageId marks it.
         let line = r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"messageId":"compact-maxtoken-s1-123","sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"x"}}}}"#;
-        assert_eq!(absorb_kind(line), Some(AcpDialectSignalKind::TokenPressure));
+        assert_eq!(absorb_kind(line), Some(DialectSignalKind::TokenPressure));
     }
 
     #[test]

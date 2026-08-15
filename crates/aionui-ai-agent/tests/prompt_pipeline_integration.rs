@@ -14,7 +14,7 @@ use aionui_ai_agent::factory::acp_assembler::{AcpSessionParams, WorkspaceInfo, a
 use aionui_ai_agent::manager::acp::{AcpSession, SessionNewPreludeHook};
 use aionui_ai_agent::registry::AgentRegistry;
 use aionui_ai_agent::shared_kernel::ModelId;
-use aionui_ai_agent::{AcpBuildExtra, AcpSkillManager, AgentRuntime};
+use aionui_ai_agent::{AcpSkillManager, AgentRuntime, RuntimeBuildConfig};
 use aionui_db::{SqliteAgentMetadataRepository, init_database_memory};
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -34,7 +34,7 @@ async fn fixture_params(
         .await
         .expect("seeded backend row must exist");
 
-    let config = AcpBuildExtra {
+    let config = RuntimeBuildConfig {
         agent_id: None,
         backend: Some(backend.to_owned()),
         cli_path: None,
@@ -219,7 +219,7 @@ async fn prelude_io_failure_emits_prompt_hook_warning() {
     // should call emit_hook_warning("session_new_prelude", ...) and
     // return the user content unchanged. Subscribers on runtime.subscribe()
     // must then receive an AgentStreamEvent::PromptHookWarning whose
-    // payload deserializes to AcpPromptHookWarningPayload with
+    // payload deserializes to PromptHookWarningPayload with
     // hook == "session_new_prelude".
     let _ = fixture_params("claude", Some("ctx"), true).await;
 }

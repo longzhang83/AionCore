@@ -8,7 +8,7 @@ use aionui_ai_agent::session_context::{
 };
 use aionui_ai_agent::shared_kernel::{ConfigKey, ConfigValue, ModeId, ModelId, PersistedSessionState};
 use aionui_ai_agent::types::BuildTaskOptions;
-use aionui_api_types::{AcpBuildExtra, AionrsBuildExtra, TeamSessionBinding};
+use aionui_api_types::{AionrsBuildExtra, RuntimeBuildConfig, TeamSessionBinding};
 use aionui_common::{AgentType, WorkspacePathValidationError, validate_workspace_path_availability};
 use aionui_db::models::ConversationRow;
 use aionui_db::{IAcpSessionRepository, IAgentMetadataRepository};
@@ -233,7 +233,7 @@ impl<'a> SessionContextBuilder<'a> {
         extra: serde_json::Value,
         team: Option<TeamSessionBinding>,
     ) -> Result<AcpSessionBuildContext, ConversationError> {
-        let mut config: AcpBuildExtra =
+        let mut config: RuntimeBuildConfig =
             serde_json::from_value(extra.clone()).map_err(|e| ConversationError::BadRequest {
                 reason: format!("Invalid ACP build options: {e}"),
             })?;
@@ -279,7 +279,7 @@ impl<'a> SessionContextBuilder<'a> {
     async fn resolve_acp_identity(
         &self,
         row: &ConversationRow,
-        config: &mut AcpBuildExtra,
+        config: &mut RuntimeBuildConfig,
         extra: &serde_json::Value,
         session_row: Option<&aionui_db::models::AcpSessionRow>,
     ) -> Result<(), ConversationError> {
@@ -349,7 +349,7 @@ impl<'a> SessionContextBuilder<'a> {
         &self,
         user_id: &str,
         conversation_id: &str,
-        config: &AcpBuildExtra,
+        config: &RuntimeBuildConfig,
         session_id: Option<&str>,
     ) -> Result<Option<PersistedSessionState>, ConversationError> {
         if session_id.is_none() {
@@ -501,7 +501,7 @@ fn apply_runtime_permission_seed(
     }
 }
 
-fn apply_team_seed_to_acp_config(team: &Option<TeamSessionBinding>, config: &mut AcpBuildExtra) {
+fn apply_team_seed_to_acp_config(team: &Option<TeamSessionBinding>, config: &mut RuntimeBuildConfig) {
     let Some(team) = team else {
         return;
     };

@@ -58,7 +58,7 @@ async fn make_mock_agent(script: &str, backend: &str) -> (Arc<AcpAgentManager>, 
         std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    let config = aionui_ai_agent::AcpBuildExtra {
+    let config = aionui_ai_agent::RuntimeBuildConfig {
         agent_id: None,
         backend: Some(backend.to_owned()),
         cli_path: Some(script_path.to_string_lossy().into_owned()),
@@ -210,7 +210,7 @@ fn acp_build_extra_populates_skills_from_extra_json() {
         "backend": "claude",
         "skills": ["cron", "pdf"],
     });
-    let extra: aionui_ai_agent::AcpBuildExtra = serde_json::from_value(json).unwrap();
+    let extra: aionui_ai_agent::RuntimeBuildConfig = serde_json::from_value(json).unwrap();
     assert_eq!(extra.skills, vec!["cron".to_owned(), "pdf".to_owned()]);
 }
 

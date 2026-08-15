@@ -170,13 +170,13 @@ pub struct AionrsResolvedConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aionui_api_types::{AcpBuildExtra, AcpModelInfo, AionrsBuildExtra, SlashCommandItem};
+    use aionui_api_types::{AionrsBuildExtra, RuntimeBuildConfig, RuntimeModelInfo, SlashCommandItem};
     use serde_json::json;
 
     #[test]
     fn acp_build_extra_accepts_payload_without_skills() {
         let legacy = r#"{"backend":"claude"}"#;
-        let parsed: AcpBuildExtra = serde_json::from_str(legacy).unwrap();
+        let parsed: RuntimeBuildConfig = serde_json::from_str(legacy).unwrap();
         assert!(parsed.skills.is_empty());
     }
 
@@ -286,21 +286,21 @@ mod tests {
     #[test]
     fn acp_build_extra_accepts_skills() {
         let with_field = r#"{"backend":"claude","skills":["cron","pdf"]}"#;
-        let parsed: AcpBuildExtra = serde_json::from_str(with_field).unwrap();
+        let parsed: RuntimeBuildConfig = serde_json::from_str(with_field).unwrap();
         assert_eq!(parsed.skills, vec!["cron".to_owned(), "pdf".to_owned()]);
     }
 
     #[test]
     fn acp_build_extra_accepts_thought_level_seed() {
         let with_field = r#"{"backend":"codex","thought_level":"high"}"#;
-        let parsed: AcpBuildExtra = serde_json::from_str(with_field).unwrap();
+        let parsed: RuntimeBuildConfig = serde_json::from_str(with_field).unwrap();
         assert_eq!(parsed.thought_level.as_deref(), Some("high"));
     }
 
     #[test]
     fn acp_build_extra_missing_team_mcp_stdio_config_is_none() {
         let legacy = r#"{"backend":"claude","skills":["cron"]}"#;
-        let parsed: AcpBuildExtra = serde_json::from_str(legacy).unwrap();
+        let parsed: RuntimeBuildConfig = serde_json::from_str(legacy).unwrap();
         assert!(parsed.team_mcp_stdio_config.is_none());
     }
 
@@ -316,7 +316,7 @@ mod tests {
                 "binary_path":"/bin/backend"
             }
         }"#;
-        let parsed: AcpBuildExtra = serde_json::from_str(with_cfg).unwrap();
+        let parsed: RuntimeBuildConfig = serde_json::from_str(with_cfg).unwrap();
         let cfg = parsed.team_mcp_stdio_config.expect("config present");
         assert_eq!(cfg.team_id, "team-42");
         assert_eq!(cfg.port, 54321);
@@ -357,7 +357,7 @@ mod tests {
 
     #[test]
     fn acp_model_info_serde() {
-        let info = AcpModelInfo {
+        let info = RuntimeModelInfo {
             model_id: "claude-sonnet-4".into(),
             model_name: Some("Claude Sonnet 4".into()),
             provider: Some("anthropic".into()),

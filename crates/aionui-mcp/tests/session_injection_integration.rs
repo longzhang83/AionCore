@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use aionui_common::McpServerStatus;
 use aionui_mcp::{
-    AcpMcpCapabilities, AcpSessionMcpServer, ImageGenConfig, McpServer, McpServerTransport, NameValuePair,
+    ImageGenConfig, McpServer, McpServerTransport, NameValuePair, RuntimeMcpCapabilities, RuntimeSessionMcpServer,
     build_builtin_image_gen_server, build_session_mcp_servers, parse_acp_mcp_capabilities,
 };
 
@@ -38,7 +38,7 @@ fn make_server(name: &str, enabled: bool, transport: McpServerTransport) -> McpS
 
 #[test]
 fn si_1_full_capabilities_retains_all_transports() {
-    let caps = AcpMcpCapabilities {
+    let caps = RuntimeMcpCapabilities {
         stdio: true,
         http: true,
         sse: true,
@@ -77,13 +77,13 @@ fn si_1_full_capabilities_retains_all_transports() {
     // Verify each type is present
     let has_stdio = result
         .iter()
-        .any(|s| matches!(s, AcpSessionMcpServer::Stdio { name, .. } if name == "stdio-mcp"));
+        .any(|s| matches!(s, RuntimeSessionMcpServer::Stdio { name, .. } if name == "stdio-mcp"));
     let has_http = result
         .iter()
-        .any(|s| matches!(s, AcpSessionMcpServer::Http { name, .. } if name == "http-mcp"));
+        .any(|s| matches!(s, RuntimeSessionMcpServer::Http { name, .. } if name == "http-mcp"));
     let has_sse = result
         .iter()
-        .any(|s| matches!(s, AcpSessionMcpServer::Sse { name, .. } if name == "sse-mcp"));
+        .any(|s| matches!(s, RuntimeSessionMcpServer::Sse { name, .. } if name == "sse-mcp"));
 
     assert!(has_stdio, "stdio server missing");
     assert!(has_http, "http server missing");
@@ -96,7 +96,7 @@ fn si_1_full_capabilities_retains_all_transports() {
 
 #[test]
 fn si_2_stdio_only_keeps_stdio_servers() {
-    let caps = AcpMcpCapabilities {
+    let caps = RuntimeMcpCapabilities {
         stdio: true,
         http: false,
         sse: false,
@@ -131,7 +131,7 @@ fn si_2_stdio_only_keeps_stdio_servers() {
 
     let result = build_session_mcp_servers(&servers, &caps);
     assert_eq!(result.len(), 1);
-    assert!(matches!(&result[0], AcpSessionMcpServer::Stdio { name, .. } if name == "stdio-mcp"));
+    assert!(matches!(&result[0], RuntimeSessionMcpServer::Stdio { name, .. } if name == "stdio-mcp"));
 }
 
 // ---------------------------------------------------------------------------
@@ -140,7 +140,7 @@ fn si_2_stdio_only_keeps_stdio_servers() {
 
 #[test]
 fn si_3_no_capabilities_returns_empty() {
-    let caps = AcpMcpCapabilities {
+    let caps = RuntimeMcpCapabilities {
         stdio: false,
         http: false,
         sse: false,
@@ -175,7 +175,7 @@ fn si_3_no_capabilities_returns_empty() {
 
 #[test]
 fn si_4_stdio_format_conversion() {
-    let caps = AcpMcpCapabilities {
+    let caps = RuntimeMcpCapabilities {
         stdio: true,
         http: false,
         sse: false,
@@ -197,7 +197,7 @@ fn si_4_stdio_format_conversion() {
     assert_eq!(result.len(), 1);
 
     match &result[0] {
-        AcpSessionMcpServer::Stdio {
+        RuntimeSessionMcpServer::Stdio {
             name,
             command,
             args,
@@ -232,7 +232,7 @@ fn si_4_stdio_format_conversion() {
 
 #[test]
 fn si_5_http_format_conversion() {
-    let caps = AcpMcpCapabilities {
+    let caps = RuntimeMcpCapabilities {
         stdio: false,
         http: true,
         sse: false,
@@ -253,7 +253,7 @@ fn si_5_http_format_conversion() {
     assert_eq!(result.len(), 1);
 
     match &result[0] {
-        AcpSessionMcpServer::Http { name, url, headers } => {
+        RuntimeSessionMcpServer::Http { name, url, headers } => {
             assert_eq!(name, "test-http");
             assert_eq!(url, "https://example.com/mcp");
             assert_eq!(headers.len(), 2);
@@ -280,7 +280,7 @@ fn si_5_http_format_conversion() {
 
 #[test]
 fn si_6_only_enabled_servers_in_result() {
-    let caps = AcpMcpCapabilities {
+    let caps = RuntimeMcpCapabilities {
         stdio: true,
         http: true,
         sse: true,
@@ -328,9 +328,9 @@ fn si_6_only_enabled_servers_in_result() {
     let names: Vec<&str> = result
         .iter()
         .map(|s| match s {
-            AcpSessionMcpServer::Stdio { name, .. } => name.as_str(),
-            AcpSessionMcpServer::Http { name, .. } => name.as_str(),
-            AcpSessionMcpServer::Sse { name, .. } => name.as_str(),
+            RuntimeSessionMcpServer::Stdio { name, .. } => name.as_str(),
+            RuntimeSessionMcpServer::Http { name, .. } => name.as_str(),
+            RuntimeSessionMcpServer::Sse { name, .. } => name.as_str(),
         })
         .collect();
     assert!(names.contains(&"enabled-stdio"));
@@ -345,7 +345,7 @@ fn si_6_only_enabled_servers_in_result() {
 
 #[test]
 fn si_7_builtin_image_gen_injection() {
-    let caps = AcpMcpCapabilities {
+    let caps = RuntimeMcpCapabilities {
         stdio: true,
         http: true,
         sse: true,
@@ -383,7 +383,7 @@ fn si_7_builtin_image_gen_injection() {
     // Verify the builtin server
     let builtin = &session_servers[1];
     match builtin {
-        AcpSessionMcpServer::Stdio { name, command, env, .. } => {
+        RuntimeSessionMcpServer::Stdio { name, command, env, .. } => {
             assert_eq!(name, "aionui-image-generation");
             assert_eq!(command, "/usr/local/bin/aionui-img-gen");
 
@@ -480,9 +480,9 @@ fn end_to_end_parse_then_build() {
     let names: Vec<&str> = result
         .iter()
         .map(|s| match s {
-            AcpSessionMcpServer::Stdio { name, .. } => name.as_str(),
-            AcpSessionMcpServer::Http { name, .. } => name.as_str(),
-            AcpSessionMcpServer::Sse { name, .. } => name.as_str(),
+            RuntimeSessionMcpServer::Stdio { name, .. } => name.as_str(),
+            RuntimeSessionMcpServer::Http { name, .. } => name.as_str(),
+            RuntimeSessionMcpServer::Sse { name, .. } => name.as_str(),
         })
         .collect();
     assert!(names.contains(&"stdio-srv"));
@@ -497,7 +497,7 @@ fn end_to_end_parse_then_build() {
 #[test]
 fn wire_format_is_acp_compatible() {
     let servers = vec![
-        AcpSessionMcpServer::Stdio {
+        RuntimeSessionMcpServer::Stdio {
             name: "test-stdio".into(),
             command: "npx".into(),
             args: vec!["-y".into(), "server".into()],
@@ -506,7 +506,7 @@ fn wire_format_is_acp_compatible() {
                 value: "V".into(),
             }],
         },
-        AcpSessionMcpServer::Http {
+        RuntimeSessionMcpServer::Http {
             name: "test-http".into(),
             url: "https://example.com/mcp".into(),
             headers: vec![NameValuePair {

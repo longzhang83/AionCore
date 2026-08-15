@@ -23,7 +23,7 @@ pub use oauth_service::McpOAuthService;
 pub use routes::{McpRouterState, mcp_routes};
 pub use service::McpConfigService;
 pub use session_injection::{
-    AcpMcpCapabilities, AcpSessionMcpServer, ImageGenConfig, NameValuePair, build_builtin_image_gen_server,
+    ImageGenConfig, NameValuePair, RuntimeMcpCapabilities, RuntimeSessionMcpServer, build_builtin_image_gen_server,
     build_session_mcp_servers, parse_acp_mcp_capabilities,
 };
 pub use sync_service::McpSyncService;

@@ -39,7 +39,7 @@ use aionui_db::{
     resolve_agent_binding_from_rows,
 };
 use aionui_extension::AssistantRuleDispatcher;
-use aionui_mcp::{AcpMcpCapabilities, parse_acp_mcp_capabilities};
+use aionui_mcp::{RuntimeMcpCapabilities, parse_acp_mcp_capabilities};
 use aionui_project::{ProjectService, ResolvedChatMessage, canonical};
 use aionui_realtime::EventBroadcaster;
 use aionui_runtime::{RuntimeCommandProbe, probe_node_runtime_supported, probe_runtime_command, resolve_command_path};
@@ -251,7 +251,7 @@ impl McpSupportPolicy {
         streamable_http: true,
     };
 
-    fn from_acp_capabilities(capabilities: AcpMcpCapabilities) -> Self {
+    fn from_acp_capabilities(capabilities: RuntimeMcpCapabilities) -> Self {
         Self {
             stdio: capabilities.stdio,
             http: capabilities.http,

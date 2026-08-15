@@ -16,7 +16,7 @@ use aionui_api_types::{AgentMetadata, SessionMcpServer, SessionMcpTransport};
 use aionui_common::CommandSpec;
 use aionui_db::IMcpServerRepository;
 use aionui_db::models::McpServerRow;
-use aionui_mcp::{AcpMcpCapabilities, parse_acp_mcp_capabilities};
+use aionui_mcp::{RuntimeMcpCapabilities, parse_acp_mcp_capabilities};
 use aionui_runtime::{ensure_runtime_command, ensure_runtime_command_with_reporter};
 use tracing::{info, warn};
 
@@ -278,7 +278,7 @@ pub(super) async fn build(
 
 pub(super) async fn resolve_catalog_metadata(
     registry: &Arc<AgentRegistry>,
-    config: &aionui_api_types::AcpBuildExtra,
+    config: &aionui_api_types::RuntimeBuildConfig,
     user_id: &str,
 ) -> Result<AgentMetadata, AgentError> {
     if let Some(ref agent_id) = config.agent_id {
@@ -368,7 +368,7 @@ async fn load_user_mcp_servers(
     selected_ids: Option<&[String]>,
     user_id: &str,
     conversation_id: &str,
-    capabilities: &AcpMcpCapabilities,
+    capabilities: &RuntimeMcpCapabilities,
 ) -> Vec<McpServer> {
     let rows_result = match selected_ids {
         Some(ids) => repo.list_by_ids_any(user_id, ids).await,
@@ -567,7 +567,7 @@ async fn ensure_stdio_launch(
     Ok((resolved.program, final_args, final_env))
 }
 
-fn row_supported_by_capabilities(row: &McpServerRow, capabilities: &AcpMcpCapabilities) -> bool {
+fn row_supported_by_capabilities(row: &McpServerRow, capabilities: &RuntimeMcpCapabilities) -> bool {
     match row.transport_type.as_str() {
         "stdio" => capabilities.stdio,
         "http" | "streamable_http" => capabilities.http,
@@ -576,7 +576,7 @@ fn row_supported_by_capabilities(row: &McpServerRow, capabilities: &AcpMcpCapabi
     }
 }
 
-fn session_server_supported_by_capabilities(server: &SessionMcpServer, capabilities: &AcpMcpCapabilities) -> bool {
+fn session_server_supported_by_capabilities(server: &SessionMcpServer, capabilities: &RuntimeMcpCapabilities) -> bool {
     match server.transport {
         SessionMcpTransport::Stdio { .. } => capabilities.stdio,
         SessionMcpTransport::Http { .. } | SessionMcpTransport::StreamableHttp { .. } => capabilities.http,
@@ -587,7 +587,7 @@ fn session_server_supported_by_capabilities(server: &SessionMcpServer, capabilit
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aionui_api_types::AcpBuildExtra;
+    use aionui_api_types::RuntimeBuildConfig;
     use aionui_db::{
         IAgentMetadataRepository, SqliteAgentMetadataRepository, UpsertAgentMetadataParams, init_database_memory,
     };
@@ -710,7 +710,7 @@ mod tests {
 
         let registry = AgentRegistry::new(repo);
         registry.hydrate().await.unwrap();
-        let config = AcpBuildExtra {
+        let config = RuntimeBuildConfig {
             agent_id: Some("custom-agent-b".to_owned()),
             ..Default::default()
         };
@@ -1086,7 +1086,7 @@ mod tests {
     #[tokio::test]
     async fn load_user_mcp_servers_skips_disabled_and_builtin() {
         let stdio_config = stdio_config_for_existing_command();
-        let caps = AcpMcpCapabilities {
+        let caps = RuntimeMcpCapabilities {
             stdio: true,
             http: true,
             sse: true,
@@ -1115,7 +1115,7 @@ mod tests {
 
     #[tokio::test]
     async fn load_user_mcp_servers_returns_empty_on_repo_failure() {
-        let caps = AcpMcpCapabilities {
+        let caps = RuntimeMcpCapabilities {
             stdio: true,
             http: true,
             sse: true,
@@ -1131,7 +1131,7 @@ mod tests {
     #[tokio::test]
     async fn load_user_mcp_servers_skips_malformed_rows_but_keeps_others() {
         let stdio_config = stdio_config_for_existing_command();
-        let caps = AcpMcpCapabilities {
+        let caps = RuntimeMcpCapabilities {
             stdio: true,
             http: true,
             sse: true,
@@ -1154,7 +1154,7 @@ mod tests {
     #[tokio::test]
     async fn load_user_mcp_servers_uses_selected_snapshot_over_enabled_state() {
         let stdio_config = stdio_config_for_existing_command();
-        let caps = AcpMcpCapabilities {
+        let caps = RuntimeMcpCapabilities {
             stdio: true,
             http: true,
             sse: true,
@@ -1179,7 +1179,7 @@ mod tests {
 
     #[tokio::test]
     async fn load_user_mcp_servers_skips_rows_unsupported_by_capabilities() {
-        let caps = AcpMcpCapabilities {
+        let caps = RuntimeMcpCapabilities {
             stdio: false,
             http: true,
             sse: false,

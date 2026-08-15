@@ -352,7 +352,8 @@ pub(crate) mod workspace_harness {
 
     use aionui_ai_agent::{AgentError, IWorkerTaskManager};
     use aionui_api_types::{
-        AcpConfigOptionDto, AcpConfigSelectOptionDto, CreateTeamRequest, GetConfigOptionsResponse, WebSocketMessage,
+        CreateTeamRequest, GetConfigOptionsResponse, RuntimeConfigOptionDto, RuntimeConfigSelectOptionDto,
+        WebSocketMessage,
     };
     use aionui_common::{AgentKillReason, AgentType, PaginatedResult, now_ms};
     use aionui_db::models::{
@@ -939,7 +940,7 @@ pub(crate) mod workspace_harness {
                 .unwrap_or("mock-model")
                 .to_owned();
             Ok(GetConfigOptionsResponse {
-                config_options: vec![AcpConfigOptionDto {
+                config_options: vec![RuntimeConfigOptionDto {
                     id: "model".to_owned(),
                     name: None,
                     label: Some("Model".to_owned()),
@@ -947,7 +948,7 @@ pub(crate) mod workspace_harness {
                     category: Some("model".to_owned()),
                     option_type: "select".to_owned(),
                     current_value: Some(model.clone()),
-                    options: vec![AcpConfigSelectOptionDto {
+                    options: vec![RuntimeConfigSelectOptionDto {
                         value: model.clone(),
                         name: None,
                         label: Some(model),

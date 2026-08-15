@@ -36,15 +36,15 @@ mod team_tools;
 mod websocket;
 
 pub use acp::{
-    AcpConfigOptionDto, AcpConfigSelectOptionDto, AcpEnvResponse, AgentModeResponse, ConfigOptionConfirmation,
-    DetectCliRequest, DetectCliResponse, GetConfigOptionsResponse, GetModelInfoResponse, ModelInfoEntry,
-    ModelInfoPayload, ProbeModelRequest, SetConfigOptionRequest, SetConfigOptionResponse, SetModeRequest,
+    AgentModeResponse, ConfigOptionConfirmation, DetectCliRequest, DetectCliResponse, GetConfigOptionsResponse,
+    GetModelInfoResponse, ModelInfoEntry, ModelInfoPayload, ProbeModelRequest, RuntimeConfigOptionDto,
+    RuntimeConfigSelectOptionDto, RuntimeEnvResponse, SetConfigOptionRequest, SetConfigOptionResponse, SetModeRequest,
     SetModelRequest, SideQuestionRequest, SideQuestionResponse, TryConnectCustomAgentRequest,
     TryConnectCustomAgentResponse, WorkspaceBrowseQuery, WorkspaceEntry,
 };
-pub use acp_prompt_hook::AcpPromptHookWarningPayload;
+pub use acp_prompt_hook::PromptHookWarningPayload;
 pub use agent_build_extra::{
-    AcpBuildExtra, AcpModelInfo, AionrsBuildExtra, ForkSpec, SessionMcpServer, SessionMcpTransport,
+    AionrsBuildExtra, ForkSpec, RuntimeBuildConfig, RuntimeModelInfo, SessionMcpServer, SessionMcpTransport,
     SlashCommandCompletionBehavior, SlashCommandItem,
 };
 pub use agent_discovery::{

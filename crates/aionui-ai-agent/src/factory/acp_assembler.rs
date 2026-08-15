@@ -1,7 +1,7 @@
 use crate::shared_kernel::PersistedSessionState;
 use agent_client_protocol::schema::v1::{EnvVariable, McpServer, McpServerStdio, NewSessionRequest};
 use aionui_api_types::AgentMetadata;
-use aionui_api_types::{AcpBuildExtra, TEAM_MCP_SERVER_NAME, TeamMcpStdioConfig};
+use aionui_api_types::{RuntimeBuildConfig, TEAM_MCP_SERVER_NAME, TeamMcpStdioConfig};
 use aionui_common::CommandSpec;
 use std::path::PathBuf;
 
@@ -25,7 +25,7 @@ pub struct AcpSessionParams {
     pub workspace: WorkspaceInfo,
     pub metadata: AgentMetadata,
     pub command_spec: CommandSpec,
-    pub config: AcpBuildExtra,
+    pub config: RuntimeBuildConfig,
     pub mcp_servers: Vec<McpServer>,
     pub preset_context: Option<String>,
     pub session_snapshot: Option<PersistedSessionState>,
@@ -64,7 +64,7 @@ pub async fn assemble_acp_params(
     workspace: WorkspaceInfo,
     metadata: AgentMetadata,
     command_spec: CommandSpec,
-    config: AcpBuildExtra,
+    config: RuntimeBuildConfig,
     user_mcp_servers: Vec<McpServer>,
     session_snapshot: Option<PersistedSessionState>,
     data_dir: PathBuf,
@@ -93,7 +93,7 @@ pub async fn assemble_acp_params(
 /// Layout: `[team?, ...user_mcp_servers]`. The user's
 /// own enabled MCP servers are always appended on top so a team
 /// session still gets the operator's tools.
-fn resolve_mcp_servers(config: &AcpBuildExtra, user_mcp_servers: Vec<McpServer>) -> Vec<McpServer> {
+fn resolve_mcp_servers(config: &RuntimeBuildConfig, user_mcp_servers: Vec<McpServer>) -> Vec<McpServer> {
     let mut servers: Vec<McpServer> = Vec::new();
     if let Some(cfg) = config.team_mcp_stdio_config.as_ref() {
         servers.push(team_mcp_server(cfg));
@@ -192,7 +192,7 @@ mod tests {
 
     #[tokio::test]
     async fn assemble_acp_params_uses_frozen_preset_context_and_snapshot_seeds() {
-        let config = AcpBuildExtra {
+        let config = RuntimeBuildConfig {
             backend: Some("claude".into()),
             preset_context: Some("frozen rules".into()),
             skills: vec!["pdf".into()],
@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn resolve_mcp_servers_solo_only_gets_user_mcp_servers() {
-        let config = AcpBuildExtra {
+        let config = RuntimeBuildConfig {
             backend: Some("claude".into()),
             ..Default::default()
         };
@@ -244,7 +244,7 @@ mod tests {
 
     #[test]
     fn resolve_mcp_servers_team_session_keeps_team_mcp_before_user_mcp() {
-        let config = AcpBuildExtra {
+        let config = RuntimeBuildConfig {
             backend: Some("claude".into()),
             team_mcp_stdio_config: Some(team_cfg()),
             ..Default::default()
@@ -269,7 +269,7 @@ mod tests {
     /// scenario and remains valid (no MCP configured anywhere).
     #[test]
     fn resolve_mcp_servers_empty_when_nothing_configured() {
-        let config = AcpBuildExtra {
+        let config = RuntimeBuildConfig {
             backend: Some("claude".into()),
             ..Default::default()
         };

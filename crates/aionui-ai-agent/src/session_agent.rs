@@ -31,7 +31,7 @@ use crate::protocol::events::{
 use crate::protocol::send_error::AgentSendError;
 use crate::shared_kernel::PersistedSessionState;
 use crate::types::{PromptMediaCaps, SendMessageData};
-use aionui_api_types::AcpBuildExtra;
+use aionui_api_types::RuntimeBuildConfig;
 use aionui_common::AgentType;
 use aionui_db::{IAcpSessionRepository, IMcpServerRepository, SaveRuntimeStateParams};
 use aionui_realtime::EventBroadcaster;
@@ -802,7 +802,7 @@ impl SessionAgentTask {
         let effective_model = self.runtime.model_override().or_else(|| current_model.clone());
         let mut config_options = Vec::new();
         if !modes.is_empty() {
-            config_options.push(aionui_api_types::AcpConfigOptionDto {
+            config_options.push(aionui_api_types::RuntimeConfigOptionDto {
                 id: "mode".into(),
                 name: Some("Mode".into()),
                 label: None,
@@ -812,7 +812,7 @@ impl SessionAgentTask {
                 current_value: self.runtime.mode_override().or(current_mode),
                 options: modes
                     .iter()
-                    .map(|m| aionui_api_types::AcpConfigSelectOptionDto {
+                    .map(|m| aionui_api_types::RuntimeConfigSelectOptionDto {
                         value: m.id.clone(),
                         name: Some(m.name.clone()),
                         label: None,
@@ -822,7 +822,7 @@ impl SessionAgentTask {
             });
         }
         if !models.is_empty() {
-            config_options.push(aionui_api_types::AcpConfigOptionDto {
+            config_options.push(aionui_api_types::RuntimeConfigOptionDto {
                 id: "model".into(),
                 name: Some("Model".into()),
                 label: None,
@@ -832,7 +832,7 @@ impl SessionAgentTask {
                 current_value: self.runtime.model_override().or(current_model),
                 options: models
                     .iter()
-                    .map(|m| aionui_api_types::AcpConfigSelectOptionDto {
+                    .map(|m| aionui_api_types::RuntimeConfigSelectOptionDto {
                         value: m.id.clone(),
                         name: Some(m.name.clone()),
                         label: None,
@@ -851,7 +851,7 @@ impl SessionAgentTask {
         let caps = self.backend.capabilities();
         let efforts = resolve_current_model_efforts(&models, effective_model.as_deref());
         if !efforts.is_empty() {
-            config_options.push(aionui_api_types::AcpConfigOptionDto {
+            config_options.push(aionui_api_types::RuntimeConfigOptionDto {
                 id: "reasoning_effort".into(),
                 name: Some("Thinking".into()),
                 label: None,
@@ -861,7 +861,7 @@ impl SessionAgentTask {
                 current_value: self.runtime.effort_override().or(caps.current_effort),
                 options: efforts
                     .iter()
-                    .map(|e| aionui_api_types::AcpConfigSelectOptionDto {
+                    .map(|e| aionui_api_types::RuntimeConfigSelectOptionDto {
                         value: e.clone(),
                         name: Some(e.clone()),
                         label: None,
@@ -1322,7 +1322,7 @@ pub struct SessionBuildInputs<'a> {
     /// The resolved workspace path (`SessionConfig.cwd`).
     pub workspace: String,
     /// The conversation's persisted build `extra` (mode/model/mcp/preset/skills).
-    pub config: &'a AcpBuildExtra,
+    pub config: &'a RuntimeBuildConfig,
     /// The resolved catalog row. Used to normalize the persisted/requested mode
     /// alias (`yolo`/`yoloNoSandbox` → the row's `yolo_id`; codex `default`/`autoEdit`
     /// → `auto`) into the backend-native mode id, exactly as the ACP path does via
@@ -1393,7 +1393,7 @@ pub struct SessionBuildInputs<'a> {
 /// `thread/settings/update {"effort":…}`. The gate meant a codex conversation
 /// persisted its effort and lost it on every rebuild.
 pub(crate) fn resolved_effort(
-    config: &aionui_api_types::AcpBuildExtra,
+    config: &aionui_api_types::RuntimeBuildConfig,
     session_snapshot: Option<&PersistedSessionState>,
 ) -> Option<String> {
     session_snapshot
@@ -1417,7 +1417,7 @@ pub(crate) fn initial_cost_usd_from_snapshot(session_snapshot: Option<&Persisted
 }
 
 pub(crate) fn resolved_session_mode(
-    config: &AcpBuildExtra,
+    config: &RuntimeBuildConfig,
     session_snapshot: Option<&PersistedSessionState>,
     metadata: &aionui_api_types::AgentMetadata,
 ) -> Option<String> {
@@ -1442,7 +1442,7 @@ pub(crate) fn resolved_session_mode(
 fn spec_mode_model(
     conversation_id: &str,
     backend_session_id: Option<String>,
-    config: &AcpBuildExtra,
+    config: &RuntimeBuildConfig,
     session_snapshot: Option<&PersistedSessionState>,
     metadata: &aionui_api_types::AgentMetadata,
 ) -> (aionui_session::SessionSpec, Option<String>, Option<String>) {
@@ -2592,9 +2592,9 @@ fn spawn_event_pump(
                 slash_commands,
             } = &env.event
             {
-                let mut config_options: Vec<aionui_api_types::AcpConfigOptionDto> = Vec::new();
+                let mut config_options: Vec<aionui_api_types::RuntimeConfigOptionDto> = Vec::new();
                 if !modes.is_empty() {
-                    config_options.push(aionui_api_types::AcpConfigOptionDto {
+                    config_options.push(aionui_api_types::RuntimeConfigOptionDto {
                         id: "mode".into(),
                         name: Some("Mode".into()),
                         label: None,
@@ -2604,7 +2604,7 @@ fn spawn_event_pump(
                         current_value: runtime.mode_override(),
                         options: modes
                             .iter()
-                            .map(|m| aionui_api_types::AcpConfigSelectOptionDto {
+                            .map(|m| aionui_api_types::RuntimeConfigSelectOptionDto {
                                 value: m.id.clone(),
                                 name: Some(m.name.clone()),
                                 label: None,
@@ -2614,7 +2614,7 @@ fn spawn_event_pump(
                     });
                 }
                 if !models.is_empty() {
-                    config_options.push(aionui_api_types::AcpConfigOptionDto {
+                    config_options.push(aionui_api_types::RuntimeConfigOptionDto {
                         id: "model".into(),
                         name: Some("Model".into()),
                         label: None,
@@ -2624,7 +2624,7 @@ fn spawn_event_pump(
                         current_value: runtime.model_override(),
                         options: models
                             .iter()
-                            .map(|m| aionui_api_types::AcpConfigSelectOptionDto {
+                            .map(|m| aionui_api_types::RuntimeConfigSelectOptionDto {
                                 value: m.id.clone(),
                                 name: Some(m.name.clone()),
                                 label: None,
@@ -2643,7 +2643,7 @@ fn spawn_event_pump(
                 // advertises efforts (union fallback when the current model is unknown).
                 let efforts = resolve_current_model_efforts(models, runtime.model_override().as_deref());
                 if !efforts.is_empty() {
-                    config_options.push(aionui_api_types::AcpConfigOptionDto {
+                    config_options.push(aionui_api_types::RuntimeConfigOptionDto {
                         id: "reasoning_effort".into(),
                         name: Some("Thinking".into()),
                         label: None,
@@ -2653,7 +2653,7 @@ fn spawn_event_pump(
                         current_value: runtime.effort_override(),
                         options: efforts
                             .iter()
-                            .map(|e| aionui_api_types::AcpConfigSelectOptionDto {
+                            .map(|e| aionui_api_types::RuntimeConfigSelectOptionDto {
                                 value: e.clone(),
                                 name: Some(e.clone()),
                                 label: None,
@@ -3408,25 +3408,25 @@ fn confirm_option_id(data: &serde_json::Value) -> Option<String> {
 
 /// Generic allow / allow-always / reject options for an ordinary tool-approval
 /// permission card. `confirm()` maps these option ids back to a `PermissionDecision`.
-fn default_permission_options() -> Vec<crate::protocol::events::AcpPermissionOptionData> {
-    use crate::protocol::events::{AcpPermissionOptionData, AcpPermissionOptionKind};
+fn default_permission_options() -> Vec<crate::protocol::events::ApprovalOptionData> {
+    use crate::protocol::events::{ApprovalOptionData, ApprovalOptionKind};
     vec![
-        AcpPermissionOptionData {
+        ApprovalOptionData {
             option_id: PERM_ALLOW.to_owned(),
             name: "Allow".to_owned(),
-            kind: AcpPermissionOptionKind::AllowOnce,
+            kind: ApprovalOptionKind::AllowOnce,
             meta: None,
         },
-        AcpPermissionOptionData {
+        ApprovalOptionData {
             option_id: PERM_ALLOW_ALWAYS.to_owned(),
             name: "Allow Always".to_owned(),
-            kind: AcpPermissionOptionKind::AllowAlways,
+            kind: ApprovalOptionKind::AllowAlways,
             meta: None,
         },
-        AcpPermissionOptionData {
+        ApprovalOptionData {
             option_id: PERM_REJECT.to_owned(),
             name: "Reject".to_owned(),
-            kind: AcpPermissionOptionKind::RejectOnce,
+            kind: ApprovalOptionKind::RejectOnce,
             meta: None,
         },
     ]
@@ -3442,10 +3442,8 @@ fn default_permission_options() -> Vec<crate::protocol::events::AcpPermissionOpt
 /// frontend limitation — the remaining questions claude silently drops, same as the
 /// legacy single-question path). Returns empty when the shape is absent/unparseable, so
 /// the caller falls back to allow/deny.
-fn ask_user_question_options(
-    input: Option<&serde_json::Value>,
-) -> Vec<crate::protocol::events::AcpPermissionOptionData> {
-    use crate::protocol::events::{AcpPermissionOptionData, AcpPermissionOptionKind};
+fn ask_user_question_options(input: Option<&serde_json::Value>) -> Vec<crate::protocol::events::ApprovalOptionData> {
+    use crate::protocol::events::{ApprovalOptionData, ApprovalOptionKind};
     let Some(first_q) = input
         .and_then(|i| i.get("questions"))
         .and_then(|q| q.as_array())
@@ -3458,11 +3456,11 @@ fn ask_user_question_options(
     };
     opts.iter()
         .filter_map(|o| o.get("label").and_then(|l| l.as_str()))
-        .map(|label| AcpPermissionOptionData {
+        .map(|label| ApprovalOptionData {
             // option_id == label: confirm() forwards it as the chosen answer label.
             option_id: label.to_owned(),
             name: label.to_owned(),
-            kind: AcpPermissionOptionKind::AllowOnce,
+            kind: ApprovalOptionKind::AllowOnce,
             meta: None,
         })
         .collect()
@@ -4075,7 +4073,7 @@ fn translate_event(event: SessionEvent, conversation_id: &str, terminal_result_s
             vec![AgentStreamEvent::ApprovalRequest(
                 crate::protocol::events::ApprovalRequestEventData {
                     session_id: conversation_id.to_owned(),
-                    tool_call: crate::protocol::events::AcpPermissionToolCall {
+                    tool_call: crate::protocol::events::ApprovalToolCall {
                         tool_call_id: request_id,
                         status: None,
                         title: tool_name,
@@ -4272,7 +4270,7 @@ fn tool_result_text(content: &[ToolResultContent]) -> Option<String> {
 mod build_mapping_tests {
     //! Ported from clean-slate `session_runtime::tests` (the `spec_and_config` +
     //! `catalog_partial_from_caps` + `codex_sandbox`/`approval` + `session_server_to_spec`
-    //! suite), adapted to the port's decomposed `spec_mode_model` inputs (AcpBuildExtra +
+    //! suite), adapted to the port's decomposed `spec_mode_model` inputs (RuntimeBuildConfig +
     //! PersistedSessionState) instead of a `ConversationRow`. Same assertions.
     use super::*;
     use crate::shared_kernel::{ModeId, ModelId};
@@ -4287,8 +4285,8 @@ mod build_mapping_tests {
         s
     }
 
-    fn extra_with_thought_level(level: Option<&str>) -> aionui_api_types::AcpBuildExtra {
-        aionui_api_types::AcpBuildExtra {
+    fn extra_with_thought_level(level: Option<&str>) -> aionui_api_types::RuntimeBuildConfig {
+        aionui_api_types::RuntimeBuildConfig {
             backend: Some("codex".into()),
             thought_level: level.map(str::to_owned),
             ..Default::default()
@@ -4516,7 +4514,7 @@ mod build_mapping_tests {
 
     #[test]
     fn spec_fresh_when_no_anchor() {
-        let cfg = AcpBuildExtra::default();
+        let cfg = RuntimeBuildConfig::default();
         let (spec, mode, model) = spec_mode_model("conv_1", None, &cfg, None, &test_metadata(Some("claude"), None));
         assert!(matches!(spec, SessionSpec::Fresh { session_id } if session_id == "conv_1"));
         assert_eq!(mode, None);
@@ -4525,7 +4523,7 @@ mod build_mapping_tests {
 
     #[test]
     fn spec_resume_when_anchor_present() {
-        let cfg = AcpBuildExtra {
+        let cfg = RuntimeBuildConfig {
             session_mode: Some("plan".into()),
             current_model_id: Some("claude-x".into()),
             ..Default::default()
@@ -4551,7 +4549,7 @@ mod build_mapping_tests {
     /// Fresh.
     #[test]
     fn spec_fork_quadrants() {
-        let fork_cfg = AcpBuildExtra {
+        let fork_cfg = RuntimeBuildConfig {
             fork: Some(aionui_api_types::ForkSpec {
                 parent_conversation_id: "conv_parent".into(),
                 parent_message_id: "msg_9".into(),
@@ -4560,7 +4558,7 @@ mod build_mapping_tests {
             }),
             ..Default::default()
         };
-        let plain_cfg = AcpBuildExtra::default();
+        let plain_cfg = RuntimeBuildConfig::default();
         let md = test_metadata(Some("codex"), None);
 
         // (None, fork) -> Fork with the parent anchor + turn id.
@@ -4592,7 +4590,7 @@ mod build_mapping_tests {
     // respawn. (Clean-slate: spec_and_config_runtime_model_overrides_stale_model_column.)
     #[test]
     fn snapshot_mode_model_override_create_time_config() {
-        let cfg = AcpBuildExtra {
+        let cfg = RuntimeBuildConfig {
             session_mode: Some("default".into()),
             current_model_id: Some("claude-sonnet-4-6".into()),
             ..Default::default()
@@ -4613,7 +4611,7 @@ mod build_mapping_tests {
     // model/mode token on the wire).
     #[test]
     fn empty_selections_filter_to_none() {
-        let cfg = AcpBuildExtra {
+        let cfg = RuntimeBuildConfig {
             session_mode: Some(String::new()),
             current_model_id: Some(String::new()),
             ..Default::default()
@@ -4631,7 +4629,7 @@ mod build_mapping_tests {
     fn mode_alias_is_normalized_via_catalog() {
         // codex: yoloNoSandbox → the row's yolo_id (full-access); default → auto.
         let codex = test_metadata(Some("codex"), Some("full-access"));
-        let yolo_cfg = AcpBuildExtra {
+        let yolo_cfg = RuntimeBuildConfig {
             session_mode: Some("yoloNoSandbox".into()),
             ..Default::default()
         };
@@ -4642,7 +4640,7 @@ mod build_mapping_tests {
             "yoloNoSandbox → codex native yolo_id"
         );
 
-        let def_cfg = AcpBuildExtra {
+        let def_cfg = RuntimeBuildConfig {
             session_mode: Some("default".into()),
             ..Default::default()
         };
@@ -4650,7 +4648,7 @@ mod build_mapping_tests {
         assert_eq!(mode.as_deref(), Some("auto"), "codex default → auto");
 
         // A native / non-alias mode passes through unchanged.
-        let plan_cfg = AcpBuildExtra {
+        let plan_cfg = RuntimeBuildConfig {
             session_mode: Some("plan".into()),
             ..Default::default()
         };

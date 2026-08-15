@@ -1191,7 +1191,7 @@ fn log_agent_notify(method: &str, body: &str) {
 /// that visibility. Records only the signal kind and non-sensitive correlation
 /// context (`session_id`, the sessionUpdate/compactType marker); never the
 /// compaction summary, prompt, tokens, or other payload.
-fn log_acp_dialect_absorbed(kind: stream_event::AcpDialectSignalKind, line: &str) {
+fn log_acp_dialect_absorbed(kind: stream_event::DialectSignalKind, line: &str) {
     let (session_id, marker) = acp_dialect::absorbed_log_context(line);
     info!(
         direction = "agent_notify",

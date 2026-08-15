@@ -288,7 +288,7 @@ async fn spawn_and_connect_acp_once(
 
 fn initial_mode_from_params(params: &AcpSessionParams) -> Option<ModeId> {
     // Prefer the last-persisted mode; for brand-new conversations
-    // fall back to `AcpBuildExtra::session_mode` so the first turn
+    // fall back to `RuntimeBuildConfig::session_mode` so the first turn
     // still honours the caller's choice.
     params
         .session_snapshot

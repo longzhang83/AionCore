@@ -362,3 +362,37 @@ Session/MCP/API/App/Team：
 - `cargo clippy --workspace --all-targets -- -D warnings` 通过，exit 0。
 
 未纳入本切片：API DTO、DB `acp_session`、旧 `AcpAgentManager`、aionrs/antigravity 删除。其余叶子 `Acp*` 类型命名继续留给第 5 步统一迁移。
+
+---
+
+## 8. V3 A1 clean-cut 第 5 步进度（2026-08-15）
+
+状态：已实现并验证。
+
+- 19 个存活叶子 `Acp*` 类型按本盘点建议统一迁移为 Runtime 中性命名，共 351 处、35 个文件：
+  - API DTO：`AcpConfigOptionDto -> RuntimeConfigOptionDto`、`AcpConfigSelectOptionDto -> RuntimeConfigSelectOptionDto`、
+    `AcpEnvResponse -> RuntimeEnvResponse`、`AcpBuildExtra -> RuntimeBuildConfig`、`AcpModelInfo -> RuntimeModelInfo`、
+    `AcpPromptHookWarningPayload -> PromptHookWarningPayload`（去前缀）；
+  - MCP 注入：`AcpSessionMcpServer -> RuntimeSessionMcpServer`、`AcpMcpCapabilities -> RuntimeMcpCapabilities`；
+  - 工具叶子：`AcpToolCallKind -> ToolCallKind`、`AcpToolCallContentItem -> ToolResultContentItem`、
+    `AcpToolCallTextBlock(Type) -> ToolResultTextBlock(Type)`、`AcpToolCallLocationItem -> ToolLocationItem`；
+  - 审批叶子：`AcpPermissionOptionData -> ApprovalOptionData`、`AcpPermissionOptionKind -> ApprovalOptionKind`、
+    `AcpPermissionToolCall -> ApprovalToolCall`；
+  - 方言信号叶子（旧驱动内部）：`AcpDialectSignalKind/Data -> DialectSignalKind/Data`（仅去前缀）。
+- 命名冲突修正：`AcpToolCallStatus`（Pending/InProgress/Completed/Failed 协议态）不得并入既有中性
+  `ToolCallStatus`（Running/Completed/Error/Canceled fold 层态）--两者 wire 词汇不同，`tool_call.rs` 内注释
+  已明确禁止混用。本步改名为 `ProtocolToolCallStatus`，保持两个词汇独立。
+- 纯重命名切片：serde 属性均在字段/variant 级，类型名不进 wire；`agent_type = "acp"`、
+  `conversation type = "acp"`、`acp_args` 等 wire/DB 值不在本切片范围（留给 API DTO/DB 命名步骤）。
+- wrapper 删除范围类型未动（`AcpAgentManager`、`AcpProtocol`、`acp_conn.rs` 后端、`AcpSessionRow` 等），
+  留给后续删除与 DB 步骤。
+
+验证：
+
+- `cargo check --workspace --all-targets` 通过。
+- `cargo test -p aionui-ai-agent -p aionui-session -p aionui-conversation -p aionui-channel -p aionui-team -p aionui-cron` 通过（1302 passed / 0 failed，exit 0）。
+- `cargo fmt --all -- --check` 通过。
+- `cargo clippy --workspace --all-targets -- -D warnings` 通过。
+
+未纳入本切片：API DTO 模块/文件级重命名（`api-types/src/acp.rs`）、DB `acp_session` 命名、旧 `AcpAgentManager`
+与 aionrs/antigravity 删除、wire 层 `"acp"` 字符串清理。

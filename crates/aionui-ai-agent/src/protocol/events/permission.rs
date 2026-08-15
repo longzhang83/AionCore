@@ -3,51 +3,51 @@ use aionui_common::{Confirmation, ConfirmationOption};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::tool_call::{AcpToolCallContentItem, AcpToolCallKind, AcpToolCallLocationItem, AcpToolCallStatus};
+use super::tool_call::{ProtocolToolCallStatus, ToolCallKind, ToolLocationItem, ToolResultContentItem};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApprovalRequestEventData {
     #[serde(default)]
     pub session_id: String,
-    pub tool_call: AcpPermissionToolCall,
-    pub options: Vec<AcpPermissionOptionData>,
+    pub tool_call: ApprovalToolCall,
+    pub options: Vec<ApprovalOptionData>,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<SdkMeta>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AcpPermissionToolCall {
+pub struct ApprovalToolCall {
     pub tool_call_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<AcpToolCallStatus>,
+    pub status: Option<ProtocolToolCallStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub kind: Option<AcpToolCallKind>,
+    pub kind: Option<ToolCallKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_input: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_output: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<Vec<AcpToolCallContentItem>>,
+    pub content: Option<Vec<ToolResultContentItem>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub locations: Option<Vec<AcpToolCallLocationItem>>,
+    pub locations: Option<Vec<ToolLocationItem>>,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<SdkMeta>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AcpPermissionOptionData {
+pub struct ApprovalOptionData {
     pub option_id: String,
     pub name: String,
-    pub kind: AcpPermissionOptionKind,
+    pub kind: ApprovalOptionKind,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<SdkMeta>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum AcpPermissionOptionKind {
+pub enum ApprovalOptionKind {
     AllowOnce,
     AllowAlways,
     RejectOnce,
@@ -76,9 +76,9 @@ impl ApprovalRequestEventData {
                 .map(ToOwned::to_owned)
                 .unwrap_or_default(),
             command_type: self.tool_call.kind.map(|kind| match kind {
-                AcpToolCallKind::Read => "read".to_owned(),
-                AcpToolCallKind::Edit => "edit".to_owned(),
-                AcpToolCallKind::Execute => "execute".to_owned(),
+                ToolCallKind::Read => "read".to_owned(),
+                ToolCallKind::Edit => "edit".to_owned(),
+                ToolCallKind::Execute => "execute".to_owned(),
             }),
             // Recovery carries the structured questions when the agent put them
             // in raw_input (qwen/kimi smuggle ask_user_question through the
@@ -122,7 +122,7 @@ mod to_confirmation_tests {
     fn request(raw_input: serde_json::Value) -> ApprovalRequestEventData {
         ApprovalRequestEventData {
             session_id: "s1".into(),
-            tool_call: AcpPermissionToolCall {
+            tool_call: ApprovalToolCall {
                 tool_call_id: "call-1".into(),
                 status: None,
                 title: Some("Ask user 1 question".into()),

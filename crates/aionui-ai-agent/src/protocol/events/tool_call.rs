@@ -43,9 +43,9 @@ pub struct ToolResultEventData {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_output: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content: Option<Vec<AcpToolCallContentItem>>,
+    pub content: Option<Vec<ToolResultContentItem>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub locations: Option<Vec<AcpToolCallLocationItem>>,
+    pub locations: Option<Vec<ToolLocationItem>>,
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<SdkMeta>,
 }
@@ -59,7 +59,7 @@ pub enum ToolResultStatus {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum AcpToolCallStatus {
+pub enum ProtocolToolCallStatus {
     Pending,
     InProgress,
     Completed,
@@ -68,7 +68,7 @@ pub enum AcpToolCallStatus {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum AcpToolCallKind {
+pub enum ToolCallKind {
     Read,
     Edit,
     Execute,
@@ -76,9 +76,9 @@ pub enum AcpToolCallKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum AcpToolCallContentItem {
+pub enum ToolResultContentItem {
     Content {
-        content: AcpToolCallTextBlock,
+        content: ToolResultTextBlock,
     },
     Diff {
         path: String,
@@ -89,20 +89,20 @@ pub enum AcpToolCallContentItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AcpToolCallTextBlock {
+pub struct ToolResultTextBlock {
     #[serde(rename = "type")]
-    pub block_type: AcpToolCallTextBlockType,
+    pub block_type: ToolResultTextBlockType,
     pub text: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum AcpToolCallTextBlockType {
+pub enum ToolResultTextBlockType {
     Text,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AcpToolCallLocationItem {
+pub struct ToolLocationItem {
     pub path: String,
 }
 

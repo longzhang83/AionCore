@@ -8,7 +8,7 @@ use super::super::config_options::{ConfigSetPath, resolve_set_path};
 use super::super::legacy_session_model::LegacyModelEntry;
 use super::*;
 
-fn snapshot_option<'a>(snapshot: &'a ConfigSnapshot, option_id: &str) -> &'a aionui_api_types::AcpConfigOptionDto {
+fn snapshot_option<'a>(snapshot: &'a ConfigSnapshot, option_id: &str) -> &'a aionui_api_types::RuntimeConfigOptionDto {
     snapshot
         .options
         .iter()

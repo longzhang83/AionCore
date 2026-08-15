@@ -8,7 +8,7 @@
 use crate::capability::first_message_injector::{InjectionConfig, inject_first_message_prefix};
 use crate::capability::prompt_pipeline::{PreSendHook, PromptCtx};
 use crate::protocol::events::AgentStreamEvent;
-use aionui_api_types::AcpPromptHookWarningPayload;
+use aionui_api_types::PromptHookWarningPayload;
 
 #[derive(Default)]
 pub struct SessionNewPreludeHook;
@@ -44,7 +44,7 @@ impl PreSendHook for SessionNewPreludeHook {
 /// but the pipeline must keep the prompt flowing.
 #[allow(dead_code)] // Seed for future hook-failure surfacing; Task 7's ignored skeleton unlocks this.
 pub(crate) fn emit_hook_warning(ctx: &PromptCtx<'_>, hook: &'static str, message: impl Into<String>) {
-    let payload = AcpPromptHookWarningPayload {
+    let payload = PromptHookWarningPayload {
         hook: hook.to_owned(),
         message: message.into(),
     };
@@ -62,7 +62,7 @@ mod tests {
 
     #[test]
     fn emit_hook_warning_payload_shape() {
-        let payload = AcpPromptHookWarningPayload {
+        let payload = PromptHookWarningPayload {
             hook: "session_new_prelude".into(),
             message: "boom".into(),
         };

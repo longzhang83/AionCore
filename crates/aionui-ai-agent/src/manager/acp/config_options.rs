@@ -2,13 +2,13 @@ use agent_client_protocol::schema::v1::{
     SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOption,
     SessionConfigSelectOptions, SessionModeState,
 };
-use aionui_api_types::{AcpConfigOptionDto, AcpConfigSelectOptionDto};
+use aionui_api_types::{RuntimeConfigOptionDto, RuntimeConfigSelectOptionDto};
 
 use super::legacy_session_model::LegacySessionModelState;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ConfigSnapshot {
-    pub(crate) options: Vec<AcpConfigOptionDto>,
+    pub(crate) options: Vec<RuntimeConfigOptionDto>,
     option_origins: Vec<ConfigOptionOrigin>,
 }
 
@@ -37,7 +37,7 @@ impl ConfigSupplementSummary {
 }
 
 impl ConfigSnapshot {
-    fn new(options: Vec<AcpConfigOptionDto>, option_origins: Vec<ConfigOptionOrigin>) -> Self {
+    fn new(options: Vec<RuntimeConfigOptionDto>, option_origins: Vec<ConfigOptionOrigin>) -> Self {
         debug_assert_eq!(
             options.len(),
             option_origins.len(),
@@ -55,7 +55,7 @@ impl ConfigSnapshot {
     }
 
     pub(crate) fn from_real_options(options: Vec<SessionConfigOption>) -> Self {
-        let options: Vec<AcpConfigOptionDto> = options.into_iter().map(dto_from_sdk_option).collect();
+        let options: Vec<RuntimeConfigOptionDto> = options.into_iter().map(dto_from_sdk_option).collect();
         let option_origins = vec![ConfigOptionOrigin::Real; options.len()];
         Self::new(options, option_origins)
     }
@@ -210,7 +210,7 @@ pub(crate) fn resolve_set_path(
     }
 }
 
-fn dto_from_sdk_option(option: SessionConfigOption) -> AcpConfigOptionDto {
+fn dto_from_sdk_option(option: SessionConfigOption) -> RuntimeConfigOptionDto {
     let (option_type, current_value, options) = match option.kind {
         SessionConfigKind::Select(select) => {
             let values = flatten_select_options(&select.options)
@@ -222,7 +222,7 @@ fn dto_from_sdk_option(option: SessionConfigOption) -> AcpConfigOptionDto {
         _ => ("string".to_owned(), None, Vec::new()),
     };
 
-    AcpConfigOptionDto {
+    RuntimeConfigOptionDto {
         id: option.id.to_string(),
         name: Some(option.name),
         label: None,
@@ -234,8 +234,8 @@ fn dto_from_sdk_option(option: SessionConfigOption) -> AcpConfigOptionDto {
     }
 }
 
-fn dto_from_modes(modes: &SessionModeState) -> AcpConfigOptionDto {
-    AcpConfigOptionDto {
+fn dto_from_modes(modes: &SessionModeState) -> RuntimeConfigOptionDto {
+    RuntimeConfigOptionDto {
         id: "mode".to_owned(),
         name: Some("Mode".to_owned()),
         label: None,
@@ -246,7 +246,7 @@ fn dto_from_modes(modes: &SessionModeState) -> AcpConfigOptionDto {
         options: modes
             .available_modes
             .iter()
-            .map(|mode| AcpConfigSelectOptionDto {
+            .map(|mode| RuntimeConfigSelectOptionDto {
                 value: mode.id.to_string(),
                 name: Some(mode.name.clone()),
                 label: None,
@@ -256,8 +256,8 @@ fn dto_from_modes(modes: &SessionModeState) -> AcpConfigOptionDto {
     }
 }
 
-fn dto_from_models(models: &LegacySessionModelState) -> AcpConfigOptionDto {
-    AcpConfigOptionDto {
+fn dto_from_models(models: &LegacySessionModelState) -> RuntimeConfigOptionDto {
+    RuntimeConfigOptionDto {
         id: "model".to_owned(),
         name: Some("Model".to_owned()),
         label: None,
@@ -268,7 +268,7 @@ fn dto_from_models(models: &LegacySessionModelState) -> AcpConfigOptionDto {
         options: models
             .available_models
             .iter()
-            .map(|model| AcpConfigSelectOptionDto {
+            .map(|model| RuntimeConfigSelectOptionDto {
                 value: model.model_id.clone(),
                 name: Some(model.name.clone()),
                 label: None,
@@ -278,8 +278,8 @@ fn dto_from_models(models: &LegacySessionModelState) -> AcpConfigOptionDto {
     }
 }
 
-fn dto_from_select_option(option: &SessionConfigSelectOption) -> AcpConfigSelectOptionDto {
-    AcpConfigSelectOptionDto {
+fn dto_from_select_option(option: &SessionConfigSelectOption) -> RuntimeConfigSelectOptionDto {
+    RuntimeConfigSelectOptionDto {
         value: option.value.to_string(),
         name: Some(option.name.clone()),
         label: None,

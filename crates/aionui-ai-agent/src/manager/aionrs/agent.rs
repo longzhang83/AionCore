@@ -15,8 +15,8 @@ use aion_mcp::manager::McpManager;
 use aion_protocol::commands::{ApprovalScope, SessionMode};
 use aion_protocol::{ToolApprovalManager, ToolApprovalResult};
 use aionui_api_types::{
-    AcpConfigOptionDto, AcpConfigSelectOptionDto, AgentModeResponse, ConfigOptionConfirmation,
-    GetConfigOptionsResponse, SetConfigOptionResponse, SlashCommandItem,
+    AgentModeResponse, ConfigOptionConfirmation, GetConfigOptionsResponse, RuntimeConfigOptionDto,
+    RuntimeConfigSelectOptionDto, SetConfigOptionResponse, SlashCommandItem,
 };
 use aionui_common::{AgentKillReason, AgentType, Confirmation, ConversationStatus, ErrorChain, TimestampMs, now_ms};
 use serde_json::Value;
@@ -607,8 +607,8 @@ fn is_aionrs_session_mode(s: &str) -> bool {
     matches!(s, "default" | "auto_edit" | "yolo")
 }
 
-fn aionrs_mode_config_option(current_value: String) -> AcpConfigOptionDto {
-    AcpConfigOptionDto {
+fn aionrs_mode_config_option(current_value: String) -> RuntimeConfigOptionDto {
+    RuntimeConfigOptionDto {
         id: AIONRS_MODE_OPTION_ID.to_owned(),
         name: Some("Mode".to_owned()),
         label: None,
@@ -624,8 +624,8 @@ fn aionrs_mode_config_option(current_value: String) -> AcpConfigOptionDto {
     }
 }
 
-fn aionrs_mode_select_option(value: &str, name: &str) -> AcpConfigSelectOptionDto {
-    AcpConfigSelectOptionDto {
+fn aionrs_mode_select_option(value: &str, name: &str) -> RuntimeConfigSelectOptionDto {
+    RuntimeConfigSelectOptionDto {
         value: value.to_owned(),
         name: Some(name.to_owned()),
         label: None,

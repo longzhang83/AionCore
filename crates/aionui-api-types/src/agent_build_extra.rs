@@ -62,7 +62,7 @@ pub struct ForkSpec {
 
 /// ACP-specific fields extracted from `extra` in build task options.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct AcpBuildExtra {
+pub struct RuntimeBuildConfig {
     #[serde(default)]
     pub agent_id: Option<String>,
     #[serde(default)]
@@ -132,7 +132,7 @@ pub struct AionrsBuildExtra {
 
 /// ACP model information returned by the ACP backend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AcpModelInfo {
+pub struct RuntimeModelInfo {
     pub model_id: String,
     pub model_name: Option<String>,
     pub provider: Option<String>,
@@ -165,20 +165,20 @@ mod tests {
 
     #[test]
     fn acp_build_extra_defaults_thought_level_to_none() {
-        let parsed: AcpBuildExtra = serde_json::from_str(r#"{"backend":"codex"}"#).unwrap();
+        let parsed: RuntimeBuildConfig = serde_json::from_str(r#"{"backend":"codex"}"#).unwrap();
         assert!(parsed.thought_level.is_none());
     }
 
     #[test]
     fn acp_build_extra_parses_thought_level_seed() {
-        let parsed: AcpBuildExtra = serde_json::from_str(r#"{"backend":"codex","thought_level":"high"}"#).unwrap();
+        let parsed: RuntimeBuildConfig = serde_json::from_str(r#"{"backend":"codex","thought_level":"high"}"#).unwrap();
         assert_eq!(parsed.thought_level.as_deref(), Some("high"));
     }
 
     #[test]
     fn acp_build_extra_ignores_legacy_guide_config_field() {
         let legacy_key = concat!("guide", "_mcp_config");
-        let parsed: AcpBuildExtra = serde_json::from_value(serde_json::json!({
+        let parsed: RuntimeBuildConfig = serde_json::from_value(serde_json::json!({
             "backend": "claude",
             legacy_key: {"port": 1234, "token": "legacy", "binary_path": "/bin/aioncore"}
         }))

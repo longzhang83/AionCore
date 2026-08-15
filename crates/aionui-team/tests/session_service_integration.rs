@@ -12,8 +12,8 @@ use aionui_ai_agent::task_manager::AgentFactory;
 use aionui_ai_agent::types::BuildTaskOptions;
 use aionui_ai_agent::{ActiveLeaseRegistry, AgentError, IWorkerTaskManager, WorkerTaskManagerImpl};
 use aionui_api_types::{
-    AcpBuildExtra, AcpConfigOptionDto, AcpConfigSelectOptionDto, AddAgentRequest, CreateTeamRequest,
-    GetConfigOptionsResponse, TeamAgentInput, TeamRunSource, WebSocketMessage,
+    AddAgentRequest, CreateTeamRequest, GetConfigOptionsResponse, RuntimeBuildConfig, RuntimeConfigOptionDto,
+    RuntimeConfigSelectOptionDto, TeamAgentInput, TeamRunSource, WebSocketMessage,
 };
 use aionui_common::{AgentKillReason, AgentType, PaginatedResult, ProviderWithModel};
 use aionui_db::models::{
@@ -534,7 +534,7 @@ impl TeamConversationProvisioningPort for FakeConversationPorts {
             .unwrap_or("mock-model")
             .to_owned();
         Ok(GetConfigOptionsResponse {
-            config_options: vec![AcpConfigOptionDto {
+            config_options: vec![RuntimeConfigOptionDto {
                 id: "model".to_owned(),
                 name: None,
                 label: Some("Model".to_owned()),
@@ -542,7 +542,7 @@ impl TeamConversationProvisioningPort for FakeConversationPorts {
                 category: Some("model".to_owned()),
                 option_type: "select".to_owned(),
                 current_value: Some(model.clone()),
-                options: vec![AcpConfigSelectOptionDto {
+                options: vec![RuntimeConfigSelectOptionDto {
                     value: model.clone(),
                     name: None,
                     label: Some(model),
@@ -563,7 +563,7 @@ impl TeamConversationProvisioningPort for FakeConversationPorts {
         })?;
         let extra: serde_json::Value = serde_json::from_str(&row.extra)?;
         let team = aionui_api_types::TeamSessionBinding::from_extra_value(&extra)?;
-        let config: AcpBuildExtra = serde_json::from_value(extra.clone()).unwrap_or_default();
+        let config: RuntimeBuildConfig = serde_json::from_value(extra.clone()).unwrap_or_default();
         let workspace = extra
             .get("workspace")
             .and_then(serde_json::Value::as_str)
@@ -1415,7 +1415,7 @@ fn test_acp_build_options(conversation_id: String, workspace: String) -> BuildTa
         runtime_env: Vec::new(),
         team: None,
         kind: AgentSessionKind::Acp(Box::new(AcpSessionBuildContext {
-            config: AcpBuildExtra::default(),
+            config: RuntimeBuildConfig::default(),
             team: None,
             belongs_to_team: false,
             session_id: None,

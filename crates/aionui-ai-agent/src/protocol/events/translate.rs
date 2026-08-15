@@ -5,13 +5,11 @@ use agent_client_protocol::schema::v1::{
 };
 use tracing::debug;
 
-use super::permission::{
-    AcpPermissionOptionData, AcpPermissionOptionKind, AcpPermissionToolCall, ApprovalRequestEventData,
-};
+use super::permission::{ApprovalOptionData, ApprovalOptionKind, ApprovalRequestEventData, ApprovalToolCall};
 use super::session_updates::{AvailableCommandsEventData, PlanEventData, ThinkingEventData};
 use super::tool_call::{
-    AcpToolCallContentItem, AcpToolCallKind, AcpToolCallLocationItem, AcpToolCallStatus, AcpToolCallTextBlock,
-    AcpToolCallTextBlockType, ToolCallEventData, ToolCallStatus, ToolResultEventData, ToolResultStatus,
+    ProtocolToolCallStatus, ToolCallEventData, ToolCallKind, ToolCallStatus, ToolLocationItem, ToolResultContentItem,
+    ToolResultEventData, ToolResultStatus, ToolResultTextBlock, ToolResultTextBlockType,
 };
 use super::{AgentStreamEvent, TextEventData};
 
@@ -174,17 +172,17 @@ pub(crate) fn permission_request_to_event_data(request: &RequestPermissionReques
     }
 }
 
-fn terminal_tool_result_status(status: Option<AcpToolCallStatus>) -> Option<ToolResultStatus> {
+fn terminal_tool_result_status(status: Option<ProtocolToolCallStatus>) -> Option<ToolResultStatus> {
     match status {
-        Some(AcpToolCallStatus::Completed) => Some(ToolResultStatus::Completed),
-        Some(AcpToolCallStatus::Failed) => Some(ToolResultStatus::Failed),
-        Some(AcpToolCallStatus::Pending | AcpToolCallStatus::InProgress) | None => None,
+        Some(ProtocolToolCallStatus::Completed) => Some(ToolResultStatus::Completed),
+        Some(ProtocolToolCallStatus::Failed) => Some(ToolResultStatus::Failed),
+        Some(ProtocolToolCallStatus::Pending | ProtocolToolCallStatus::InProgress) | None => None,
     }
 }
 
 fn tool_output_text(
     raw_output: Option<&serde_json::Value>,
-    content: Option<&[AcpToolCallContentItem]>,
+    content: Option<&[ToolResultContentItem]>,
 ) -> Option<String> {
     if let Some(raw_output) = raw_output {
         return Some(match raw_output {
@@ -198,13 +196,13 @@ fn tool_output_text(
         .and_then(|items| serde_json::to_string(items).ok())
 }
 
-fn map_sdk_tool_status(sdk: &SdkToolCallStatus) -> AcpToolCallStatus {
+fn map_sdk_tool_status(sdk: &SdkToolCallStatus) -> ProtocolToolCallStatus {
     match sdk {
-        SdkToolCallStatus::Pending => AcpToolCallStatus::Pending,
-        SdkToolCallStatus::InProgress => AcpToolCallStatus::InProgress,
-        SdkToolCallStatus::Completed => AcpToolCallStatus::Completed,
-        SdkToolCallStatus::Failed => AcpToolCallStatus::Failed,
-        _ => AcpToolCallStatus::Pending,
+        SdkToolCallStatus::Pending => ProtocolToolCallStatus::Pending,
+        SdkToolCallStatus::InProgress => ProtocolToolCallStatus::InProgress,
+        SdkToolCallStatus::Completed => ProtocolToolCallStatus::Completed,
+        SdkToolCallStatus::Failed => ProtocolToolCallStatus::Failed,
+        _ => ProtocolToolCallStatus::Pending,
     }
 }
 
@@ -308,7 +306,7 @@ fn insert_image_output(obj: &mut serde_json::Map<String, serde_json::Value>, pat
 fn normalize_tool_status(
     sdk_status: Option<&SdkToolCallStatus>,
     raw_output: Option<&serde_json::Value>,
-) -> Option<AcpToolCallStatus> {
+) -> Option<ProtocolToolCallStatus> {
     let image_saved = raw_output
         .and_then(|v| v.get("image"))
         .and_then(|v| v.get("path"))
@@ -320,15 +318,15 @@ fn normalize_tool_status(
     // report a terminal status. Codex stalls by leaving the final event as
     // `generating`/`in_progress`, but a genuine `failed` must be preserved as-is.
     match (image_saved, sdk_status.map(map_sdk_tool_status)) {
-        (true, None | Some(AcpToolCallStatus::Pending | AcpToolCallStatus::InProgress)) => {
-            Some(AcpToolCallStatus::Completed)
+        (true, None | Some(ProtocolToolCallStatus::Pending | ProtocolToolCallStatus::InProgress)) => {
+            Some(ProtocolToolCallStatus::Completed)
         }
         (_, status) => status,
     }
 }
 
-fn normalize_raw_output_status(raw_output: &mut Option<serde_json::Value>, status: Option<&AcpToolCallStatus>) {
-    let Some(AcpToolCallStatus::Completed) = status else {
+fn normalize_raw_output_status(raw_output: &mut Option<serde_json::Value>, status: Option<&ProtocolToolCallStatus>) {
+    let Some(ProtocolToolCallStatus::Completed) = status else {
         return;
     };
     let Some(obj) = raw_output.as_mut().and_then(|v| v.as_object_mut()) else {
@@ -337,31 +335,31 @@ fn normalize_raw_output_status(raw_output: &mut Option<serde_json::Value>, statu
     obj.insert("status".to_owned(), serde_json::Value::String("completed".to_owned()));
 }
 
-fn map_sdk_tool_kind(kind: &SdkToolKind) -> AcpToolCallKind {
+fn map_sdk_tool_kind(kind: &SdkToolKind) -> ToolCallKind {
     match kind {
-        SdkToolKind::Read | SdkToolKind::Search => AcpToolCallKind::Read,
-        SdkToolKind::Edit | SdkToolKind::Delete | SdkToolKind::Move => AcpToolCallKind::Edit,
+        SdkToolKind::Read | SdkToolKind::Search => ToolCallKind::Read,
+        SdkToolKind::Edit | SdkToolKind::Delete | SdkToolKind::Move => ToolCallKind::Edit,
         SdkToolKind::Execute
         | SdkToolKind::Think
         | SdkToolKind::Fetch
         | SdkToolKind::SwitchMode
         | SdkToolKind::Other
-        | _ => AcpToolCallKind::Execute,
+        | _ => ToolCallKind::Execute,
     }
 }
 
-fn map_sdk_permission_option_kind(kind: SdkPermissionOptionKind) -> AcpPermissionOptionKind {
+fn map_sdk_permission_option_kind(kind: SdkPermissionOptionKind) -> ApprovalOptionKind {
     match kind {
-        SdkPermissionOptionKind::AllowOnce => AcpPermissionOptionKind::AllowOnce,
-        SdkPermissionOptionKind::AllowAlways => AcpPermissionOptionKind::AllowAlways,
-        SdkPermissionOptionKind::RejectOnce => AcpPermissionOptionKind::RejectOnce,
-        SdkPermissionOptionKind::RejectAlways => AcpPermissionOptionKind::RejectAlways,
-        _ => AcpPermissionOptionKind::RejectOnce,
+        SdkPermissionOptionKind::AllowOnce => ApprovalOptionKind::AllowOnce,
+        SdkPermissionOptionKind::AllowAlways => ApprovalOptionKind::AllowAlways,
+        SdkPermissionOptionKind::RejectOnce => ApprovalOptionKind::RejectOnce,
+        SdkPermissionOptionKind::RejectAlways => ApprovalOptionKind::RejectAlways,
+        _ => ApprovalOptionKind::RejectOnce,
     }
 }
 
-fn map_permission_tool_call(tool_call: &SdkToolCallUpdate) -> AcpPermissionToolCall {
-    AcpPermissionToolCall {
+fn map_permission_tool_call(tool_call: &SdkToolCallUpdate) -> ApprovalToolCall {
+    ApprovalToolCall {
         tool_call_id: tool_call.tool_call_id.to_string(),
         status: tool_call.fields.status.as_ref().map(map_sdk_tool_status),
         title: tool_call.fields.title.clone(),
@@ -382,8 +380,8 @@ fn map_permission_tool_call(tool_call: &SdkToolCallUpdate) -> AcpPermissionToolC
     }
 }
 
-fn map_permission_option(option: &PermissionOption) -> AcpPermissionOptionData {
-    AcpPermissionOptionData {
+fn map_permission_option(option: &PermissionOption) -> ApprovalOptionData {
+    ApprovalOptionData {
         option_id: option.option_id.to_string(),
         name: option.name.clone(),
         kind: map_sdk_permission_option_kind(option.kind),
@@ -391,20 +389,20 @@ fn map_permission_option(option: &PermissionOption) -> AcpPermissionOptionData {
     }
 }
 
-fn map_tool_call_content(content: &[SdkToolCallContent]) -> Option<Vec<AcpToolCallContentItem>> {
-    let items: Vec<AcpToolCallContentItem> = content
+fn map_tool_call_content(content: &[SdkToolCallContent]) -> Option<Vec<ToolResultContentItem>> {
+    let items: Vec<ToolResultContentItem> = content
         .iter()
         .filter_map(|item| match item {
             SdkToolCallContent::Content(content) => match &content.content {
-                ContentBlock::Text(text) => Some(AcpToolCallContentItem::Content {
-                    content: AcpToolCallTextBlock {
-                        block_type: AcpToolCallTextBlockType::Text,
+                ContentBlock::Text(text) => Some(ToolResultContentItem::Content {
+                    content: ToolResultTextBlock {
+                        block_type: ToolResultTextBlockType::Text,
                         text: text.text.clone(),
                     },
                 }),
                 _ => None,
             },
-            SdkToolCallContent::Diff(diff) => Some(AcpToolCallContentItem::Diff {
+            SdkToolCallContent::Diff(diff) => Some(ToolResultContentItem::Diff {
                 path: diff.path.to_string_lossy().into_owned(),
                 old_text: diff.old_text.clone(),
                 new_text: diff.new_text.clone(),
@@ -417,11 +415,11 @@ fn map_tool_call_content(content: &[SdkToolCallContent]) -> Option<Vec<AcpToolCa
     if items.is_empty() { None } else { Some(items) }
 }
 
-fn map_tool_call_locations(locations: &[SdkToolCallLocation]) -> Option<Vec<AcpToolCallLocationItem>> {
+fn map_tool_call_locations(locations: &[SdkToolCallLocation]) -> Option<Vec<ToolLocationItem>> {
     (!locations.is_empty()).then(|| {
         locations
             .iter()
-            .map(|loc| AcpToolCallLocationItem {
+            .map(|loc| ToolLocationItem {
                 path: loc.path.to_string_lossy().into_owned(),
             })
             .collect()
