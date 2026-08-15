@@ -582,3 +582,39 @@ ACP wire/SDK 术语以及后续 clean-cut slices。
 
 未纳入本提交：`AgentInstance` dispatcher variant 改名，以及 `aionui-ai-agent` crate 内部旧 integration
 test 消费点迁移。
+
+---
+
+## 16. V3 A1 clean-cut Slice 5 提交 2 与整体收口（2026-08-15）
+
+状态：已完成并提交（`7aabcfbe`）。A1 `Acp*` clean-cut 至此整体完成。
+
+- Dispatcher variant 语义拆分：`AgentInstance::Acp` -> `AgentInstance::ProtocolAdapterAgent`
+  （`Arc<RuntimeAgentManager>`）、`AgentInstance::Session` -> `AgentInstance::DirectCliSession`
+  （`Arc<crate::session_agent::SessionAgentTask>`）。无 alias、不新增 variant、不改分支行为。
+- 单趟更新全部构造点与 match 分支，覆盖 `aionui-ai-agent`（agent_task / factory/runtime /
+  session_agent / runtime_agent_integration / agent_types_integration）、`aionui-app`
+  （antigravity_hook）、`aionui-conversation`（service、force_kill_convergence）、
+  `aionui-session`（backend/mod）、`aionui-team`（service），9 文件 70+/71-。
+- 设计边界不动：`AgentType::Acp` 产品分类枚举、基于 `AgentType::Acp` 的 idle 策略、
+  `IAgentTask` trait、wire/SDK 表面均未触碰。
+- `agent_types_integration.rs` 两处旧引用由主会话直接修复（`AgentSessionKind::Acp` ->
+  `Runtime`、`AcpSessionBuildContext` -> `RuntimeSessionBuildContext`）。
+
+终局审计（`rg '\bAcp[A-Za-z_]+' -g '*.rs'`）：残留仅三类合法事实术语——
+
+1. ACP 协议客户端本体：`AcpConnection`、`AcpSessionBackend`、`AcpReaderState`、
+   `AcpWakeRecipe`（`aionui-session/src/backend/acp_conn.rs`）；
+2. 持久化 schema 事实：`AcpSessionRow`、`AcpToolCallPersist`（`aionui-db` models/repository）；
+3. wire/协议枚举与文档注释：`AcpToolCall`、`AcpPermission`、`AcpSessionInfo`、
+   `AcpConfigOption`、`AcpBackend`、`AcpSendBox`（测试/wire 事实）；跨 crate 的
+   `AcpAgentManager` 残留全部为注释，非代码引用。
+
+验证：
+
+- `cargo check --workspace` 通过（exit 0）。
+- `cargo test --workspace` 完整落盘复跑：全部通过。唯一失败
+  `aionui-office::watch_manager::tests::port_timeout_on_no_listener` 为环境 flake
+  （并行负载下端口探测误判）：隔离复跑通过、`-p aionui-office --lib` 整 crate 复跑
+  104/104 通过；office watch_manager 与本次 9 个改动文件零交集。
+- `git diff --check` 通过。
