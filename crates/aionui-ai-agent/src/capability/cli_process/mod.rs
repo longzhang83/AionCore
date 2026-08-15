@@ -201,8 +201,8 @@ impl CliAgentProcess {
     /// Take the buffered stderr content (consuming).
     ///
     /// Returns the last [`STDERR_BUFFER_MAX`] bytes of stderr output.
-    /// Used for error diagnostics in `AcpError::StartupCrash` and
-    /// `AcpError::Disconnected`.
+    /// Used for error diagnostics in `RuntimeError::StartupCrash` and
+    /// `RuntimeError::Disconnected`.
     #[allow(dead_code)] // Diagnostics API for startup crash and disconnect error reporting
     pub async fn take_stderr(&self) -> String {
         let mut buf = self.stderr_buffer.lock().await;

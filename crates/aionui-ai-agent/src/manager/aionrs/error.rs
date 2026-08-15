@@ -4,9 +4,9 @@ use aionui_api_types::{
     AgentErrorCode, AgentErrorOwnership, AgentErrorResolution, AgentErrorResolutionKind, AgentErrorResolutionTarget,
 };
 
-use crate::protocol::send_error::AgentSendError;
+use crate::protocol::runtime_send_error::RuntimeSendError;
 
-pub(super) fn aionrs_engine_error_to_send_error(error: &AionrsAgentError) -> AgentSendError {
+pub(super) fn aionrs_engine_error_to_send_error(error: &AionrsAgentError) -> RuntimeSendError {
     let detail = format!("Aionrs agent error: {error}");
     match error {
         AionrsAgentError::Provider(provider_error) => aionrs_provider_error_to_send_error(provider_error, detail),
@@ -94,7 +94,7 @@ pub(super) fn aionrs_runtime_error_summary(error: &AionrsAgentError) -> AionrsRu
     }
 }
 
-fn aionrs_provider_error_to_send_error(error: &ProviderError, detail: String) -> AgentSendError {
+fn aionrs_provider_error_to_send_error(error: &ProviderError, detail: String) -> RuntimeSendError {
     match error {
         ProviderError::Api { status, .. } => aionrs_provider_status_to_send_error(*status, detail),
         ProviderError::RateLimited { body, .. } => provider_send_error(
@@ -132,7 +132,7 @@ fn aionrs_provider_error_to_send_error(error: &ProviderError, detail: String) ->
     }
 }
 
-fn aionrs_provider_status_to_send_error(status: u16, detail: String) -> AgentSendError {
+fn aionrs_provider_status_to_send_error(status: u16, detail: String) -> RuntimeSendError {
     match status {
         400 => provider_send_error(
             "The model provider rejected the request",
@@ -216,8 +216,8 @@ fn provider_send_error(
     retryable: bool,
     resolution_kind: AgentErrorResolutionKind,
     resolution_target: Option<AgentErrorResolutionTarget>,
-) -> AgentSendError {
-    AgentSendError::new(
+) -> RuntimeSendError {
+    RuntimeSendError::new(
         message,
         code,
         AgentErrorOwnership::UserLlmProvider,
@@ -228,8 +228,8 @@ fn provider_send_error(
     )
 }
 
-fn unknown_upstream_send_error(detail: String) -> AgentSendError {
-    AgentSendError::new(
+fn unknown_upstream_send_error(detail: String) -> RuntimeSendError {
+    RuntimeSendError::new(
         "The upstream Agent failed while handling the request",
         AgentErrorCode::UnknownUpstreamError,
         AgentErrorOwnership::UnknownUpstream,
@@ -256,8 +256,8 @@ fn append_provider_body(detail: String, body: Option<&str>) -> String {
     }
 }
 
-fn tool_call_failure_send_error(detail: String) -> AgentSendError {
-    AgentSendError::new(
+fn tool_call_failure_send_error(detail: String) -> RuntimeSendError {
+    RuntimeSendError::new(
         "The upstream Agent repeatedly failed while executing tool calls",
         AgentErrorCode::UnknownUpstreamError,
         AgentErrorOwnership::UnknownUpstream,

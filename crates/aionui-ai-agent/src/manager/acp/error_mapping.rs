@@ -1,33 +1,33 @@
 use crate::error::AgentError;
-use crate::protocol::error::AcpError;
-use crate::protocol::send_error::AgentSendError;
+use crate::protocol::runtime_error::RuntimeError;
+use crate::protocol::runtime_send_error::RuntimeSendError;
 
 #[derive(Debug)]
 pub(super) enum AcpSendFailure {
     Agent(AgentError),
-    Acp(AcpError),
+    Acp(RuntimeError),
 }
 
 impl AcpSendFailure {
     #[allow(dead_code)]
-    pub(super) fn to_agent_send_error(&self) -> AgentSendError {
+    pub(super) fn to_agent_send_error(&self) -> RuntimeSendError {
         match self {
-            AcpSendFailure::Agent(err) => AgentSendError::from_agent_error_ref(err),
-            AcpSendFailure::Acp(err) => AgentSendError::from_acp_error_ref(err),
+            AcpSendFailure::Agent(err) => RuntimeSendError::from_agent_error_ref(err),
+            AcpSendFailure::Acp(err) => RuntimeSendError::from_runtime_error_ref(err),
         }
     }
 
-    pub(super) fn to_agent_send_error_for_backend(&self, backend: Option<&str>) -> AgentSendError {
+    pub(super) fn to_agent_send_error_for_backend(&self, backend: Option<&str>) -> RuntimeSendError {
         match self {
-            AcpSendFailure::Agent(err) => AgentSendError::from_agent_error_ref_for_backend(err, backend),
-            AcpSendFailure::Acp(err) => AgentSendError::from_acp_error_ref_for_backend(err, backend),
+            AcpSendFailure::Agent(err) => RuntimeSendError::from_agent_error_ref_for_backend(err, backend),
+            AcpSendFailure::Acp(err) => RuntimeSendError::from_runtime_error_ref_for_backend(err, backend),
         }
     }
 
     pub(super) fn into_agent_error(self) -> AgentError {
         match self {
             AcpSendFailure::Agent(err) => err,
-            AcpSendFailure::Acp(err) => AgentError::Acp(err),
+            AcpSendFailure::Acp(err) => AgentError::Runtime(err),
         }
     }
 }
@@ -38,8 +38,8 @@ impl From<AgentError> for AcpSendFailure {
     }
 }
 
-impl From<AcpError> for AcpSendFailure {
-    fn from(err: AcpError) -> Self {
+impl From<RuntimeError> for AcpSendFailure {
+    fn from(err: RuntimeError) -> Self {
         AcpSendFailure::Acp(err)
     }
 }
@@ -62,24 +62,24 @@ impl std::error::Error for AcpSendFailure {
     }
 }
 
-pub(super) fn is_acp_session_not_found(err: &AcpError) -> bool {
-    matches!(err, AcpError::SessionNotFound { .. })
+pub(super) fn is_acp_session_not_found(err: &RuntimeError) -> bool {
+    matches!(err, RuntimeError::SessionNotFound { .. })
 }
 
-pub(super) fn is_missing_resumed_session(err: &AcpError, resumed_session_id: &str) -> bool {
+pub(super) fn is_missing_resumed_session(err: &RuntimeError, resumed_session_id: &str) -> bool {
     is_acp_session_not_found(err)
         || matches!(
             err,
-            AcpError::ResourceNotFound {
+            RuntimeError::ResourceNotFound {
                 resource: Some(resource),
                 ..
             } if resource == resumed_session_id
         )
 }
 
-fn acp_error_public_message(err: &AcpError) -> String {
+fn acp_error_public_message(err: &RuntimeError) -> String {
     match err {
-        AcpError::AgentInternal { code, .. } => format!("Agent internal error (code {code})"),
+        RuntimeError::AgentInternal { code, .. } => format!("Agent internal error (code {code})"),
         _ => err.to_string(),
     }
 }

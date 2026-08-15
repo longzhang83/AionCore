@@ -1,4 +1,4 @@
-use crate::protocol::error::AcpError;
+use crate::protocol::runtime_error::RuntimeError;
 
 /// Crate-owned error model for ai-agent business, runtime, and protocol
 /// orchestration code.
@@ -28,7 +28,7 @@ pub enum AgentError {
     #[error("Internal error: {0}")]
     Internal(String),
     #[error(transparent)]
-    Acp(#[from] AcpError),
+    Runtime(#[from] RuntimeError),
 }
 
 impl AgentError {
@@ -85,7 +85,7 @@ impl AgentError {
             | Self::WorkspacePathRuntimeUnavailable(message)
             | Self::Internal(message) => message.clone(),
             Self::RateLimited => "Rate limited".to_owned(),
-            Self::Acp(err) => err.to_string(),
+            Self::Runtime(err) => err.to_string(),
         }
     }
 }

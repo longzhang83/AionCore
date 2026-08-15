@@ -1,8 +1,6 @@
 #![warn(clippy::disallowed_types)]
 
 //! All HTTP request/response DTOs shared across the API surface.
-mod runtime_config;
-mod prompt_hook;
 mod agent_build_extra;
 mod agent_discovery;
 mod agent_error;
@@ -23,10 +21,12 @@ mod lifecycle;
 mod mcp;
 mod office;
 mod project;
+mod prompt_hook;
 mod provider;
 mod remote_agent;
 mod response;
 mod runtime;
+mod runtime_config;
 mod shell;
 mod skill;
 mod system;
@@ -35,14 +35,6 @@ mod team_mcp;
 mod team_tools;
 mod websocket;
 
-pub use runtime_config::{
-    AgentModeResponse, ConfigOptionConfirmation, DetectCliRequest, DetectCliResponse, GetConfigOptionsResponse,
-    GetModelInfoResponse, ModelInfoEntry, ModelInfoPayload, ProbeModelRequest, RuntimeConfigOptionDto,
-    RuntimeConfigSelectOptionDto, RuntimeEnvResponse, SetConfigOptionRequest, SetConfigOptionResponse, SetModeRequest,
-    SetModelRequest, SideQuestionRequest, SideQuestionResponse, TryConnectCustomAgentRequest,
-    TryConnectCustomAgentResponse, WorkspaceBrowseQuery, WorkspaceEntry,
-};
-pub use prompt_hook::PromptHookWarningPayload;
 pub use agent_build_extra::{
     AionrsBuildExtra, ForkSpec, RuntimeBuildConfig, RuntimeModelInfo, SessionMcpServer, SessionMcpTransport,
     SlashCommandCompletionBehavior, SlashCommandItem,
@@ -139,6 +131,7 @@ pub use office::{
 pub use project::{
     AttachFolderRequest, ProjectDetailResponse, ProjectEntry, ProjectExplorer, ResolveRefRequest, ResolveRefResponse,
 };
+pub use prompt_hook::PromptHookWarningPayload;
 pub use provider::{
     BedrockAuthMethod, BedrockConfig, CreateProviderRequest, DetectProtocolRequest, DetectionSuggestion,
     FetchModelsAnonymousRequest, FetchModelsRequest, FetchModelsResponse, HealthStatus, KeyTestResult, ModelCapability,
@@ -154,6 +147,13 @@ pub use response::{ApiResponse, ErrorResponse};
 pub use runtime::{
     EnsureNodeRuntimeRequest, EnsureNodeRuntimeResponse, RuntimeFailureKind, RuntimeResourceKind, RuntimeStatusPayload,
     RuntimeStatusPhase, RuntimeStatusScope, RuntimeStatusScopeKind,
+};
+pub use runtime_config::{
+    AgentModeResponse, ConfigOptionConfirmation, DetectCliRequest, DetectCliResponse, GetConfigOptionsResponse,
+    GetModelInfoResponse, ModelInfoEntry, ModelInfoPayload, ProbeModelRequest, RuntimeConfigOptionDto,
+    RuntimeConfigSelectOptionDto, RuntimeEnvResponse, SetConfigOptionRequest, SetConfigOptionResponse, SetModeRequest,
+    SetModelRequest, SideQuestionRequest, SideQuestionResponse, TryConnectCustomAgentRequest,
+    TryConnectCustomAgentResponse, WorkspaceBrowseQuery, WorkspaceEntry,
 };
 pub use shell::{
     CheckToolInstalledRequest, CheckToolInstalledResponse, DeepgramSpeechToTextConfig, OpenAISpeechToTextConfig,

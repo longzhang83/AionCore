@@ -53,9 +53,9 @@ pub use idle_scanner::{
 };
 pub use manager::acp::RequiredFullAutoApplication;
 pub use persistence::AcpSessionSyncService;
-pub use protocol::error::AcpError;
 pub use protocol::events::AgentStreamEvent;
-pub use protocol::send_error::AgentSendError;
+pub use protocol::runtime_error::RuntimeError;
+pub use protocol::runtime_send_error::RuntimeSendError;
 pub use registry::{AgentRegistry, UnavailableReason};
 pub use routes::{AgentRouterState, RemoteAgentRouterState, agent_routes, remote_agent_routes};
 pub use runtime_token::{

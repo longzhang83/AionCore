@@ -13,7 +13,7 @@
 //! SDK background actors on a dedicated tokio task; its `main_fn` completes
 //! the `initialize` handshake, hands the resulting [`ConnectionTo<Agent>`] out
 //! to this struct, and then parks on a shutdown oneshot until
-//! [`AcpProtocol`] is dropped. The connection handle is `Clone + Send` and
+//! [`RuntimeProtocol`] is dropped. The connection handle is `Clone + Send` and
 //! is used directly by every method — outgoing requests / notifications go
 //! through the SDK's own outgoing actor, so they are naturally concurrent.
 //! No hand-rolled command channel is involved.
@@ -46,9 +46,9 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec};
 use tracing::{debug, info, warn};
 
-use crate::protocol::acp_dialect;
-use crate::protocol::error::AcpError;
 use crate::protocol::events::{self as stream_event, AgentStreamEvent};
+use crate::protocol::runtime_dialect;
+use crate::protocol::runtime_error::RuntimeError;
 
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, AuthMethod, AuthenticateRequest, CancelNotification, CloseSessionRequest, ExtNotification,
@@ -84,7 +84,7 @@ const ACP_CLIENT_NAME: &str = "AionUi";
 const ACP_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AcpConnectionPhase {
+enum RuntimeConnectionPhase {
     Starting,
     Initializing,
     Ready,
@@ -134,7 +134,7 @@ pub enum PermissionDecision {
 /// All request methods are thin wrappers over `connection.send_request(...)
 /// .block_task().await` — safe because each caller runs in its own tokio
 /// task, separate from the SDK background actors spawned by `connect_with`.
-pub struct AcpProtocol {
+pub struct RuntimeProtocol {
     /// SDK connection handle. Cheap to clone (channel senders only) and
     /// shared by every method. Kept alive by the background task parked
     /// on `shutdown_rx` in `connect_with`'s `main_fn`.
@@ -164,7 +164,7 @@ pub struct AcpProtocol {
 }
 
 #[allow(dead_code)] // Full ACP method set; some methods await wiring (fork, close, list, auth, ext).
-impl AcpProtocol {
+impl RuntimeProtocol {
     /// Connect to a running CLI process and execute the ACP initialize handshake.
     ///
     /// Takes ownership of the child's stdin/stdout (from [`CliAgentProcess::take_stdio`]).
@@ -178,18 +178,18 @@ impl AcpProtocol {
         notification_tx: mpsc::Sender<SessionNotification>,
         terminal_label: &str,
         terminal_cwd: Option<std::path::PathBuf>,
-    ) -> Result<Self, AcpError> {
+    ) -> Result<Self, RuntimeError> {
         let alive = Arc::new(AtomicBool::new(true));
         let replay_suppression = Arc::new(AtomicBool::new(false));
         let terminal_registry = Arc::new(crate::terminal::TerminalRegistry::new(terminal_label, terminal_cwd));
         let started_at = std::time::Instant::now();
-        log_acp_initialize_start();
+        log_runtime_initialize_start();
 
         // Signals from the background task:
         // - `init_tx`: initialize handshake result (with possible SDK error)
         // - `ready_tx`: connection handle once init succeeded; if init fails
         //   this oneshot is dropped and the caller observes `NotConnected`
-        let (init_tx, init_rx) = oneshot::channel::<Result<InitializeResponse, AcpError>>();
+        let (init_tx, init_rx) = oneshot::channel::<Result<InitializeResponse, RuntimeError>>();
         let (ready_tx, ready_rx) = oneshot::channel::<ConnectionTo<Agent>>();
 
         // Signal from us → background task telling `main_fn` to return,
@@ -214,31 +214,31 @@ impl AcpProtocol {
         let init_response = match tokio::time::timeout(std::time::Duration::from_secs(INIT_TIMEOUT_SECS), init_rx).await
         {
             Ok(Ok(Ok(response))) => {
-                log_acp_initialize_success(started_at.elapsed().as_millis() as u64);
+                log_runtime_initialize_success(started_at.elapsed().as_millis() as u64);
                 response
             }
             Ok(Ok(Err(err))) => {
-                log_acp_initialize_failed("agent_error", started_at.elapsed().as_millis() as u64);
+                log_runtime_initialize_failed("agent_error", started_at.elapsed().as_millis() as u64);
                 return Err(err);
             }
             Ok(Err(_)) => {
-                log_acp_initialize_failed("channel_dropped", started_at.elapsed().as_millis() as u64);
-                return Err(AcpError::Disconnected {
+                log_runtime_initialize_failed("channel_dropped", started_at.elapsed().as_millis() as u64);
+                return Err(RuntimeError::Disconnected {
                     exit_code: None,
                     signal: None,
                     stderr: "Init channel dropped".into(),
                 });
             }
             Err(_) => {
-                log_acp_initialize_failed("timeout", started_at.elapsed().as_millis() as u64);
-                return Err(AcpError::InitTimeout {
+                log_runtime_initialize_failed("timeout", started_at.elapsed().as_millis() as u64);
+                return Err(RuntimeError::InitTimeout {
                     timeout_secs: INIT_TIMEOUT_SECS,
                 });
             }
         };
 
         // `ready_rx` should resolve almost immediately after init_tx fires.
-        let connection = ready_rx.await.map_err(|_| AcpError::NotConnected)?;
+        let connection = ready_rx.await.map_err(|_| RuntimeError::NotConnected)?;
 
         Ok(Self {
             connection,
@@ -277,7 +277,7 @@ impl AcpProtocol {
     pub async fn new_session(
         &self,
         req: NewSessionRequest,
-    ) -> Result<(NewSessionResponse, Option<serde_json::Value>), AcpError> {
+    ) -> Result<(NewSessionResponse, Option<serde_json::Value>), RuntimeError> {
         self.send_request_capturing_legacy_models(req, AGENT_METHOD_NAMES.session_new)
             .await
     }
@@ -301,24 +301,24 @@ impl AcpProtocol {
     pub async fn load_session(
         &self,
         req: LoadSessionRequest,
-    ) -> Result<(LoadSessionResponse, Option<serde_json::Value>), AcpError> {
+    ) -> Result<(LoadSessionResponse, Option<serde_json::Value>), RuntimeError> {
         let _guard = ReplaySuppressionGuard::new(&self.replay_suppression);
         self.send_request_capturing_legacy_models(req, AGENT_METHOD_NAMES.session_load)
             .await
     }
 
     /// Fork an existing ACP session into a new session.
-    pub async fn fork_session(&self, req: ForkSessionRequest) -> Result<ForkSessionResponse, AcpError> {
+    pub async fn fork_session(&self, req: ForkSessionRequest) -> Result<ForkSessionResponse, RuntimeError> {
         self.send_request(req, AGENT_METHOD_NAMES.session_fork).await
     }
 
     /// Resume an existing ACP session.
-    pub async fn resume_session(&self, req: ResumeSessionRequest) -> Result<ResumeSessionResponse, AcpError> {
+    pub async fn resume_session(&self, req: ResumeSessionRequest) -> Result<ResumeSessionResponse, RuntimeError> {
         self.send_request(req, AGENT_METHOD_NAMES.session_resume).await
     }
 
     /// Close an ACP session.
-    pub async fn close_session(&self, req: CloseSessionRequest) -> Result<CloseSessionResponse, AcpError> {
+    pub async fn close_session(&self, req: CloseSessionRequest) -> Result<CloseSessionResponse, RuntimeError> {
         self.send_request(req, AGENT_METHOD_NAMES.session_close).await
     }
 
@@ -326,7 +326,7 @@ impl AcpProtocol {
     ///
     /// Blocks until the agent returns a `PromptResponse` (turn completed).
     /// Streaming events arrive via the `event_tx` broadcast channel.
-    pub async fn prompt(&self, req: PromptRequest) -> Result<PromptResponse, AcpError> {
+    pub async fn prompt(&self, req: PromptRequest) -> Result<PromptResponse, RuntimeError> {
         self.send_request(req, AGENT_METHOD_NAMES.session_prompt).await
     }
 
@@ -342,12 +342,12 @@ impl AcpProtocol {
     /// Set the session mode.
     ///
     /// Bounded by `CONFIG_RPC_TIMEOUT_SECS`: a dropped or never-arriving
-    /// response returns `AcpError::RequestTimeout` instead of hanging forever
+    /// response returns `RuntimeError::RequestTimeout` instead of hanging forever
     /// (see ELECTRON-3MS). Unlike `session/prompt`/`session/load`, this is a
     /// short config RPC, so the timeout does not truncate a long-running turn.
     /// The timeout is applied via [`Self::send_config_request`], which keeps the
     /// in-flight SDK request alive on timeout (see that method for why).
-    pub async fn set_mode(&self, req: SetSessionModeRequest) -> Result<SetSessionModeResponse, AcpError> {
+    pub async fn set_mode(&self, req: SetSessionModeRequest) -> Result<SetSessionModeResponse, RuntimeError> {
         self.send_config_request(
             req,
             AGENT_METHOD_NAMES.session_set_mode,
@@ -360,12 +360,12 @@ impl AcpProtocol {
     /// an untyped frame (the typed pair no longer exists in the SDK).
     ///
     /// Bounded by `CONFIG_RPC_TIMEOUT_SECS`; see [`Self::set_mode`].
-    pub async fn set_model(&self, session_id: &str, model_id: &str) -> Result<(), AcpError> {
+    pub async fn set_model(&self, session_id: &str, model_id: &str) -> Result<(), RuntimeError> {
         let req = UntypedMessage::new(
             LEGACY_SESSION_SET_MODEL_METHOD,
             build_legacy_set_model_params(session_id, model_id),
         )
-        .map_err(|e| AcpError::from_sdk(e, LEGACY_SESSION_SET_MODEL_METHOD))?;
+        .map_err(|e| RuntimeError::from_sdk(e, LEGACY_SESSION_SET_MODEL_METHOD))?;
         self.send_config_request(
             req,
             LEGACY_SESSION_SET_MODEL_METHOD,
@@ -381,7 +381,7 @@ impl AcpProtocol {
     pub async fn set_config_option(
         &self,
         req: SetSessionConfigOptionRequest,
-    ) -> Result<SetSessionConfigOptionResponse, AcpError> {
+    ) -> Result<SetSessionConfigOptionResponse, RuntimeError> {
         self.send_config_request(
             req,
             AGENT_METHOD_NAMES.session_set_config_option,
@@ -391,24 +391,24 @@ impl AcpProtocol {
     }
 
     /// List sessions, optionally filtered by working directory.
-    pub async fn list_sessions(&self, req: ListSessionsRequest) -> Result<ListSessionsResponse, AcpError> {
+    pub async fn list_sessions(&self, req: ListSessionsRequest) -> Result<ListSessionsResponse, RuntimeError> {
         self.send_request(req, AGENT_METHOD_NAMES.session_list).await
     }
 
     /// Authenticate with the agent using a previously advertised auth method.
-    pub async fn authenticate(&self, req: AuthenticateRequest) -> Result<AuthenticateResponse, AcpError> {
+    pub async fn authenticate(&self, req: AuthenticateRequest) -> Result<AuthenticateResponse, RuntimeError> {
         self.send_request(req, AGENT_METHOD_NAMES.authenticate).await
     }
 
     /// Send an extension request (method name must start with `_`).
     ///
     /// Returns the raw JSON response value from the agent.
-    pub async fn ext_request(&self, req: ExtRequest) -> Result<ExtResponse, AcpError> {
+    pub async fn ext_request(&self, req: ExtRequest) -> Result<ExtResponse, RuntimeError> {
         self.ensure_connected()?;
         let method = format!("_{}", req.method);
         let wrapped = ClientRequest::ExtMethodRequest(req);
         let value = self.send_request(wrapped, &method).await?;
-        let raw = serde_json::value::to_raw_value(&value).map_err(|e| AcpError::AgentInternal {
+        let raw = serde_json::value::to_raw_value(&value).map_err(|e| RuntimeError::AgentInternal {
             message: format!("Failed to convert ext response: {e}"),
             code: -32603,
             data: None,
@@ -459,7 +459,7 @@ impl AcpProtocol {
         req: Req,
         method: &str,
         duration: std::time::Duration,
-    ) -> Result<Req::Response, AcpError>
+    ) -> Result<Req::Response, RuntimeError>
     where
         Req: agent_client_protocol::JsonRpcRequest + serde::Serialize + std::fmt::Debug + Send + 'static,
         Req::Response: serde::Serialize + std::fmt::Debug + Send + 'static,
@@ -474,11 +474,11 @@ impl AcpProtocol {
             rsp
         })
         .await?;
-        sdk_result.map_err(|e| AcpError::from_sdk(e, method))
+        sdk_result.map_err(|e| RuntimeError::from_sdk(e, method))
     }
 
     /// Await `fut` on a detached task, bounded by `duration`, mapping elapsed
-    /// time into `AcpError::RequestTimeout`. On timeout the spawned task is
+    /// time into `RuntimeError::RequestTimeout`. On timeout the spawned task is
     /// detached (never aborted) so its in-flight work — the SDK response
     /// receiver — survives; see [`Self::send_config_request`] for why that
     /// matters. `duration` is a parameter so unit tests can drive it
@@ -487,7 +487,7 @@ impl AcpProtocol {
         method: &str,
         duration: std::time::Duration,
         fut: F,
-    ) -> Result<F::Output, AcpError>
+    ) -> Result<F::Output, RuntimeError>
     where
         F: std::future::Future + Send + 'static,
         F::Output: Send + 'static,
@@ -495,12 +495,12 @@ impl AcpProtocol {
         let handle = tokio::spawn(fut);
         match tokio::time::timeout(duration, handle).await {
             Ok(Ok(output)) => Ok(output),
-            Ok(Err(join_err)) => Err(AcpError::AgentInternal {
+            Ok(Err(join_err)) => Err(RuntimeError::AgentInternal {
                 message: format!("{method} config RPC task panicked: {join_err}"),
                 code: -32603,
                 data: None,
             }),
-            Err(_) => Err(AcpError::RequestTimeout {
+            Err(_) => Err(RuntimeError::RequestTimeout {
                 method: method.to_owned(),
                 timeout_secs: duration.as_secs(),
             }),
@@ -508,7 +508,7 @@ impl AcpProtocol {
     }
 
     /// Shared request path: connectivity check, structured logging, SDK call.
-    async fn send_request<Req>(&self, req: Req, method: &str) -> Result<Req::Response, AcpError>
+    async fn send_request<Req>(&self, req: Req, method: &str) -> Result<Req::Response, RuntimeError>
     where
         Req: agent_client_protocol::JsonRpcRequest + serde::Serialize + std::fmt::Debug,
         Req::Response: serde::Serialize + std::fmt::Debug + Send,
@@ -517,7 +517,7 @@ impl AcpProtocol {
         log_client_request(method, &json_str(&req));
         let rsp = self.connection.send_request(req).block_task().await;
         log_agent_response(method, &json_or_err(&rsp));
-        rsp.map_err(|e| AcpError::from_sdk(e, method))
+        rsp.map_err(|e| RuntimeError::from_sdk(e, method))
     }
 
     /// Like [`Self::send_request`], but receives the response untyped so keys
@@ -527,19 +527,19 @@ impl AcpProtocol {
         &self,
         req: Req,
         method: &str,
-    ) -> Result<(Req::Response, Option<serde_json::Value>), AcpError>
+    ) -> Result<(Req::Response, Option<serde_json::Value>), RuntimeError>
     where
         Req: agent_client_protocol::JsonRpcRequest + serde::Serialize + std::fmt::Debug,
         Req::Response: serde::de::DeserializeOwned + serde::Serialize + std::fmt::Debug + Send,
     {
         self.ensure_connected()?;
         log_client_request(method, &json_str(&req));
-        let untyped = UntypedMessage::new(method, &req).map_err(|e| AcpError::from_sdk(e, method))?;
+        let untyped = UntypedMessage::new(method, &req).map_err(|e| RuntimeError::from_sdk(e, method))?;
         let raw = self.connection.send_request(untyped).block_task().await;
         log_agent_response(method, &json_or_err(&raw));
-        let raw = raw.map_err(|e| AcpError::from_sdk(e, method))?;
+        let raw = raw.map_err(|e| RuntimeError::from_sdk(e, method))?;
         let legacy_models = raw.get("models").cloned();
-        let response: Req::Response = serde_json::from_value(raw).map_err(|e| AcpError::AgentInternal {
+        let response: Req::Response = serde_json::from_value(raw).map_err(|e| RuntimeError::AgentInternal {
             message: format!("failed to parse {method} response: {e}"),
             code: -32603,
             data: None,
@@ -548,16 +548,16 @@ impl AcpProtocol {
     }
 
     /// Return `Err(NotConnected)` if the connection is dead.
-    fn ensure_connected(&self) -> Result<(), AcpError> {
+    fn ensure_connected(&self) -> Result<(), RuntimeError> {
         if self.is_connected() {
             Ok(())
         } else {
-            Err(AcpError::NotConnected)
+            Err(RuntimeError::NotConnected)
         }
     }
 }
 
-impl Drop for AcpProtocol {
+impl Drop for RuntimeProtocol {
     fn drop(&mut self) {
         // Tear down every client-hosted terminal with the connection: an
         // orphaned delegated command must not outlive its agent. Drop can't
@@ -601,7 +601,7 @@ impl Drop for ReplaySuppressionGuard<'_> {
 
 /// Run the SDK `connect_with` future: register notification/request
 /// handlers, execute the initialize handshake, publish the connection
-/// handle, then park on the shutdown signal until [`AcpProtocol`] is dropped.
+/// handle, then park on the shutdown signal until [`RuntimeProtocol`] is dropped.
 #[allow(clippy::too_many_arguments)]
 async fn run_sdk_background(
     stdin: ChildStdin,
@@ -609,7 +609,7 @@ async fn run_sdk_background(
     event_tx: broadcast::Sender<AgentStreamEvent>,
     permission_tx: mpsc::Sender<PermissionRequest>,
     notification_tx: mpsc::Sender<SessionNotification>,
-    init_tx: oneshot::Sender<Result<InitializeResponse, AcpError>>,
+    init_tx: oneshot::Sender<Result<InitializeResponse, RuntimeError>>,
     ready_tx: oneshot::Sender<ConnectionTo<Agent>>,
     shutdown_rx: oneshot::Receiver<()>,
     alive: Arc<AtomicBool>,
@@ -632,10 +632,10 @@ async fn run_sdk_background(
             let dialect_event_tx = dialect_event_tx.clone();
             async move {
                 match line {
-                    Ok(line) => match acp_dialect::classify_incoming_line(&line) {
-                        acp_dialect::LineDisposition::Forward(line) => Some(Ok(line)),
-                        acp_dialect::LineDisposition::Absorb(kind) => {
-                            log_acp_dialect_absorbed(kind, &line);
+                    Ok(line) => match runtime_dialect::classify_incoming_line(&line) {
+                        runtime_dialect::LineDisposition::Forward(line) => Some(Ok(line)),
+                        runtime_dialect::LineDisposition::Absorb(kind) => {
+                            log_runtime_dialect_absorbed(kind, &line);
                             // `broadcast::send` is synchronous and non-blocking; a
                             // send error only means no active subscriber for this
                             // turn (nothing to correlate against), which is fine.
@@ -658,7 +658,7 @@ async fn run_sdk_background(
     let mut init_tx = Some(init_tx);
     let mut ready_tx = Some(ready_tx);
     let mut shutdown_rx = Some(shutdown_rx);
-    let phase = Arc::new(Mutex::new(AcpConnectionPhase::Starting));
+    let phase = Arc::new(Mutex::new(RuntimeConnectionPhase::Starting));
     let phase_for_main = Arc::clone(&phase);
 
     let result = Client
@@ -757,10 +757,10 @@ async fn run_sdk_background(
             let init_result = {
                 let req = build_initialize_request();
                 log_client_request("initialize", &json_str(&req));
-                *phase_for_main.lock().unwrap() = AcpConnectionPhase::Initializing;
+                *phase_for_main.lock().unwrap() = RuntimeConnectionPhase::Initializing;
                 let raw = connection.send_request(req).block_task().await;
                 log_agent_response("initialize", &json_or_err(&raw));
-                raw.map_err(|e| AcpError::from_sdk(e, "initialize"))
+                raw.map_err(|e| RuntimeError::from_sdk(e, "initialize"))
             };
 
             let Some(tx) = init_tx.take() else {
@@ -778,20 +778,20 @@ async fn run_sdk_background(
             }
 
             // Step 2 — publish the connection handle so the outer
-            // AcpProtocol can start issuing requests.
+            // RuntimeProtocol can start issuing requests.
             if let Some(tx) = ready_tx.take()
                 && tx.send(connection).is_err()
             {
                 // Owner dropped before we became ready — nothing more to do.
                 return Ok(());
             }
-            *phase_for_main.lock().unwrap() = AcpConnectionPhase::Ready;
+            *phase_for_main.lock().unwrap() = RuntimeConnectionPhase::Ready;
 
-            // Step 3 — keep the connection alive until AcpProtocol::drop
+            // Step 3 — keep the connection alive until RuntimeProtocol::drop
             // releases the shutdown oneshot.
             if let Some(rx) = shutdown_rx.take() {
                 let _ = rx.await;
-                *phase_for_main.lock().unwrap() = AcpConnectionPhase::ShuttingDown;
+                *phase_for_main.lock().unwrap() = RuntimeConnectionPhase::ShuttingDown;
             }
             Ok(())
         })
@@ -1030,14 +1030,14 @@ fn is_streaming_chunk(body: &str) -> bool {
     matches!(kind, Some(k) if STREAMING_KINDS.contains(&k))
 }
 
-struct AcpLogSummary {
+struct RuntimeLogSummary {
     payload_bytes: usize,
     payload_json: bool,
     session_id: Option<String>,
     session_update_kind: Option<String>,
 }
 
-impl AcpLogSummary {
+impl RuntimeLogSummary {
     fn from_payload(payload: &str) -> Self {
         let payload_bytes = payload.len();
         let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
@@ -1065,7 +1065,7 @@ fn string_pointer(value: &serde_json::Value, pointers: &[&str]) -> Option<String
         .map(str::to_owned)
 }
 
-fn log_acp_initialize_start() {
+fn log_runtime_initialize_start() {
     info!(
         target: "aionui_feedback_diagnostics",
         diagnostic_event = "feedback.runtime.acp_initialize_start",
@@ -1074,7 +1074,7 @@ fn log_acp_initialize_start() {
     );
 }
 
-fn log_acp_initialize_success(elapsed_ms: u64) {
+fn log_runtime_initialize_success(elapsed_ms: u64) {
     info!(
         target: "aionui_feedback_diagnostics",
         diagnostic_event = "feedback.runtime.acp_initialize_success",
@@ -1083,7 +1083,7 @@ fn log_acp_initialize_success(elapsed_ms: u64) {
     );
 }
 
-fn log_acp_initialize_failed(failure_class: &'static str, elapsed_ms: u64) {
+fn log_runtime_initialize_failed(failure_class: &'static str, elapsed_ms: u64) {
     warn!(
         target: "aionui_feedback_diagnostics",
         diagnostic_event = "feedback.runtime.acp_initialize_failed",
@@ -1096,7 +1096,7 @@ fn log_acp_initialize_failed(failure_class: &'static str, elapsed_ms: u64) {
 /// Log a JSON-RPC request from AionUi to the ACP agent.
 /// `session/prompt` carries large user input and stays at debug.
 fn log_client_request(method: &str, body: &str) {
-    let summary = AcpLogSummary::from_payload(body);
+    let summary = RuntimeLogSummary::from_payload(body);
     if method == "session/prompt" {
         debug!(
             direction = "client_request",
@@ -1121,7 +1121,7 @@ fn log_client_request(method: &str, body: &str) {
 /// Log a JSON-RPC response from the ACP agent.
 /// `session/prompt` reply is large; stays at debug.
 fn log_agent_response(method: &str, body: &str) {
-    let summary = AcpLogSummary::from_payload(body);
+    let summary = RuntimeLogSummary::from_payload(body);
     if method == "session/prompt" {
         debug!(
             direction = "agent_response",
@@ -1145,7 +1145,7 @@ fn log_agent_response(method: &str, body: &str) {
 
 /// Log a fire-and-forget notification from AionUi to the agent.
 fn log_client_notify(method: &str, body: &str) {
-    let summary = AcpLogSummary::from_payload(body);
+    let summary = RuntimeLogSummary::from_payload(body);
     info!(
         direction = "client_notify",
         method,
@@ -1159,7 +1159,7 @@ fn log_client_notify(method: &str, body: &str) {
 /// Log an inbound notification from the agent.
 /// `session/update` requires per-kind filtering — streaming chunks stay at debug.
 fn log_agent_notify(method: &str, body: &str) {
-    let summary = AcpLogSummary::from_payload(body);
+    let summary = RuntimeLogSummary::from_payload(body);
     if method == "session/update" && is_streaming_chunk(body) {
         debug!(
             direction = "agent_notify",
@@ -1191,8 +1191,8 @@ fn log_agent_notify(method: &str, body: &str) {
 /// that visibility. Records only the signal kind and non-sensitive correlation
 /// context (`session_id`, the sessionUpdate/compactType marker); never the
 /// compaction summary, prompt, tokens, or other payload.
-fn log_acp_dialect_absorbed(kind: stream_event::DialectSignalKind, line: &str) {
-    let (session_id, marker) = acp_dialect::absorbed_log_context(line);
+fn log_runtime_dialect_absorbed(kind: stream_event::DialectSignalKind, line: &str) {
+    let (session_id, marker) = runtime_dialect::absorbed_log_context(line);
     info!(
         direction = "agent_notify",
         method = "session/update",
@@ -1205,7 +1205,7 @@ fn log_acp_dialect_absorbed(kind: stream_event::DialectSignalKind, line: &str) {
 
 /// Log an inbound request from the agent (e.g. session/request_permission).
 fn log_agent_request(method: &str, body: &str) {
-    let summary = AcpLogSummary::from_payload(body);
+    let summary = RuntimeLogSummary::from_payload(body);
     info!(
         direction = "agent_request",
         method,
@@ -1218,7 +1218,7 @@ fn log_agent_request(method: &str, body: &str) {
 
 /// Log a JSON-RPC response from AionUi back to the agent.
 fn log_client_response(method: &str, body: &str) {
-    let summary = AcpLogSummary::from_payload(body);
+    let summary = RuntimeLogSummary::from_payload(body);
     info!(
         direction = "client_response",
         method,
@@ -1229,9 +1229,9 @@ fn log_client_response(method: &str, body: &str) {
     );
 }
 
-impl std::fmt::Debug for AcpProtocol {
+impl std::fmt::Debug for RuntimeProtocol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AcpProtocol")
+        f.debug_struct("RuntimeProtocol")
             .field("alive", &self.is_connected())
             .finish_non_exhaustive()
     }
@@ -1409,13 +1409,13 @@ mod tests {
     }
 
     #[test]
-    fn acp_initialize_diagnostic_log_helpers_use_stable_contract() {
+    fn runtime_initialize_diagnostic_log_helpers_use_stable_contract() {
         use tracing::Level;
 
         let captured = capture_logs(Level::INFO, || {
-            super::log_acp_initialize_start();
-            super::log_acp_initialize_success(123);
-            super::log_acp_initialize_failed("timeout", 456);
+            super::log_runtime_initialize_start();
+            super::log_runtime_initialize_success(123);
+            super::log_runtime_initialize_failed("timeout", 456);
         });
 
         assert!(captured.contains("aionui_feedback_diagnostics"), "{captured}");
@@ -1479,14 +1479,14 @@ mod tests {
             AGENT_METHOD_NAMES.session_set_mode,
             LEGACY_SESSION_SET_MODEL_METHOD,
         ] {
-            let result = AcpProtocol::await_config_rpc_detached(
+            let result = RuntimeProtocol::await_config_rpc_detached(
                 method,
                 std::time::Duration::from_secs(CONFIG_RPC_TIMEOUT_SECS),
                 std::future::pending::<()>(),
             )
             .await;
             match result {
-                Err(AcpError::RequestTimeout {
+                Err(RuntimeError::RequestTimeout {
                     method: m,
                     timeout_secs,
                 }) => {
@@ -1501,10 +1501,10 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn await_config_rpc_detached_passes_through_ready_ok() {
         // Success path: a fast-completing RPC returns its Ok value unchanged.
-        let result = AcpProtocol::await_config_rpc_detached(
+        let result = RuntimeProtocol::await_config_rpc_detached(
             AGENT_METHOD_NAMES.session_set_config_option,
             std::time::Duration::from_secs(CONFIG_RPC_TIMEOUT_SECS),
-            async { Ok::<_, AcpError>(()) },
+            async { Ok::<_, RuntimeError>(()) },
         )
         .await;
         assert!(matches!(result, Ok(Ok(()))), "ready Ok must pass through: {result:?}");
@@ -1527,7 +1527,7 @@ mod tests {
         let completed = Arc::new(AtomicBool::new(false));
         let flag = completed.clone();
 
-        let result = AcpProtocol::await_config_rpc_detached(
+        let result = RuntimeProtocol::await_config_rpc_detached(
             AGENT_METHOD_NAMES.session_set_config_option,
             std::time::Duration::from_secs(CONFIG_RPC_TIMEOUT_SECS),
             async move {
@@ -1539,7 +1539,7 @@ mod tests {
         .await;
 
         assert!(
-            matches!(result, Err(AcpError::RequestTimeout { .. })),
+            matches!(result, Err(RuntimeError::RequestTimeout { .. })),
             "timeout must map to RequestTimeout: {result:?}"
         );
         assert!(

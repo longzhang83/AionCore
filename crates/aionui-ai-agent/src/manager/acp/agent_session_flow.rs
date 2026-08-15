@@ -1,12 +1,12 @@
 use crate::error::AgentError;
 use crate::manager::acp::AcpAgentManager;
 use crate::manager::acp::runtime_mode::agent_metadata_uses_meta_resume;
-use crate::protocol::error::AcpError;
 use crate::protocol::events::{
     AgentStreamEvent, AvailableCommandsEventData, ErrorEventData, SessionAssignedEventData, StartEventData, TipType,
     TipsEventData,
 };
-use crate::protocol::send_error::AgentSendError;
+use crate::protocol::runtime_error::RuntimeError;
+use crate::protocol::runtime_send_error::RuntimeSendError;
 use crate::shared_kernel::SessionId as DomainSessionId;
 use crate::types::SendMessageData;
 use agent_client_protocol::schema::v1::{
@@ -84,7 +84,7 @@ impl AcpAgentManager {
     /// Used as the rescue path when resume helpers see `SessionNotFound`.
     /// Emits a `warn!` so ops can still see the original failure that
     /// triggered the rebuild.
-    async fn rebuild_after_session_not_found(&self, stale_sid: &str, err: &AcpError) -> Result<String, AgentError> {
+    async fn rebuild_after_session_not_found(&self, stale_sid: &str, err: &RuntimeError) -> Result<String, AgentError> {
         warn!(
             conversation_id = %self.params.conversation_id,
             stale_session_id = %stale_sid,
@@ -100,7 +100,11 @@ impl AcpAgentManager {
         self.open_session_new().await
     }
 
-    async fn rebuild_after_acp_session_not_found(&self, stale_sid: &str, err: AcpError) -> Result<String, AgentError> {
+    async fn rebuild_after_acp_session_not_found(
+        &self,
+        stale_sid: &str,
+        err: RuntimeError,
+    ) -> Result<String, AgentError> {
         self.rebuild_after_session_not_found(stale_sid, &err).await
     }
 
@@ -777,7 +781,7 @@ fn empty_finish_diagnostic_tip(stop_reason: StopReason) -> TipsEventData {
 }
 
 fn classify_empty_turn_stderr_error(detail: &str) -> ErrorEventData {
-    AgentSendError::from_agent_error(AgentError::bad_gateway(detail.to_owned())).into_stream_error()
+    RuntimeSendError::from_agent_error(AgentError::bad_gateway(detail.to_owned())).into_stream_error()
 }
 
 fn empty_finish_tip_code(stop_reason: StopReason) -> &'static str {
@@ -802,7 +806,7 @@ mod tests {
     //! `session_id()` — the same terminal state the real `open_session_new`
     //! / `open_session_resume` helpers leave behind.
     use crate::manager::acp::{AcpSession, AcpSessionEvent};
-    use crate::protocol::error::AcpError;
+    use crate::protocol::runtime_error::RuntimeError;
     use crate::shared_kernel::SessionId as DomainSessionId;
     use crate::types::SendMessageData;
     use agent_client_protocol::schema::v1::{
@@ -1139,46 +1143,46 @@ mod tests {
 
     /// The `is_acp_session_not_found` discriminator powers
     /// `open_session_resume`'s rescue path. Match strictly on the
-    /// structured `AcpError::SessionNotFound` variant; other ACP failures
+    /// structured `RuntimeError::SessionNotFound` variant; other ACP failures
     /// must surface to callers instead of triggering a phantom session
     /// rebuild.
     #[test]
     fn is_acp_session_not_found_matches_session_not_found_only() {
-        let session_err = AcpError::SessionNotFound {
+        let session_err = RuntimeError::SessionNotFound {
             session_id: "ses-1".into(),
         };
         assert!(super::is_acp_session_not_found(&session_err));
 
-        let invalid_params = AcpError::InvalidParams {
+        let invalid_params = RuntimeError::InvalidParams {
             message: "Workspace not found".into(),
         };
         assert!(!super::is_acp_session_not_found(&invalid_params));
 
-        let auth_required = AcpError::AuthRequired;
+        let auth_required = RuntimeError::AuthRequired;
         assert!(!super::is_acp_session_not_found(&auth_required));
     }
 
     #[test]
     fn resumed_session_resource_not_found_matches_only_the_exact_session_id() {
-        let exact = AcpError::ResourceNotFound {
+        let exact = RuntimeError::ResourceNotFound {
             resource: Some("ses-resume".into()),
             message: "missing".into(),
         };
         assert!(super::is_missing_resumed_session(&exact, "ses-resume"));
 
-        let unrelated = AcpError::ResourceNotFound {
+        let unrelated = RuntimeError::ResourceNotFound {
             resource: Some("/workspace/file.txt".into()),
             message: "missing".into(),
         };
         assert!(!super::is_missing_resumed_session(&unrelated, "ses-resume"));
 
-        let unspecified = AcpError::ResourceNotFound {
+        let unspecified = RuntimeError::ResourceNotFound {
             resource: None,
             message: "missing".into(),
         };
         assert!(!super::is_missing_resumed_session(&unspecified, "ses-resume"));
 
-        let structured = AcpError::SessionNotFound {
+        let structured = RuntimeError::SessionNotFound {
             session_id: "different-wire-id".into(),
         };
         assert!(super::is_missing_resumed_session(&structured, "ses-resume"));

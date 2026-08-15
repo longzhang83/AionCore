@@ -421,3 +421,27 @@ Session/MCP/API/App/Team：
 - `cargo test -p aionui-ai-agent --lib manager::` 通过（340 passed / 0 failed，exit 0）。
 
 未纳入本切片：clean-cut Slice 2–6 的任何变更。
+
+---
+
+## 10. V3 A1 clean-cut Slice 2 进度（2026-08-15）
+
+状态：已实现并验证。
+
+- 协议适配层迁移到中性 Runtime 词汇：`acp.rs -> runtime.rs`、
+  `acp_dialect.rs -> runtime_dialect.rs`、`error.rs -> runtime_error.rs`、
+  `send_error.rs -> runtime_send_error.rs`。
+- 公开与内部类型同步改名：`AcpProtocol -> RuntimeProtocol`、
+  `AcpError -> RuntimeError`、`AgentSendError -> RuntimeSendError`，并将
+  `AgentError::Acp` 改为 `AgentError::Runtime`。
+- ACP 在线协议、`initialize` 握手和 `agent-client-protocol` SDK 的事实性说明、
+  外部错误码与既有诊断事件保持不变；这是纯命名迁移，不改变 wire/DB 值、协议行为或控制流。
+- 未新增日志：既有 ACP 诊断事件仍提供该适配层的生产可观测性。
+
+验证：
+
+- `cargo check -p aionui-ai-agent` 通过（exit 0）。
+- `cargo test -p aionui-ai-agent protocol::` 通过（145 passed / 0 failed）。
+- `cargo test -p aionui-ai-agent --test acp_error_public` 通过（3 passed / 0 failed）。
+
+未纳入本切片：`manager/acp`、factory、API DTO、DB 和 wire 中的 ACP 命名仍保留给后续 slice。

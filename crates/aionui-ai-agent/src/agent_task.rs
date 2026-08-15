@@ -20,7 +20,7 @@ use crate::error::AgentError;
 use crate::manager::acp::{AcpAgentManager, RequiredFullAutoApplication};
 use crate::manager::aionrs::AionrsAgentManager;
 use crate::protocol::events::AgentStreamEvent;
-use crate::protocol::send_error::AgentSendError;
+use crate::protocol::runtime_send_error::RuntimeSendError;
 use crate::types::{PromptMediaCaps, SendMessageData};
 
 use aionui_api_types::{
@@ -77,7 +77,7 @@ pub trait IAgentTask: Send + Sync {
     /// Send a user message to the agent. Returns once the agent has
     /// accepted the turn; actual streaming proceeds on the broadcast
     /// channel returned by [`Self::subscribe`].
-    async fn send_message(&self, data: SendMessageData) -> Result<(), AgentSendError>;
+    async fn send_message(&self, data: SendMessageData) -> Result<(), RuntimeSendError>;
 
     /// Stop the current streaming response without killing the agent.
     async fn cancel(&self) -> Result<(), AgentError>;
@@ -251,7 +251,7 @@ impl AgentInstance {
     }
 
     /// Send a user message to the agent.
-    pub async fn send_message(&self, data: SendMessageData) -> Result<(), AgentSendError> {
+    pub async fn send_message(&self, data: SendMessageData) -> Result<(), RuntimeSendError> {
         self.as_task().send_message(data).await
     }
 
@@ -735,7 +735,7 @@ mod required_full_auto_dispatch_tests {
         fn subscribe(&self) -> broadcast::Receiver<AgentStreamEvent> {
             self.event_tx.subscribe()
         }
-        async fn send_message(&self, _data: SendMessageData) -> Result<(), AgentSendError> {
+        async fn send_message(&self, _data: SendMessageData) -> Result<(), RuntimeSendError> {
             Ok(())
         }
         async fn cancel(&self) -> Result<(), AgentError> {

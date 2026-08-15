@@ -3,7 +3,7 @@
 //! Step 1: `which`/`where` — resolve the first token of `command` on
 //!         `$PATH`. Bounded by `execFileSync`-equivalent 5 s timeout.
 //! Step 2: Spawn the CLI via `CliAgentProcess::spawn_for_sdk`, connect
-//!         an `AcpProtocol` (which owns the ACP `initialize` handshake
+//!         an `RuntimeProtocol` (which owns the ACP `initialize` handshake
 //!         with a built-in 30 s timeout), then shut down cleanly.
 //!
 //! The same function is called by:
@@ -22,12 +22,12 @@ use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, warn};
 
 use crate::capability::cli_process::CliAgentProcess;
-use crate::protocol::acp::AcpProtocol;
-use crate::protocol::error::AcpError;
+use crate::protocol::runtime::RuntimeProtocol;
+use crate::protocol::runtime_error::RuntimeError;
 
 use agent_client_protocol::schema::v1::NewSessionRequest;
 
-/// Step 2 overall timeout. Belt-and-suspenders: `AcpProtocol::connect`
+/// Step 2 overall timeout. Belt-and-suspenders: `RuntimeProtocol::connect`
 /// already caps the initialize RPC at 30 s, but a CLI that hangs
 /// before writing any ACP frame at all is covered by this outer cap.
 const STEP2_TIMEOUT: Duration = Duration::from_secs(35);
@@ -194,9 +194,9 @@ async fn run_handshake(proc: &CliAgentProcess) -> ProbeOutcome {
     // Race the ACP initialize handshake against the child process exiting.
     // A misconfigured CLI (e.g. an invalid package launcher command) exits
     // almost immediately with a non-zero status; without this race the
-    // `AcpProtocol::connect` call would block on its internal 30 s
+    // `RuntimeProtocol::connect` call would block on its internal 30 s
     // timeout waiting for an `initialize` reply that will never arrive.
-    let connect = AcpProtocol::connect(
+    let connect = RuntimeProtocol::connect(
         stdin,
         stdout,
         event_tx,
@@ -249,7 +249,7 @@ async fn run_handshake(proc: &CliAgentProcess) -> ProbeOutcome {
                 .map(Box::new),
             )
         }
-        Err(AcpError::AuthRequired) => {
+        Err(RuntimeError::AuthRequired) => {
             ProbeOutcome::Auth("Agent reachable but requires login/authorization".to_string())
         }
         Err(e) => ProbeOutcome::Fail(format!("ACP session/new failed: {e}")),

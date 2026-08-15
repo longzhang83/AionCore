@@ -4,8 +4,8 @@ use agent_client_protocol::schema::v1::{
     SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOption, SessionMode, SessionModeState,
 };
 
-use super::super::runtime_config::{ConfigSetPath, resolve_set_path};
 use super::super::legacy_runtime_model::LegacyModelEntry;
+use super::super::runtime_config::{ConfigSetPath, resolve_set_path};
 use super::*;
 
 fn snapshot_option<'a>(snapshot: &'a ConfigSnapshot, option_id: &str) -> &'a aionui_api_types::RuntimeConfigOptionDto {

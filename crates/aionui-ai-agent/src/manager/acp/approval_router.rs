@@ -1,7 +1,7 @@
 use crate::agent_runtime::AgentRuntime;
 use crate::error::AgentError;
-use crate::protocol::acp::{PermissionDecision, PermissionRequest};
 use crate::protocol::events::{AgentStreamEvent, permission_request_to_event_data};
+use crate::protocol::runtime::{PermissionDecision, PermissionRequest};
 use agent_client_protocol::schema::v1::PermissionOptionKind as SdkPermissionOptionKind;
 use aionui_api_types::TEAM_MCP_SERVER_NAME;
 use aionui_common::Confirmation;

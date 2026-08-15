@@ -474,7 +474,7 @@ mod tests {
         async fn send_message(
             &self,
             _data: SendMessageData,
-        ) -> Result<(), crate::protocol::send_error::AgentSendError> {
+        ) -> Result<(), crate::protocol::runtime_send_error::RuntimeSendError> {
             Ok(())
         }
         async fn cancel(&self) -> Result<(), AgentError> {

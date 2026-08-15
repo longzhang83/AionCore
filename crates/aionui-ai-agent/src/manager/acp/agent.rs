@@ -7,11 +7,11 @@ use crate::error::AgentError;
 use crate::factory::runtime_assembler::RuntimeSessionParams;
 use crate::manager::acp::{AcpSession, AcpSessionEvent, PermissionRouter, SessionNewPreludeHook};
 use crate::manager::process_registry::{register_session_process, unregister_agent_process};
-use crate::protocol::acp::{AcpProtocol, PermissionRequest};
-use crate::protocol::error::{AcpError, CloseReason};
 use crate::protocol::events::AgentStreamEvent;
 use crate::protocol::npx_cache_repair::CorruptNpxCacheRepair;
-use crate::protocol::send_error::AgentSendError;
+use crate::protocol::runtime::{PermissionRequest, RuntimeProtocol};
+use crate::protocol::runtime_error::{CloseReason, RuntimeError};
+use crate::protocol::runtime_send_error::RuntimeSendError;
 use crate::registry::CatalogSender;
 use crate::shared_kernel::{ConfigKey, ConfigValue, ModeId, ModelId, SessionId as DomainSessionId};
 use crate::types::SendMessageData;
@@ -76,9 +76,9 @@ fn build_acp_final_input_dump_value(
     })
 }
 
-use super::runtime_config_catalog::{extract_models_from_value, extract_modes_from_value};
-use super::runtime_config::{ConfigSetPath, ConfigSetPathError, ConfigSnapshot, resolve_set_path};
 use super::legacy_runtime_model::LegacySessionModelState;
+use super::runtime_config::{ConfigSetPath, ConfigSetPathError, ConfigSnapshot, resolve_set_path};
+use super::runtime_config_catalog::{extract_models_from_value, extract_modes_from_value};
 use super::runtime_mode::normalize_requested_mode;
 use super::runtime_mode::normalize_requested_mode_for_available_values;
 use super::runtime_mode::{RequiredFullAutoMode, resolve_required_full_auto_mode};
@@ -89,14 +89,14 @@ const OBSERVED_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(10);
 
 struct AcpStartupConnection {
     process: Arc<CliAgentProcess>,
-    protocol: AcpProtocol,
+    protocol: RuntimeProtocol,
     permission_rx: mpsc::Receiver<PermissionRequest>,
     notification_rx: mpsc::Receiver<SessionNotification>,
 }
 
 /// Decompose a child `ExitStatus` (or its absence) into the
-/// `(exit_code, signal)` pair that `AcpError::StartupCrash` /
-/// `AcpError::Disconnected` carry.
+/// `(exit_code, signal)` pair that `RuntimeError::StartupCrash` /
+/// `RuntimeError::Disconnected` carry.
 ///
 /// `None` ⇒ wait failed; we have no actionable info to pass on.
 /// On Unix, terminating signals surface via `ExitStatusExt::signal()`; the
@@ -137,7 +137,7 @@ impl AcpStartupConnectError {
                 exit_code,
                 signal,
                 stderr,
-            } => AgentError::from(AcpError::StartupCrash {
+            } => AgentError::from(RuntimeError::StartupCrash {
                 exit_code,
                 signal,
                 stderr,
@@ -170,7 +170,7 @@ async fn spawn_and_connect_acp(
                     continue;
                 }
 
-                return Err(AgentError::from(AcpError::StartupCrash {
+                return Err(AgentError::from(RuntimeError::StartupCrash {
                     exit_code,
                     signal,
                     stderr,
@@ -241,7 +241,7 @@ async fn spawn_and_connect_acp_once(
     // 70ms in — ELECTRON-1BT), so we explicitly watch the child. If
     // it dies before init completes, surface a `StartupCrash` carrying
     // the buffered stderr instead of waiting out the timeout.
-    let connect_fut = AcpProtocol::connect(
+    let connect_fut = RuntimeProtocol::connect(
         stdin,
         stdout,
         runtime.event_sender(),
@@ -493,7 +493,7 @@ fn mark_session_opened_after_protocol_ready(
             backend = backend.unwrap_or("-"),
             "ACP session open returned after protocol disconnected; rejecting opened transition"
         );
-        return Err(AcpError::NotConnected.into());
+        return Err(RuntimeError::NotConnected.into());
     }
     session.mark_opened();
     Ok(sid)
@@ -530,7 +530,7 @@ pub struct AcpAgentManager {
     pub(super) runtime: AgentRuntime,
 
     /// ACP protocol handle (SDK connection).
-    pub(super) protocol: AcpProtocol,
+    pub(super) protocol: RuntimeProtocol,
 
     /// Routes permission requests from the protocol layer to the user
     /// and back. Owns the receiver channel, pending map, and closing flag.
@@ -708,7 +708,7 @@ impl AcpAgentManager {
             operation,
             "ACP operation rejected because protocol is disconnected"
         );
-        Err(AcpError::NotConnected.into())
+        Err(RuntimeError::NotConnected.into())
     }
 
     pub(crate) async fn mode(&self) -> Result<aionui_api_types::AgentModeResponse, AgentError> {
@@ -1429,7 +1429,7 @@ impl crate::agent_task::IAgentTask for AcpAgentManager {
     }
 
     #[tracing::instrument(skip_all, fields(conversation_id = %self.params.conversation_id, msg_id = %data.msg_id))]
-    async fn send_message(&self, data: SendMessageData) -> Result<(), AgentSendError> {
+    async fn send_message(&self, data: SendMessageData) -> Result<(), RuntimeSendError> {
         self.runtime.bump_activity();
         info!(
             conversation_id = %self.params.conversation_id,
@@ -1686,7 +1686,7 @@ mod tests {
     use crate::error::AgentError;
     use crate::manager::acp::runtime_config::ConfigSnapshot;
     use crate::manager::acp::{AcpAgentManager, AcpSession};
-    use crate::protocol::error::{AcpError, CloseReason};
+    use crate::protocol::runtime_error::{CloseReason, RuntimeError};
     use crate::shared_kernel::{ConfigKey, ConfigValue, ModeId, SessionId as DomainSessionId};
     use agent_client_protocol::schema::v1::{
         AvailableCommand, SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOption,
@@ -1977,8 +1977,8 @@ mod tests {
         .expect_err("disconnected protocol must reject the opened transition");
 
         assert!(
-            matches!(err, AgentError::Acp(AcpError::NotConnected)),
-            "expected AcpError::NotConnected, got {err:?}"
+            matches!(err, AgentError::Runtime(RuntimeError::NotConnected)),
+            "expected RuntimeError::NotConnected, got {err:?}"
         );
         assert_eq!(session.session_id(), Some("sess-disconnected"));
         assert!(

@@ -28,7 +28,7 @@ use crate::protocol::events::tool_call::{ToolCallEventData, ToolCallStatus, Tool
 use crate::protocol::events::{
     AgentStreamEvent, FinishEventData, StartEventData, TextEventData, TipType, TipsEventData,
 };
-use crate::protocol::send_error::AgentSendError;
+use crate::protocol::runtime_send_error::RuntimeSendError;
 use crate::shared_kernel::PersistedSessionState;
 use crate::types::{PromptMediaCaps, SendMessageData};
 use aionui_api_types::RuntimeBuildConfig;
@@ -1114,7 +1114,7 @@ impl IAgentTask for SessionAgentTask {
         }
     }
 
-    async fn send_message(&self, data: SendMessageData) -> Result<(), AgentSendError> {
+    async fn send_message(&self, data: SendMessageData) -> Result<(), RuntimeSendError> {
         self.runtime.touch();
         // Partition attachments by the backend's declared prompt blocks:
         // capable media becomes native Image/Audio blocks; everything else
@@ -1220,11 +1220,13 @@ impl IAgentTask for SessionAgentTask {
                 // `UserAgentSessionNotFound` (retryable) so `TurnRecoveryPolicy`
                 // auto-replays once — with the anchor cleared above, the replay
                 // opens Fresh and recovers transparently.
-                Err(AgentSendError::from_agent_error(AgentError::not_found(format!(
+                Err(RuntimeSendError::from_agent_error(AgentError::not_found(format!(
                     "Session not found: {detail}"
                 ))))
             }
-            Err(e) => Err(AgentSendError::from_agent_error(AgentError::bad_gateway(e.to_string()))),
+            Err(e) => Err(RuntimeSendError::from_agent_error(AgentError::bad_gateway(
+                e.to_string(),
+            ))),
         }
     }
 
@@ -3990,7 +3992,7 @@ fn translate_event(event: SessionEvent, conversation_id: &str, terminal_result_s
                 // provider/billing/rate-limit/lifecycle errors are categorized identically.
                 // Error IS the terminal (relay breaks on it), so we do NOT also emit Finish.
                 let stream_error =
-                    AgentSendError::from_agent_error(AgentError::bad_gateway(result_text)).into_stream_error();
+                    RuntimeSendError::from_agent_error(AgentError::bad_gateway(result_text)).into_stream_error();
                 return vec![AgentStreamEvent::RunError(stream_error)];
             }
             vec![AgentStreamEvent::RunComplete(FinishEventData::default())]
@@ -4006,7 +4008,7 @@ fn translate_event(event: SessionEvent, conversation_id: &str, terminal_result_s
             //   - signal / non-zero / unknown(None) exit, no result → CRASH.
             // Only the crash case surfaces as an error; the rest end with a plain
             // Finish (behaviour-preserving). This restores the legacy ACP path's
-            // `AcpError::Disconnected → UserAgentDisconnected` terminal that the
+            // `RuntimeError::Disconnected → UserAgentDisconnected` terminal that the
             // direct-CLI bridge previously dropped: a CLI that dies mid-reply used
             // to render as a normal (empty) completion instead of a "disconnected,
             // reconnect" error card.
@@ -4018,13 +4020,13 @@ fn translate_event(event: SessionEvent, conversation_id: &str, terminal_result_s
                     // the backend boundary) rides the error message as the user-facing
                     // reason — mirroring `CloseReason::ProcessExited: {summary}`;
                     // without it the card shows only a bare exit code.
-                    let acp_err = crate::protocol::error::AcpError::Disconnected {
+                    let acp_err = crate::protocol::runtime_error::RuntimeError::Disconnected {
                         exit_code: exit.and_then(|e| e.code),
                         signal: exit.and_then(|e| e.signal).map(|s| s.to_string()),
                         stderr: redacted_summary.clone().unwrap_or_default(),
                     };
                     let mut stream_error =
-                        AgentSendError::from_agent_error(AgentError::Acp(acp_err)).into_stream_error();
+                        RuntimeSendError::from_agent_error(AgentError::Runtime(acp_err)).into_stream_error();
                     if let Some(summary) = redacted_summary.filter(|s| !s.trim().is_empty()) {
                         stream_error.message = format!("{}: {summary}", stream_error.message);
                     }
@@ -5303,7 +5305,7 @@ mod translate_tests {
     // NO prior terminal result) surfaces as a rich AgentStreamEvent::RunError carrying the
     // legacy `UserAgentDisconnected` classification (code + retryable + ownership), with
     // the allowlisted redacted_summary appended to the message. This restores the ACP
-    // path's `AcpError::Disconnected` terminal the direct-CLI bridge had collapsed to a
+    // path's `RuntimeError::Disconnected` terminal the direct-CLI bridge had collapsed to a
     // bare Finish (a dead CLI used to render as a normal empty completion).
     #[test]
     fn detached_crash_surfaces_as_rich_disconnect_error() {

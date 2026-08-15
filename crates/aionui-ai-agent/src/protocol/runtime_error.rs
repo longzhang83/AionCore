@@ -29,7 +29,7 @@ pub enum CloseReason {
     /// Carries the structured reason so the toast text is actionable.
     Killed { reason: Option<AgentKillReason> },
 
-    /// CLI process exited unexpectedly. Mirrors `AcpError::Disconnected`
+    /// CLI process exited unexpectedly. Mirrors `RuntimeError::Disconnected`
     /// but with a redacted summary; stderr stays in tracing logs only.
     ProcessExited {
         exit_code: Option<i32>,
@@ -92,7 +92,7 @@ impl CloseReason {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 #[allow(dead_code)] // Variants constructed as error paths mature; kept for complete ACP error model.
-pub enum AcpError {
+pub enum RuntimeError {
     // ── Process lifecycle ──────────────────────────────────────────
     /// CLI binary not found or not executable.
     SpawnFailed { message: String },
@@ -194,42 +194,42 @@ const SDK_DEFAULT_MESSAGES: &[&str] = &[
     "Internal error",
 ];
 
-impl std::fmt::Display for AcpError {
+impl std::fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AcpError::SpawnFailed { message } => {
+            RuntimeError::SpawnFailed { message } => {
                 write!(f, "Failed to spawn agent process: {message}")
             }
-            AcpError::StartupCrash { exit_code, signal, .. } => {
+            RuntimeError::StartupCrash { exit_code, signal, .. } => {
                 // stderr intentionally NOT included — may carry secrets.
                 let detail = format_exit_detail(*exit_code, signal.as_deref());
                 write!(f, "Agent process exited before initialize handshake completed{detail}")
             }
-            AcpError::Disconnected { exit_code, signal, .. } => {
+            RuntimeError::Disconnected { exit_code, signal, .. } => {
                 let detail = format_exit_detail(*exit_code, signal.as_deref());
                 write!(f, "Agent process disconnected{detail}")
             }
-            AcpError::AuthRequired => f.write_str("Authentication required"),
-            AcpError::ProtocolParseError { message } => {
+            RuntimeError::AuthRequired => f.write_str("Authentication required"),
+            RuntimeError::ProtocolParseError { message } => {
                 write!(f, "Agent protocol parse error: {message}")
             }
-            AcpError::InvalidRequest { message } => {
+            RuntimeError::InvalidRequest { message } => {
                 write!(f, "Agent rejected an invalid protocol request: {message}")
             }
-            AcpError::SessionNotFound { session_id } => {
+            RuntimeError::SessionNotFound { session_id } => {
                 write!(f, "Session not found: {session_id}")
             }
-            AcpError::ResourceNotFound { resource, message } => match resource {
+            RuntimeError::ResourceNotFound { resource, message } => match resource {
                 Some(resource) => write!(f, "Agent resource not found: {resource} ({message})"),
                 None => write!(f, "Agent resource not found: {message}"),
             },
-            AcpError::MethodNotFound { method } => {
+            RuntimeError::MethodNotFound { method } => {
                 write!(f, "Method not supported: {method}")
             }
-            AcpError::InvalidParams { message } => {
+            RuntimeError::InvalidParams { message } => {
                 write!(f, "Invalid parameters: {message}")
             }
-            AcpError::AgentInternal { message, code, data } => {
+            RuntimeError::AgentInternal { message, code, data } => {
                 let trimmed = message.trim();
                 let is_default =
                     trimmed.is_empty() || SDK_DEFAULT_MESSAGES.iter().any(|d| d.eq_ignore_ascii_case(trimmed));
@@ -246,7 +246,7 @@ impl std::fmt::Display for AcpError {
                 }
                 Ok(())
             }
-            AcpError::OtherProtocolError { code, message, data } => {
+            RuntimeError::OtherProtocolError { code, message, data } => {
                 write!(f, "Agent protocol error (code {code}): {message}")?;
                 if let Some(data) = data {
                     let compact = serde_json::to_string(data).unwrap_or_else(|_| "<unserializable data>".to_owned());
@@ -254,33 +254,33 @@ impl std::fmt::Display for AcpError {
                 }
                 Ok(())
             }
-            AcpError::NotConnected => f.write_str("ACP protocol not connected"),
-            AcpError::InitTimeout { timeout_secs } => {
+            RuntimeError::NotConnected => f.write_str("ACP protocol not connected"),
+            RuntimeError::InitTimeout { timeout_secs } => {
                 write!(f, "Initialize handshake timed out after {timeout_secs}s")
             }
-            AcpError::RequestTimeout { method, timeout_secs } => {
+            RuntimeError::RequestTimeout { method, timeout_secs } => {
                 write!(f, "Agent request '{method}' timed out after {timeout_secs}s")
             }
         }
     }
 }
 
-impl AcpError {
+impl RuntimeError {
     /// Whether the caller may retry the operation.
     #[allow(dead_code)] // Will be used once retry logic is wired into the send path.
     pub(crate) fn is_retryable(&self) -> bool {
         matches!(
             self,
-            AcpError::SpawnFailed { .. }
-                | AcpError::StartupCrash { .. }
-                | AcpError::Disconnected { .. }
-                | AcpError::AgentInternal { .. }
-                | AcpError::InitTimeout { .. }
-                | AcpError::RequestTimeout { .. }
+            RuntimeError::SpawnFailed { .. }
+                | RuntimeError::StartupCrash { .. }
+                | RuntimeError::Disconnected { .. }
+                | RuntimeError::AgentInternal { .. }
+                | RuntimeError::InitTimeout { .. }
+                | RuntimeError::RequestTimeout { .. }
         )
     }
 
-    /// Convert an SDK [`Error`](SdkError) into an [`AcpError`].
+    /// Convert an SDK [`Error`](SdkError) into an [`RuntimeError`].
     ///
     /// Mapping is by [`ErrorCode`], never by message text. The single
     /// exceptions are known stale-session shapes: `data.error == "Session not
@@ -292,38 +292,38 @@ impl AcpError {
     /// `context` carries the session ID or method name for diagnostics.
     pub fn from_sdk(err: SdkError, context: &str) -> Self {
         match err.code {
-            ErrorCode::AuthRequired => AcpError::AuthRequired,
-            ErrorCode::ParseError => AcpError::ProtocolParseError { message: err.message },
-            ErrorCode::InvalidRequest => AcpError::InvalidRequest { message: err.message },
+            ErrorCode::AuthRequired => RuntimeError::AuthRequired,
+            ErrorCode::ParseError => RuntimeError::ProtocolParseError { message: err.message },
+            ErrorCode::InvalidRequest => RuntimeError::InvalidRequest { message: err.message },
             ErrorCode::ResourceNotFound => {
                 if let Some(sid) = extract_session_not_found(err.data.as_ref()) {
-                    AcpError::SessionNotFound { session_id: sid }
+                    RuntimeError::SessionNotFound { session_id: sid }
                 } else if extract_resource_not_found(err.data.as_ref()).is_none() && is_session_load_method(context) {
-                    AcpError::SessionNotFound {
+                    RuntimeError::SessionNotFound {
                         session_id: context.to_owned(),
                     }
                 } else {
-                    AcpError::ResourceNotFound {
+                    RuntimeError::ResourceNotFound {
                         resource: extract_resource_not_found(err.data.as_ref()),
                         message: err.message,
                     }
                 }
             }
-            ErrorCode::MethodNotFound => AcpError::MethodNotFound {
+            ErrorCode::MethodNotFound => RuntimeError::MethodNotFound {
                 method: context.to_owned(),
             },
             ErrorCode::InvalidParams => {
                 if let Some(sid) = extract_session_not_found(err.data.as_ref()) {
-                    AcpError::SessionNotFound { session_id: sid }
+                    RuntimeError::SessionNotFound { session_id: sid }
                 } else {
-                    AcpError::InvalidParams { message: err.message }
+                    RuntimeError::InvalidParams { message: err.message }
                 }
             }
             ErrorCode::InternalError => {
                 if let Some(sid) = extract_session_not_found(err.data.as_ref()) {
-                    AcpError::SessionNotFound { session_id: sid }
+                    RuntimeError::SessionNotFound { session_id: sid }
                 } else {
-                    AcpError::AgentInternal {
+                    RuntimeError::AgentInternal {
                         message: err.message,
                         code: i32::from(err.code),
                         data: err.data,
@@ -335,13 +335,13 @@ impl AcpError {
                 // -32001: additional session-not-found code used by some agents.
                 // -32002 is ACP ResourceNotFound and is handled above by ErrorCode.
                 if code == -32001 {
-                    AcpError::SessionNotFound {
+                    RuntimeError::SessionNotFound {
                         session_id: context.to_owned(),
                     }
                 } else if let Some(sid) = extract_session_not_found(err.data.as_ref()) {
-                    AcpError::SessionNotFound { session_id: sid }
+                    RuntimeError::SessionNotFound { session_id: sid }
                 } else {
-                    AcpError::OtherProtocolError {
+                    RuntimeError::OtherProtocolError {
                         code,
                         message: err.message,
                         data: err.data,
@@ -482,13 +482,13 @@ mod tests {
     #[test]
     fn retryable_variants() {
         assert!(
-            AcpError::SpawnFailed {
+            RuntimeError::SpawnFailed {
                 message: "not found".into()
             }
             .is_retryable()
         );
         assert!(
-            AcpError::StartupCrash {
+            RuntimeError::StartupCrash {
                 exit_code: Some(1),
                 signal: None,
                 stderr: String::new(),
@@ -496,7 +496,7 @@ mod tests {
             .is_retryable()
         );
         assert!(
-            AcpError::Disconnected {
+            RuntimeError::Disconnected {
                 exit_code: None,
                 signal: Some("SIGKILL".into()),
                 stderr: String::new(),
@@ -504,34 +504,34 @@ mod tests {
             .is_retryable()
         );
         assert!(
-            AcpError::AgentInternal {
+            RuntimeError::AgentInternal {
                 message: "oops".into(),
                 code: -32603,
                 data: None,
             }
             .is_retryable()
         );
-        assert!(AcpError::InitTimeout { timeout_secs: 30 }.is_retryable());
+        assert!(RuntimeError::InitTimeout { timeout_secs: 30 }.is_retryable());
     }
 
     #[test]
     fn non_retryable_variants() {
-        assert!(!AcpError::AuthRequired.is_retryable());
+        assert!(!RuntimeError::AuthRequired.is_retryable());
         assert!(
-            !AcpError::SessionNotFound {
+            !RuntimeError::SessionNotFound {
                 session_id: "s1".into()
             }
             .is_retryable()
         );
-        assert!(!AcpError::MethodNotFound { method: "foo".into() }.is_retryable());
-        assert!(!AcpError::InvalidParams { message: "bad".into() }.is_retryable());
-        assert!(!AcpError::NotConnected.is_retryable());
+        assert!(!RuntimeError::MethodNotFound { method: "foo".into() }.is_retryable());
+        assert!(!RuntimeError::InvalidParams { message: "bad".into() }.is_retryable());
+        assert!(!RuntimeError::NotConnected.is_retryable());
     }
 
     #[test]
     fn request_timeout_is_retryable() {
         assert!(
-            AcpError::RequestTimeout {
+            RuntimeError::RequestTimeout {
                 method: "session/setConfigOption".into(),
                 timeout_secs: 10,
             }
@@ -542,7 +542,7 @@ mod tests {
 
     #[test]
     fn request_timeout_display_names_method_and_timeout_without_sensitive_payload() {
-        let display = AcpError::RequestTimeout {
+        let display = RuntimeError::RequestTimeout {
             method: "session/setConfigOption".into(),
             timeout_secs: 10,
         }
@@ -556,30 +556,30 @@ mod tests {
     #[test]
     fn from_sdk_auth_required() {
         let sdk_err = SdkError::auth_required();
-        let acp = AcpError::from_sdk(sdk_err, "sess-1");
-        assert!(matches!(acp, AcpError::AuthRequired));
+        let runtime_error = RuntimeError::from_sdk(sdk_err, "sess-1");
+        assert!(matches!(runtime_error, RuntimeError::AuthRequired));
     }
 
     #[test]
     fn from_sdk_parse_error_preserves_protocol_error() {
         let sdk_err = SdkError::parse_error();
-        let acp = AcpError::from_sdk(sdk_err, "initialize");
-        assert!(matches!(acp, AcpError::ProtocolParseError { .. }));
+        let runtime_error = RuntimeError::from_sdk(sdk_err, "initialize");
+        assert!(matches!(runtime_error, RuntimeError::ProtocolParseError { .. }));
     }
 
     #[test]
     fn from_sdk_invalid_request_preserves_protocol_error() {
         let sdk_err = SdkError::invalid_request();
-        let acp = AcpError::from_sdk(sdk_err, "session/new");
-        assert!(matches!(acp, AcpError::InvalidRequest { .. }));
+        let runtime_error = RuntimeError::from_sdk(sdk_err, "session/new");
+        assert!(matches!(runtime_error, RuntimeError::InvalidRequest { .. }));
     }
 
     #[test]
     fn from_sdk_resource_not_found() {
         let sdk_err = SdkError::resource_not_found(Some("file:///missing.txt".to_owned()));
-        let acp = AcpError::from_sdk(sdk_err, "session/new");
-        match acp {
-            AcpError::ResourceNotFound { resource, .. } => {
+        let runtime_error = RuntimeError::from_sdk(sdk_err, "session/new");
+        match runtime_error {
+            RuntimeError::ResourceNotFound { resource, .. } => {
                 assert_eq!(resource.as_deref(), Some("file:///missing.txt"));
             }
             other => panic!("Expected ResourceNotFound, got {other:?}"),
@@ -589,9 +589,9 @@ mod tests {
     #[test]
     fn from_sdk_session_load_resource_not_found_without_uri_is_session_not_found() {
         let sdk_err = SdkError::resource_not_found(None);
-        let acp = AcpError::from_sdk(sdk_err, "session/load");
-        match acp {
-            AcpError::SessionNotFound { session_id } => assert_eq!(session_id, "session/load"),
+        let runtime_error = RuntimeError::from_sdk(sdk_err, "session/load");
+        match runtime_error {
+            RuntimeError::SessionNotFound { session_id } => assert_eq!(session_id, "session/load"),
             other => panic!("expected SessionNotFound, got {other:?}"),
         }
     }
@@ -599,19 +599,19 @@ mod tests {
     #[test]
     fn from_sdk_prompt_resource_not_found_without_uri_stays_resource_not_found() {
         let sdk_err = SdkError::resource_not_found(None);
-        let acp = AcpError::from_sdk(sdk_err, "session/prompt");
+        let runtime_error = RuntimeError::from_sdk(sdk_err, "session/prompt");
         assert!(
-            matches!(acp, AcpError::ResourceNotFound { resource: None, .. }),
-            "prompt ResourceNotFound must not clear a persisted session id: {acp:?}"
+            matches!(runtime_error, RuntimeError::ResourceNotFound { resource: None, .. }),
+            "prompt ResourceNotFound must not clear a persisted session id: {runtime_error:?}"
         );
     }
 
     #[test]
     fn from_sdk_method_not_found() {
         let sdk_err = SdkError::method_not_found();
-        let acp = AcpError::from_sdk(sdk_err, "session/magic");
-        match acp {
-            AcpError::MethodNotFound { method } => assert_eq!(method, "session/magic"),
+        let runtime_error = RuntimeError::from_sdk(sdk_err, "session/magic");
+        match runtime_error {
+            RuntimeError::MethodNotFound { method } => assert_eq!(method, "session/magic"),
             other => panic!("Expected MethodNotFound, got {other:?}"),
         }
     }
@@ -619,8 +619,8 @@ mod tests {
     #[test]
     fn from_sdk_invalid_params() {
         let sdk_err = SdkError::invalid_params();
-        let acp = AcpError::from_sdk(sdk_err, "ignored");
-        assert!(matches!(acp, AcpError::InvalidParams { .. }));
+        let runtime_error = RuntimeError::from_sdk(sdk_err, "ignored");
+        assert!(matches!(runtime_error, RuntimeError::InvalidParams { .. }));
     }
 
     /// OpenCode reports a stale session as
@@ -633,9 +633,9 @@ mod tests {
         let sdk_err = SdkError::invalid_params().data(serde_json::Value::String(
             r#"{"error":"Session not found: ses_21859c95dffefejNiDf1VYXMgU"}"#.to_owned(),
         ));
-        let acp = AcpError::from_sdk(sdk_err, "session/set_mode");
-        match acp {
-            AcpError::SessionNotFound { session_id } => {
+        let runtime_error = RuntimeError::from_sdk(sdk_err, "session/set_mode");
+        match runtime_error {
+            RuntimeError::SessionNotFound { session_id } => {
                 assert_eq!(session_id, "ses_21859c95dffefejNiDf1VYXMgU");
             }
             other => panic!("expected SessionNotFound, got {other:?}"),
@@ -649,9 +649,9 @@ mod tests {
         let sdk_err = SdkError::invalid_params().data(serde_json::json!({
             "error": "Session not found: sess-direct"
         }));
-        let acp = AcpError::from_sdk(sdk_err, "ctx");
-        match acp {
-            AcpError::SessionNotFound { session_id } => assert_eq!(session_id, "sess-direct"),
+        let runtime_error = RuntimeError::from_sdk(sdk_err, "ctx");
+        match runtime_error {
+            RuntimeError::SessionNotFound { session_id } => assert_eq!(session_id, "sess-direct"),
             other => panic!("expected SessionNotFound, got {other:?}"),
         }
     }
@@ -663,9 +663,9 @@ mod tests {
         let sdk_err = SdkError::internal_error().data(serde_json::json!({
             "error": "Session not found: sess-ie"
         }));
-        let acp = AcpError::from_sdk(sdk_err, "ctx");
-        match acp {
-            AcpError::SessionNotFound { session_id } => assert_eq!(session_id, "sess-ie"),
+        let runtime_error = RuntimeError::from_sdk(sdk_err, "ctx");
+        match runtime_error {
+            RuntimeError::SessionNotFound { session_id } => assert_eq!(session_id, "sess-ie"),
             other => panic!("expected SessionNotFound, got {other:?}"),
         }
     }
@@ -678,16 +678,16 @@ mod tests {
         let sdk_err = SdkError::invalid_params().data(serde_json::json!({
             "error": "Workspace path must be absolute"
         }));
-        let acp = AcpError::from_sdk(sdk_err, "ctx");
-        assert!(matches!(acp, AcpError::InvalidParams { .. }));
+        let runtime_error = RuntimeError::from_sdk(sdk_err, "ctx");
+        assert!(matches!(runtime_error, RuntimeError::InvalidParams { .. }));
     }
 
     #[test]
     fn from_sdk_internal_error() {
         let sdk_err = SdkError::internal_error();
-        let acp = AcpError::from_sdk(sdk_err, "context");
-        match acp {
-            AcpError::AgentInternal { code, .. } => assert_eq!(code, -32603),
+        let runtime_error = RuntimeError::from_sdk(sdk_err, "context");
+        match runtime_error {
+            RuntimeError::AgentInternal { code, .. } => assert_eq!(code, -32603),
             other => panic!("Expected AgentInternal, got {other:?}"),
         }
     }
@@ -695,16 +695,16 @@ mod tests {
     #[test]
     fn from_sdk_other_code_session_related() {
         let sdk_err = SdkError::new(-32001, "session expired");
-        let acp = AcpError::from_sdk(sdk_err, "sess-old");
-        assert!(matches!(acp, AcpError::SessionNotFound { .. }));
+        let runtime_error = RuntimeError::from_sdk(sdk_err, "sess-old");
+        assert!(matches!(runtime_error, RuntimeError::SessionNotFound { .. }));
     }
 
     #[test]
     fn from_sdk_other_code_unknown() {
         let sdk_err = SdkError::new(-32099, "custom error");
-        let acp = AcpError::from_sdk(sdk_err, "ctx");
-        match acp {
-            AcpError::OtherProtocolError { code, message, .. } => {
+        let runtime_error = RuntimeError::from_sdk(sdk_err, "ctx");
+        match runtime_error {
+            RuntimeError::OtherProtocolError { code, message, .. } => {
                 assert_eq!(code, -32099);
                 assert_eq!(message, "custom error");
             }
@@ -714,7 +714,7 @@ mod tests {
 
     #[test]
     fn display_does_not_contain_stderr() {
-        let err = AcpError::StartupCrash {
+        let err = RuntimeError::StartupCrash {
             exit_code: Some(1),
             signal: None,
             stderr: "SUPER SECRET API KEY abc123".into(),
@@ -728,7 +728,7 @@ mod tests {
 
     #[test]
     fn startup_crash_display_includes_exit_code() {
-        let err = AcpError::StartupCrash {
+        let err = RuntimeError::StartupCrash {
             exit_code: Some(1),
             signal: None,
             stderr: String::new(),
@@ -743,7 +743,7 @@ mod tests {
 
     #[test]
     fn startup_crash_display_omits_detail_when_unknown() {
-        let err = AcpError::StartupCrash {
+        let err = RuntimeError::StartupCrash {
             exit_code: None,
             signal: None,
             stderr: String::new(),
@@ -755,7 +755,7 @@ mod tests {
 
     #[test]
     fn disconnected_display_includes_signal_when_present() {
-        let err = AcpError::Disconnected {
+        let err = RuntimeError::Disconnected {
             exit_code: None,
             signal: Some("signal:9".into()),
             stderr: String::new(),
@@ -767,9 +767,9 @@ mod tests {
     #[test]
     fn from_sdk_captures_data_payload() {
         let sdk_err = SdkError::internal_error().data(serde_json::json!({"reason": "rate_limited", "retry_after": 30}));
-        let acp = AcpError::from_sdk(sdk_err, "context");
-        match acp {
-            AcpError::AgentInternal { code, message, data } => {
+        let runtime_error = RuntimeError::from_sdk(sdk_err, "context");
+        match runtime_error {
+            RuntimeError::AgentInternal { code, message, data } => {
                 assert_eq!(code, -32603);
                 assert_eq!(message, "Internal error");
                 let data = data.expect("data must be preserved");
@@ -784,9 +784,9 @@ mod tests {
     fn other_protocol_error_preserves_code_and_data() {
         let sdk_err = SdkError::new(-32099, "custom upstream error")
             .data(serde_json::json!({"reason": "rate_limited", "retry_after": 30}));
-        let acp = AcpError::from_sdk(sdk_err, "context");
-        match acp {
-            AcpError::OtherProtocolError { code, message, data } => {
+        let runtime_error = RuntimeError::from_sdk(sdk_err, "context");
+        match runtime_error {
+            RuntimeError::OtherProtocolError { code, message, data } => {
                 assert_eq!(code, -32099);
                 assert_eq!(message, "custom upstream error");
                 let data = data.expect("data must be preserved");
@@ -800,16 +800,16 @@ mod tests {
     #[test]
     fn from_sdk_no_data_yields_none() {
         let sdk_err = SdkError::internal_error();
-        let acp = AcpError::from_sdk(sdk_err, "context");
-        match acp {
-            AcpError::AgentInternal { data, .. } => assert!(data.is_none()),
+        let runtime_error = RuntimeError::from_sdk(sdk_err, "context");
+        match runtime_error {
+            RuntimeError::AgentInternal { data, .. } => assert!(data.is_none()),
             other => panic!("Expected AgentInternal, got {other:?}"),
         }
     }
 
     #[test]
     fn agent_internal_display_uses_message_only_when_no_data() {
-        let err = AcpError::AgentInternal {
+        let err = RuntimeError::AgentInternal {
             message: "API Error: Internal server error".into(),
             code: -32603,
             data: None,
@@ -825,7 +825,7 @@ mod tests {
     fn agent_internal_display_falls_back_when_message_is_sdk_default() {
         // SDK default for ErrorCode::InternalError is the plain string "Internal error".
         // When that's all we have, the user sees nothing useful, so add a hint.
-        let err = AcpError::AgentInternal {
+        let err = RuntimeError::AgentInternal {
             message: "Internal error".into(),
             code: -32603,
             data: None,
@@ -846,7 +846,7 @@ mod tests {
         // Real-world shape: SDK returned its default `"Internal error"` but
         // attached structured data. Display must use the diagnostic header
         // AND append the data.
-        let err = AcpError::AgentInternal {
+        let err = RuntimeError::AgentInternal {
             message: "Internal error".into(),
             code: -32603,
             data: Some(serde_json::json!({"retry_after": 30})),
@@ -867,7 +867,7 @@ mod tests {
 
     #[test]
     fn agent_internal_display_appends_data_inline() {
-        let err = AcpError::AgentInternal {
+        let err = RuntimeError::AgentInternal {
             message: "API Error".into(),
             code: -32603,
             data: Some(serde_json::json!({"upstream_status": 503})),

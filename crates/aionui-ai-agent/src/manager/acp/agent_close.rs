@@ -17,7 +17,7 @@
 use crate::error::AgentError;
 use crate::manager::acp::AcpAgentManager;
 use crate::manager::acp::agent::{exit_status_parts, user_facing_message};
-use crate::protocol::error::CloseReason;
+use crate::protocol::runtime_error::CloseReason;
 
 /// How many trailing stderr lines we hand to the extractor.
 /// 32 lines is well below the 8 KiB ring-buffer cap and comfortably
@@ -49,10 +49,10 @@ impl AcpAgentManager {
     /// message. Returns `None` when augmentation does not apply or finds nothing.
     ///
     /// Why string-matching: `AgentError::BadGateway(String)` has discarded the
-    /// structured `AcpError` by the time we see it. The default-message
+    /// structured `RuntimeError` by the time we see it. The default-message
     /// signature is narrow and stable enough that matching on the inner string
     /// is cheaper than threading typed errors through the manager API. Keep
-    /// this in sync with `AcpError::Display` in
+    /// this in sync with `RuntimeError::Display` in
     /// `crates/aionui-ai-agent/src/protocol/error.rs` if its fallback wording
     /// changes.
     pub(super) async fn augment_with_stderr(&self, err: &AgentError) -> Option<String> {
@@ -147,7 +147,7 @@ mod tests {
     use crate::capability::cli_process::CliAgentProcess;
     use crate::error::AgentError;
     use crate::manager::acp::agent::{exit_status_parts, user_facing_message};
-    use crate::protocol::error::CloseReason;
+    use crate::protocol::runtime_error::CloseReason;
 
     fn capture_logs(max_level: tracing::Level, f: impl FnOnce()) -> String {
         use std::io::Write;

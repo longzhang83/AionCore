@@ -3,7 +3,7 @@ use crate::manager::acp::AcpAgentManager;
 use crate::manager::acp::error_mapping::is_acp_session_not_found;
 use crate::manager::acp::runtime_mode::normalize_requested_mode_for_available_values;
 use crate::manager::acp::session::PendingStartupConfigSeedResult;
-use crate::protocol::error::AcpError;
+use crate::protocol::runtime_error::RuntimeError;
 use crate::shared_kernel::{ConfigKey, ConfigValue, ModeId, ModelId};
 use agent_client_protocol::schema::v1::{SessionId, SetSessionConfigOptionRequest, SetSessionModeRequest};
 use std::collections::VecDeque;
@@ -31,14 +31,14 @@ impl AcpAgentManager {
     /// alignment.
     ///
     /// Failure handling:
-    /// - `SessionNotFound`: returned as structured `AcpError::SessionNotFound` so callers
+    /// - `SessionNotFound`: returned as structured `RuntimeError::SessionNotFound` so callers
     ///   (e.g. `open_session_resume`) can drop the stale sid and rebuild
     ///   the session. ELECTRON-1HQ regressed because we silently swallowed
     ///   this case during warmup, leaving downstream `session/prompt` to
     ///   surface the same error to the user every turn.
     /// - Any other error: logged and skipped (best-effort), so a failed
     ///   `set_config_option` doesn't block a successful `set_mode`.
-    pub(super) async fn reconcile_session(&self, session_id: &str) -> Result<(), AcpError> {
+    pub(super) async fn reconcile_session(&self, session_id: &str) -> Result<(), RuntimeError> {
         use crate::manager::acp::ReconcileAction;
 
         let (startup_config_seed_results, invalid_mode, invalid_model, actions) = {

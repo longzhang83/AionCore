@@ -3,7 +3,7 @@ use aionui_api_types::{
     AgentStreamErrorData,
 };
 
-use super::error::AcpError;
+use super::runtime_error::RuntimeError;
 use crate::error::AgentError;
 
 const MAX_DETAIL_CHARS: usize = 1000;
@@ -14,7 +14,7 @@ const AWS_SSO_EXPIRED_DETAIL: &str =
     "Token is expired. To refresh this SSO session run 'aws sso login' with the corresponding profile.";
 
 #[derive(Debug, Clone)]
-pub struct AgentSendError {
+pub struct RuntimeSendError {
     stream_error: AgentStreamErrorData,
 }
 
@@ -30,8 +30,8 @@ struct ClassifiedError {
 }
 
 impl ClassifiedError {
-    fn into_send_error(self, detail: String) -> AgentSendError {
-        AgentSendError::new(
+    fn into_send_error(self, detail: String) -> RuntimeSendError {
+        RuntimeSendError::new(
             self.message,
             self.code,
             self.ownership,
@@ -44,7 +44,7 @@ impl ClassifiedError {
     }
 }
 
-impl AgentSendError {
+impl RuntimeSendError {
     pub fn new(
         message: impl Into<String>,
         code: AgentErrorCode,
@@ -171,7 +171,7 @@ impl AgentSendError {
                 resolution(AgentErrorResolutionKind::Retry, None),
             ),
             AgentError::BadGateway(_) => classify_upstream_detail(&detail),
-            AgentError::Acp(err) => Self::from_acp_error_ref(err),
+            AgentError::Runtime(err) => Self::from_runtime_error_ref(err),
             _ => Self::new(
                 "The upstream Agent failed while handling the request",
                 AgentErrorCode::UnknownUpstreamError,
@@ -189,8 +189,8 @@ impl AgentSendError {
 
     pub fn from_agent_error_ref_for_backend(err: &AgentError, backend: Option<&str>) -> Self {
         match err {
-            AgentError::Acp(acp_err)
-                if is_openclaw_backend(backend) && openclaw_gateway_unreachable_from_acp_error(acp_err) =>
+            AgentError::Runtime(runtime_err)
+                if is_openclaw_backend(backend) && openclaw_gateway_unreachable_from_runtime_error(runtime_err) =>
             {
                 openclaw_gateway_unreachable_send_error()
             }
@@ -223,24 +223,24 @@ impl AgentSendError {
         self.stream_error.ownership
     }
 
-    pub(crate) fn from_acp_error_ref(err: &AcpError) -> Self {
-        classify_acp_error(err)
+    pub(crate) fn from_runtime_error_ref(err: &RuntimeError) -> Self {
+        classify_runtime_error(err)
     }
 
-    pub(crate) fn from_acp_error_ref_for_backend(err: &AcpError, backend: Option<&str>) -> Self {
-        if is_openclaw_backend(backend) && openclaw_gateway_unreachable_from_acp_error(err) {
+    pub(crate) fn from_runtime_error_ref_for_backend(err: &RuntimeError, backend: Option<&str>) -> Self {
+        if is_openclaw_backend(backend) && openclaw_gateway_unreachable_from_runtime_error(err) {
             return openclaw_gateway_unreachable_send_error();
         }
-        Self::from_acp_error_ref(err)
+        Self::from_runtime_error_ref(err)
     }
 
     pub fn is_openclaw_gateway_unreachable(&self) -> bool {
         self.code() == Some(AgentErrorCode::UserAgentOpenClawGatewayUnreachable)
     }
 
-    fn from_acp_non_internal(err: &AcpError, detail: String) -> Self {
+    fn from_runtime_non_internal(err: &RuntimeError, detail: String) -> Self {
         match err {
-            AcpError::SpawnFailed { .. } => Self::new(
+            RuntimeError::SpawnFailed { .. } => Self::new(
                 "The selected Agent executable could not be started",
                 AgentErrorCode::UserAgentNotInstalled,
                 AgentErrorOwnership::UserAgent,
@@ -252,7 +252,7 @@ impl AgentSendError {
                     Some(AgentErrorResolutionTarget::AgentSettings),
                 ),
             ),
-            AcpError::StartupCrash { .. } | AcpError::InitTimeout { .. } => Self::new(
+            RuntimeError::StartupCrash { .. } | RuntimeError::InitTimeout { .. } => Self::new(
                 "The selected Agent failed to start",
                 AgentErrorCode::UserAgentStartupFailed,
                 AgentErrorOwnership::UserAgent,
@@ -264,7 +264,7 @@ impl AgentSendError {
                     Some(AgentErrorResolutionTarget::AgentSettings),
                 ),
             ),
-            AcpError::Disconnected { .. } => Self::new(
+            RuntimeError::Disconnected { .. } => Self::new(
                 "The selected Agent disconnected",
                 AgentErrorCode::UserAgentDisconnected,
                 AgentErrorOwnership::UserAgent,
@@ -276,7 +276,7 @@ impl AgentSendError {
                     Some(AgentErrorResolutionTarget::AgentSettings),
                 ),
             ),
-            AcpError::AuthRequired => Self::new(
+            RuntimeError::AuthRequired => Self::new(
                 "The selected Agent requires authentication",
                 AgentErrorCode::UserAgentAuthRequired,
                 AgentErrorOwnership::UserAgent,
@@ -288,7 +288,7 @@ impl AgentSendError {
                     Some(AgentErrorResolutionTarget::AgentSettings),
                 ),
             ),
-            AcpError::ProtocolParseError { .. } => Self::new(
+            RuntimeError::ProtocolParseError { .. } => Self::new(
                 "The selected Agent reported a protocol parse error",
                 AgentErrorCode::UserAgentProtocolParseError,
                 AgentErrorOwnership::UserAgent,
@@ -297,7 +297,7 @@ impl AgentSendError {
                 false,
                 None,
             ),
-            AcpError::InvalidRequest { .. } => Self::new(
+            RuntimeError::InvalidRequest { .. } => Self::new(
                 "The selected Agent reported an invalid protocol request",
                 AgentErrorCode::UserAgentInvalidRequest,
                 AgentErrorOwnership::UserAgent,
@@ -306,7 +306,7 @@ impl AgentSendError {
                 false,
                 None,
             ),
-            AcpError::SessionNotFound { .. } => Self::new(
+            RuntimeError::SessionNotFound { .. } => Self::new(
                 "The Agent session was not found",
                 AgentErrorCode::UserAgentSessionNotFound,
                 AgentErrorOwnership::UserAgent,
@@ -315,7 +315,7 @@ impl AgentSendError {
                 false,
                 None,
             ),
-            AcpError::ResourceNotFound { .. } => Self::new(
+            RuntimeError::ResourceNotFound { .. } => Self::new(
                 "The selected Agent could not find a required resource",
                 AgentErrorCode::UserAgentResourceNotFound,
                 AgentErrorOwnership::UserAgent,
@@ -324,7 +324,7 @@ impl AgentSendError {
                 false,
                 None,
             ),
-            AcpError::MethodNotFound { .. } => Self::new(
+            RuntimeError::MethodNotFound { .. } => Self::new(
                 "The selected Agent does not support this operation",
                 AgentErrorCode::UserAgentUnsupportedMethod,
                 AgentErrorOwnership::UserAgent,
@@ -333,7 +333,7 @@ impl AgentSendError {
                 false,
                 None,
             ),
-            AcpError::InvalidParams { .. } => Self::new(
+            RuntimeError::InvalidParams { .. } => Self::new(
                 "The selected Agent rejected the request parameters",
                 AgentErrorCode::UserAgentInvalidParams,
                 AgentErrorOwnership::UserAgent,
@@ -342,7 +342,7 @@ impl AgentSendError {
                 false,
                 None,
             ),
-            AcpError::NotConnected => Self::new(
+            RuntimeError::NotConnected => Self::new(
                 "AionUI lost its Agent protocol connection",
                 AgentErrorCode::UserAgentDisconnected,
                 AgentErrorOwnership::UserAgent,
@@ -354,7 +354,7 @@ impl AgentSendError {
                     Some(AgentErrorResolutionTarget::AgentSettings),
                 ),
             ),
-            AcpError::OtherProtocolError { .. } => Self::new(
+            RuntimeError::OtherProtocolError { .. } => Self::new(
                 "The selected Agent returned a non-standard protocol error",
                 AgentErrorCode::UserAgentProtocolError,
                 AgentErrorOwnership::UserAgent,
@@ -363,7 +363,7 @@ impl AgentSendError {
                 false,
                 None,
             ),
-            AcpError::RequestTimeout { .. } => Self::new(
+            RuntimeError::RequestTimeout { .. } => Self::new(
                 "The selected Agent did not respond to the request in time",
                 AgentErrorCode::UserAgentDisconnected,
                 AgentErrorOwnership::UserAgent,
@@ -372,40 +372,40 @@ impl AgentSendError {
                 false, // feedback_recommended
                 None,
             ),
-            AcpError::AgentInternal { .. } => unknown_upstream_error(detail),
+            RuntimeError::AgentInternal { .. } => unknown_upstream_error(detail),
         }
     }
 }
 
-impl std::fmt::Display for AgentSendError {
+impl std::fmt::Display for RuntimeSendError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.stream_error.message)
     }
 }
 
-impl std::error::Error for AgentSendError {}
+impl std::error::Error for RuntimeSendError {}
 
-impl From<AcpError> for AgentSendError {
-    fn from(err: AcpError) -> Self {
-        Self::from_acp_error_ref(&err)
+impl From<RuntimeError> for RuntimeSendError {
+    fn from(err: RuntimeError) -> Self {
+        Self::from_runtime_error_ref(&err)
     }
 }
 
-impl From<AgentError> for AgentSendError {
+impl From<AgentError> for RuntimeSendError {
     fn from(err: AgentError) -> Self {
         Self::from_agent_error(err)
     }
 }
 
-fn classify_acp_error(err: &AcpError) -> AgentSendError {
+fn classify_runtime_error(err: &RuntimeError) -> RuntimeSendError {
     match err {
-        AcpError::AgentInternal { message, code, data } => {
-            let default_detail = acp_agent_internal_public_detail(*code);
+        RuntimeError::AgentInternal { message, code, data } => {
+            let default_detail = runtime_agent_internal_public_detail(*code);
             if *code != -32603 {
                 return unknown_upstream_error(default_detail);
             }
 
-            let classified = acp_agent_internal_texts(message, data.as_ref())
+            let classified = runtime_agent_internal_texts(message, data.as_ref())
                 .into_iter()
                 .find_map(|text| {
                     let lower = text.to_ascii_lowercase();
@@ -417,21 +417,21 @@ fn classify_acp_error(err: &AcpError) -> AgentSendError {
 
             match classified {
                 Some((classification, text)) => {
-                    let detail = acp_agent_internal_detail_for_classification(*code, classification, text);
+                    let detail = runtime_agent_internal_detail_for_classification(*code, classification, text);
                     classification.into_send_error(detail)
                 }
                 None => unknown_upstream_error(default_detail),
             }
         }
-        _ => AgentSendError::from_acp_non_internal(err, err.to_string()),
+        _ => RuntimeSendError::from_runtime_non_internal(err, err.to_string()),
     }
 }
 
-fn acp_agent_internal_public_detail(code: i32) -> String {
+fn runtime_agent_internal_public_detail(code: i32) -> String {
     format!("Agent internal error (code {code})")
 }
 
-fn acp_agent_internal_detail_for_classification(code: i32, classification: ClassifiedError, text: &str) -> String {
+fn runtime_agent_internal_detail_for_classification(code: i32, classification: ClassifiedError, text: &str) -> String {
     if classification.code == AgentErrorCode::UserLlmProviderAwsSsoExpired
         && contains_sso_expired_auth_signature(&text.to_ascii_lowercase())
     {
@@ -440,46 +440,46 @@ fn acp_agent_internal_detail_for_classification(code: i32, classification: Class
 
     let sanitized = sanitize_error_detail(text);
     if sanitized.is_empty() {
-        acp_agent_internal_public_detail(code)
+        runtime_agent_internal_public_detail(code)
     } else {
-        format!("{}: {}", acp_agent_internal_public_detail(code), sanitized)
+        format!("{}: {}", runtime_agent_internal_public_detail(code), sanitized)
     }
 }
 
-fn acp_agent_internal_texts<'a>(message: &'a str, data: Option<&'a serde_json::Value>) -> Vec<&'a str> {
+fn runtime_agent_internal_texts<'a>(message: &'a str, data: Option<&'a serde_json::Value>) -> Vec<&'a str> {
     let mut texts = Vec::new();
     if let Some(data) = data {
-        collect_acp_data_texts(data, &mut texts);
+        collect_runtime_data_texts(data, &mut texts);
     }
 
     let trimmed = message.trim();
-    if !is_uninformative_acp_message(trimmed) {
+    if !is_uninformative_runtime_message(trimmed) {
         texts.push(trimmed);
     }
 
     texts
 }
 
-fn collect_acp_data_texts<'a>(value: &'a serde_json::Value, texts: &mut Vec<&'a str>) {
+fn collect_runtime_data_texts<'a>(value: &'a serde_json::Value, texts: &mut Vec<&'a str>) {
     match value {
         serde_json::Value::String(text) => texts.push(text.as_str()),
         serde_json::Value::Object(map) => {
             for key in ["error", "details", "message"] {
                 if let Some(value) = map.get(key) {
-                    collect_acp_data_texts(value, texts);
+                    collect_runtime_data_texts(value, texts);
                 }
             }
         }
         serde_json::Value::Array(values) => {
             for value in values {
-                collect_acp_data_texts(value, texts);
+                collect_runtime_data_texts(value, texts);
             }
         }
         _ => {}
     }
 }
 
-fn is_uninformative_acp_message(message: &str) -> bool {
+fn is_uninformative_runtime_message(message: &str) -> bool {
     message.is_empty()
         || [
             "Parse error",
@@ -492,7 +492,7 @@ fn is_uninformative_acp_message(message: &str) -> bool {
         .any(|default| default.eq_ignore_ascii_case(message))
 }
 
-fn classify_upstream_detail(detail: &str) -> AgentSendError {
+fn classify_upstream_detail(detail: &str) -> RuntimeSendError {
     let lower = detail.to_ascii_lowercase();
     let classified = classify_agent_lifecycle(&lower)
         .or_else(|| classify_provider_text(&lower))
@@ -502,7 +502,7 @@ fn classify_upstream_detail(detail: &str) -> AgentSendError {
     classified.into_send_error(detail.to_owned())
 }
 
-fn unknown_upstream_error(detail: String) -> AgentSendError {
+fn unknown_upstream_error(detail: String) -> RuntimeSendError {
     unknown_upstream_classification().into_send_error(detail)
 }
 
@@ -992,19 +992,19 @@ fn contains_openclaw_gateway_unreachable_signature(detail: &str) -> bool {
     )
 }
 
-fn openclaw_gateway_unreachable_from_acp_error(err: &AcpError) -> bool {
+fn openclaw_gateway_unreachable_from_runtime_error(err: &RuntimeError) -> bool {
     match err {
-        AcpError::StartupCrash { stderr, .. } => contains_openclaw_gateway_unreachable_signature(stderr),
-        AcpError::AgentInternal { message, data, .. } => acp_agent_internal_texts(message, data.as_ref())
+        RuntimeError::StartupCrash { stderr, .. } => contains_openclaw_gateway_unreachable_signature(stderr),
+        RuntimeError::AgentInternal { message, data, .. } => runtime_agent_internal_texts(message, data.as_ref())
             .into_iter()
             .any(contains_openclaw_gateway_unreachable_signature),
-        AcpError::InitTimeout { .. } => contains_openclaw_gateway_unreachable_signature(&err.to_string()),
+        RuntimeError::InitTimeout { .. } => contains_openclaw_gateway_unreachable_signature(&err.to_string()),
         _ => false,
     }
 }
 
-fn openclaw_gateway_unreachable_send_error() -> AgentSendError {
-    AgentSendError::new(
+fn openclaw_gateway_unreachable_send_error() -> RuntimeSendError {
+    RuntimeSendError::new(
         OPENCLAW_GATEWAY_MESSAGE,
         AgentErrorCode::UserAgentOpenClawGatewayUnreachable,
         AgentErrorOwnership::UserAgent,
@@ -1138,27 +1138,27 @@ mod tests {
         ownership: AgentErrorOwnership,
         resolution: AgentErrorResolutionKind,
     ) {
-        let err = AgentSendError::from_agent_error(AgentError::bad_gateway(detail));
+        let err = RuntimeSendError::from_agent_error(AgentError::bad_gateway(detail));
         assert_eq!(err.code(), Some(code));
         assert_eq!(err.ownership(), Some(ownership));
         assert_eq!(err.stream_error().resolution.map(|value| value.kind), Some(resolution));
     }
 
     fn assert_classification_without_resolution(detail: &str, code: AgentErrorCode, ownership: AgentErrorOwnership) {
-        let err = AgentSendError::from_agent_error(AgentError::bad_gateway(detail));
+        let err = RuntimeSendError::from_agent_error(AgentError::bad_gateway(detail));
         assert_eq!(err.code(), Some(code));
         assert_eq!(err.ownership(), Some(ownership));
         assert!(err.stream_error().resolution.is_none());
         assert_eq!(err.stream_error().feedback_recommended, Some(false));
     }
 
-    fn assert_acp_classification(
-        err: AcpError,
+    fn assert_runtime_classification(
+        err: RuntimeError,
         code: AgentErrorCode,
         ownership: AgentErrorOwnership,
         resolution: AgentErrorResolutionKind,
-    ) -> AgentSendError {
-        let err = AgentSendError::from(err);
+    ) -> RuntimeSendError {
+        let err = RuntimeSendError::from(err);
         assert_eq!(err.code(), Some(code));
         assert_eq!(err.ownership(), Some(ownership));
         assert_eq!(err.stream_error().resolution.map(|value| value.kind), Some(resolution));
@@ -1166,7 +1166,7 @@ mod tests {
     }
 
     fn assert_resolution_target(detail: &str, target: AgentErrorResolutionTarget) {
-        let err = AgentSendError::from_agent_error(AgentError::bad_gateway(detail));
+        let err = RuntimeSendError::from_agent_error(AgentError::bad_gateway(detail));
         assert_eq!(
             err.stream_error().resolution.and_then(|value| value.target),
             Some(target)
@@ -1175,13 +1175,13 @@ mod tests {
 
     #[test]
     fn classifies_openclaw_gateway_unreachable_from_startup_stderr_with_backend_context() {
-        let err = AgentError::from(AcpError::StartupCrash {
+        let err = AgentError::from(RuntimeError::StartupCrash {
             exit_code: Some(1),
             signal: None,
             stderr: "ACP bridge failed: connect ECONNREFUSED 127.0.0.1:18789".into(),
         });
 
-        let send_error = AgentSendError::from_agent_error_ref_for_backend(&err, Some("openclaw"));
+        let send_error = RuntimeSendError::from_agent_error_ref_for_backend(&err, Some("openclaw"));
 
         assert_eq!(
             send_error.code(),
@@ -1206,13 +1206,13 @@ mod tests {
 
     #[test]
     fn keeps_openclaw_generic_startup_crash_when_gateway_signature_is_absent() {
-        let err = AgentError::from(AcpError::StartupCrash {
+        let err = AgentError::from(RuntimeError::StartupCrash {
             exit_code: Some(1),
             signal: None,
             stderr: "ordinary OpenClaw startup failure without gateway signature".into(),
         });
 
-        let send_error = AgentSendError::from_agent_error_ref_for_backend(&err, Some("openclaw"));
+        let send_error = RuntimeSendError::from_agent_error_ref_for_backend(&err, Some("openclaw"));
 
         assert_ne!(
             send_error.code(),
@@ -1223,13 +1223,13 @@ mod tests {
 
     #[test]
     fn does_not_classify_openclaw_gateway_signature_for_other_backends() {
-        let err = AgentError::from(AcpError::StartupCrash {
+        let err = AgentError::from(RuntimeError::StartupCrash {
             exit_code: Some(1),
             signal: None,
             stderr: "ACP bridge failed: connect ECONNREFUSED 127.0.0.1:18789".into(),
         });
 
-        let send_error = AgentSendError::from_agent_error_ref_for_backend(&err, Some("codex"));
+        let send_error = RuntimeSendError::from_agent_error_ref_for_backend(&err, Some("codex"));
 
         assert_ne!(
             send_error.code(),
@@ -1240,9 +1240,9 @@ mod tests {
 
     #[test]
     fn does_not_classify_plain_init_timeout_as_openclaw_gateway_unreachable() {
-        let err = AgentError::from(AcpError::InitTimeout { timeout_secs: 30 });
+        let err = AgentError::from(RuntimeError::InitTimeout { timeout_secs: 30 });
 
-        let send_error = AgentSendError::from_agent_error_ref_for_backend(&err, Some("openclaw"));
+        let send_error = RuntimeSendError::from_agent_error_ref_for_backend(&err, Some("openclaw"));
 
         assert_ne!(
             send_error.code(),
@@ -1256,8 +1256,8 @@ mod tests {
         let detail = "Bad gateway: ACP bridge failed: connect ECONNREFUSED 127.0.0.1:18789";
         let err = AgentError::bad_gateway(detail);
 
-        let openclaw = AgentSendError::from_agent_error_ref_for_backend(&err, Some("openclaw"));
-        let codex = AgentSendError::from_agent_error_ref_for_backend(&err, Some("codex"));
+        let openclaw = RuntimeSendError::from_agent_error_ref_for_backend(&err, Some("openclaw"));
+        let codex = RuntimeSendError::from_agent_error_ref_for_backend(&err, Some("codex"));
 
         assert_eq!(
             openclaw.code(),
@@ -1268,7 +1268,7 @@ mod tests {
 
     #[test]
     fn classifies_provider_auth_failure() {
-        let err = AgentSendError::from_agent_error(AgentError::bad_gateway("provider returned 401 invalid api key"));
+        let err = RuntimeSendError::from_agent_error(AgentError::bad_gateway("provider returned 401 invalid api key"));
 
         assert_eq!(err.code(), Some(AgentErrorCode::UserLlmProviderAuthFailed));
         assert_eq!(err.ownership(), Some(AgentErrorOwnership::UserLlmProvider));
@@ -1277,7 +1277,7 @@ mod tests {
 
     #[test]
     fn classifies_unknown_upstream_when_heuristics_do_not_match() {
-        let err = AgentSendError::from_agent_error(AgentError::bad_gateway("agent exploded"));
+        let err = RuntimeSendError::from_agent_error(AgentError::bad_gateway("agent exploded"));
 
         assert_eq!(err.code(), Some(AgentErrorCode::UnknownUpstreamError));
         assert_eq!(err.ownership(), Some(AgentErrorOwnership::UnknownUpstream));
@@ -1286,29 +1286,29 @@ mod tests {
     }
 
     #[test]
-    fn classifies_acp_protocol_errors_without_unknown_upstream_fallback() {
+    fn classifies_runtime_protocol_errors_without_unknown_upstream_fallback() {
         let cases = [
             (
-                AcpError::ProtocolParseError {
+                RuntimeError::ProtocolParseError {
                     message: "Parse error".into(),
                 },
                 AgentErrorCode::UserAgentProtocolParseError,
             ),
             (
-                AcpError::InvalidRequest {
+                RuntimeError::InvalidRequest {
                     message: "Invalid request".into(),
                 },
                 AgentErrorCode::UserAgentInvalidRequest,
             ),
             (
-                AcpError::ResourceNotFound {
+                RuntimeError::ResourceNotFound {
                     resource: Some("file:///missing.txt".into()),
                     message: "Resource not found".into(),
                 },
                 AgentErrorCode::UserAgentResourceNotFound,
             ),
             (
-                AcpError::OtherProtocolError {
+                RuntimeError::OtherProtocolError {
                     code: -32099,
                     message: "custom protocol error".into(),
                     data: None,
@@ -1318,7 +1318,7 @@ mod tests {
         ];
 
         for (err, code) in cases {
-            let send_error = AgentSendError::from(err);
+            let send_error = RuntimeSendError::from(err);
             assert_eq!(send_error.code(), Some(code));
             assert_eq!(send_error.ownership(), Some(AgentErrorOwnership::UserAgent));
             assert_ne!(send_error.code(), Some(AgentErrorCode::UnknownUpstreamError));
@@ -1330,7 +1330,7 @@ mod tests {
     #[test]
     fn preserves_runtime_workspace_validation_as_structured_aionui_error() {
         let err =
-            AgentSendError::from_agent_error(AgentError::workspace_path_runtime_unavailable("/Users/test/Archive "));
+            RuntimeSendError::from_agent_error(AgentError::workspace_path_runtime_unavailable("/Users/test/Archive "));
 
         assert_eq!(err.code(), Some(AgentErrorCode::WorkspacePathRuntimeUnavailable));
         assert_eq!(err.ownership(), Some(AgentErrorOwnership::Aionui));
@@ -1348,7 +1348,7 @@ mod tests {
 
     #[test]
     fn classifies_provider_error_without_specific_signal_as_provider_gateway() {
-        let err = AgentSendError::from_agent_error(AgentError::bad_gateway("Provider error: upstream failed"));
+        let err = RuntimeSendError::from_agent_error(AgentError::bad_gateway("Provider error: upstream failed"));
 
         assert_eq!(err.code(), Some(AgentErrorCode::UserLlmProviderGatewayError));
         assert_eq!(err.ownership(), Some(AgentErrorOwnership::UserLlmProvider));
@@ -1357,7 +1357,7 @@ mod tests {
 
     #[test]
     fn classifies_provider_config_errors_as_not_retryable() {
-        let err = AgentSendError::from_agent_error(AgentError::bad_gateway(
+        let err = RuntimeSendError::from_agent_error(AgentError::bad_gateway(
             "Provider error: Connection error: Signable request error: failed to create canonical request",
         ));
 
@@ -1418,7 +1418,7 @@ mod tests {
     #[test]
     fn classifies_provider_504_html_body_as_timeout_with_stripped_detail() {
         let raw = "Aionrs agent error: Provider error: API error 504: <html>\r\n<head><title>504 Gateway Time-out</title></head>\r\n<body>\r\n<center><h1>504 Gateway Time-out</h1></center>\r\n<hr><center>openresty</center>\r\n</body>\r\n</html>";
-        let err = AgentSendError::from_agent_error(AgentError::bad_gateway(raw));
+        let err = RuntimeSendError::from_agent_error(AgentError::bad_gateway(raw));
 
         assert_eq!(err.code(), Some(AgentErrorCode::UserLlmProviderTimeout));
         let detail = err.stream_error().detail.clone().expect("detail present");
@@ -1456,7 +1456,7 @@ mod tests {
             AgentErrorOwnership::UserAgent,
             AgentErrorResolutionKind::ReconnectAgent,
         );
-        let err = AgentSendError::from_agent_error(AgentError::bad_gateway(
+        let err = RuntimeSendError::from_agent_error(AgentError::bad_gateway(
             "Agent internal error (code -32603) ({\"details\":\"Claude Code process exited with code 1\"})",
         ));
         assert_eq!(err.stream_error().retryable, Some(true));
@@ -1464,9 +1464,9 @@ mod tests {
     }
 
     #[test]
-    fn classifies_acp_internal_mcp_connect_failure_from_structured_data() {
-        let err = assert_acp_classification(
-            AcpError::AgentInternal {
+    fn classifies_runtime_internal_mcp_connect_failure_from_structured_data() {
+        let err = assert_runtime_classification(
+            RuntimeError::AgentInternal {
                 message: "Internal error".into(),
                 code: -32603,
                 data: Some(json!({"error": "Failed to connect MCP servers"})),
@@ -1484,9 +1484,9 @@ mod tests {
     }
 
     #[test]
-    fn classifies_acp_internal_process_exit_from_structured_details() {
-        let err = assert_acp_classification(
-            AcpError::AgentInternal {
+    fn classifies_runtime_internal_process_exit_from_structured_details() {
+        let err = assert_runtime_classification(
+            RuntimeError::AgentInternal {
                 message: "Internal error".into(),
                 code: -32603,
                 data: Some(json!({"details": "Claude Code process exited with code 1"})),
@@ -1502,7 +1502,7 @@ mod tests {
 
     #[test]
     fn not_connected_maps_to_user_agent_disconnected() {
-        let disconnected = AgentSendError::from(AcpError::NotConnected);
+        let disconnected = RuntimeSendError::from(RuntimeError::NotConnected);
         assert_eq!(
             disconnected.stream_error.code,
             Some(AgentErrorCode::UserAgentDisconnected)
@@ -1523,7 +1523,7 @@ mod tests {
 
     #[test]
     fn request_timeout_maps_to_retryable_user_agent_disconnected() {
-        let err = AgentSendError::from(AcpError::RequestTimeout {
+        let err = RuntimeSendError::from(RuntimeError::RequestTimeout {
             method: "session/setConfigOption".into(),
             timeout_secs: 10,
         });
@@ -1533,9 +1533,9 @@ mod tests {
     }
 
     #[test]
-    fn classifies_acp_internal_provider_failure_from_structured_message() {
-        assert_acp_classification(
-            AcpError::AgentInternal {
+    fn classifies_runtime_internal_provider_failure_from_structured_message() {
+        assert_runtime_classification(
+            RuntimeError::AgentInternal {
                 message: "Provider error: API error 401: invalid x-api-key".into(),
                 code: -32603,
                 data: None,
@@ -1547,8 +1547,8 @@ mod tests {
     }
 
     #[test]
-    fn classifies_acp_internal_bedrock_sso_expired_as_dedicated_provider_error() {
-        let err = AgentSendError::from(AcpError::AgentInternal {
+    fn classifies_runtime_internal_bedrock_sso_expired_as_dedicated_provider_error() {
+        let err = RuntimeSendError::from(RuntimeError::AgentInternal {
                 message: "Internal error: API Error: Token is expired. To refresh this SSO session run 'aws sso login' with the corresponding profile.".into(),
                 code: -32603,
                 data: Some(json!({"errorKind": "unknown"})),
@@ -1569,9 +1569,9 @@ mod tests {
     }
 
     #[test]
-    fn classifies_acp_internal_nested_provider_error_message() {
-        assert_acp_classification(
-            AcpError::AgentInternal {
+    fn classifies_runtime_internal_nested_provider_error_message() {
+        assert_runtime_classification(
+            RuntimeError::AgentInternal {
                 message: "Internal error".into(),
                 code: -32603,
                 data: Some(json!({
@@ -1588,9 +1588,9 @@ mod tests {
     }
 
     #[test]
-    fn classifies_acp_internal_nested_provider_data_before_generic_message() {
-        assert_acp_classification(
-            AcpError::AgentInternal {
+    fn classifies_runtime_internal_nested_provider_data_before_generic_message() {
+        assert_runtime_classification(
+            RuntimeError::AgentInternal {
                 message: "Provider error".into(),
                 code: -32603,
                 data: Some(json!({
@@ -1606,8 +1606,8 @@ mod tests {
     }
 
     #[test]
-    fn acp_internal_public_detail_does_not_include_structured_data() {
-        let err = AgentSendError::from(AcpError::AgentInternal {
+    fn runtime_internal_public_detail_does_not_include_structured_data() {
+        let err = RuntimeSendError::from(RuntimeError::AgentInternal {
             message: "Internal error".into(),
             code: -32603,
             data: Some(json!({
@@ -1627,7 +1627,7 @@ mod tests {
 
     #[test]
     fn provider_free_text_still_uses_provider_heuristic_boundary() {
-        let err = AgentSendError::from_agent_error(AgentError::bad_gateway(
+        let err = RuntimeSendError::from_agent_error(AgentError::bad_gateway(
             "Provider error: API error 401: invalid x-api-key",
         ));
 
@@ -1685,7 +1685,7 @@ mod tests {
             AgentErrorOwnership::UserAgent,
             AgentErrorResolutionKind::CheckAgentInstallation,
         );
-        let err = AgentSendError::from_agent_error(AgentError::bad_gateway(native_binary_missing));
+        let err = RuntimeSendError::from_agent_error(AgentError::bad_gateway(native_binary_missing));
         assert_eq!(err.stream_error().retryable, Some(false));
         assert_eq!(
             err.stream_error().resolution.and_then(|value| value.target),
@@ -1702,7 +1702,7 @@ mod tests {
                 AgentErrorOwnership::UserAgent,
                 AgentErrorResolutionKind::CheckAgentInstallation,
             );
-            let err = AgentSendError::from_agent_error(AgentError::bad_gateway(managed_binary_missing));
+            let err = RuntimeSendError::from_agent_error(AgentError::bad_gateway(managed_binary_missing));
             assert_eq!(err.stream_error().retryable, Some(false));
             assert_eq!(
                 err.stream_error().resolution.and_then(|value| value.target),
@@ -1841,7 +1841,7 @@ mod tests {
                 AgentErrorOwnership::UserLlmProvider,
                 AgentErrorResolutionKind::SendFeedback,
             );
-            let err = AgentSendError::from_agent_error(AgentError::bad_gateway(detail));
+            let err = RuntimeSendError::from_agent_error(AgentError::bad_gateway(detail));
             assert_eq!(err.stream_error().retryable, Some(false));
         }
     }
@@ -1849,19 +1849,19 @@ mod tests {
     #[test]
     fn non_retryable_agent_invalid_params_do_not_suggest_retry() {
         let api_err =
-            AgentSendError::from_agent_error(AgentError::bad_request("Invalid parameters: malformed request"));
+            RuntimeSendError::from_agent_error(AgentError::bad_request("Invalid parameters: malformed request"));
         assert_eq!(api_err.code(), Some(AgentErrorCode::UserAgentInvalidParams));
         assert_eq!(api_err.stream_error().retryable, Some(false));
         assert_eq!(api_err.stream_error().feedback_recommended, Some(false));
         assert!(api_err.stream_error().resolution.is_none());
 
-        let acp_err = AgentSendError::from(AcpError::InvalidParams {
+        let runtime_err = RuntimeSendError::from(RuntimeError::InvalidParams {
             message: "malformed request".into(),
         });
-        assert_eq!(acp_err.code(), Some(AgentErrorCode::UserAgentInvalidParams));
-        assert_eq!(acp_err.stream_error().retryable, Some(false));
-        assert_eq!(acp_err.stream_error().feedback_recommended, Some(false));
-        assert!(acp_err.stream_error().resolution.is_none());
+        assert_eq!(runtime_err.code(), Some(AgentErrorCode::UserAgentInvalidParams));
+        assert_eq!(runtime_err.stream_error().retryable, Some(false));
+        assert_eq!(runtime_err.stream_error().feedback_recommended, Some(false));
+        assert!(runtime_err.stream_error().resolution.is_none());
     }
 
     // ELECTRON-3Q0: the codex dead-thread rejections (verified:
@@ -1876,7 +1876,7 @@ mod tests {
             "codex rejected the turn request: thread not found: 0199-dead",
             "codex thread/resume failed: no rollout found for thread id 0199-dead",
         ] {
-            let err = AgentSendError::from_agent_error(AgentError::bad_gateway(detail));
+            let err = RuntimeSendError::from_agent_error(AgentError::bad_gateway(detail));
             assert_eq!(err.code(), Some(AgentErrorCode::UserAgentSessionNotFound), "{detail}");
             assert_eq!(err.stream_error().retryable, Some(true), "{detail}");
             assert_eq!(err.ownership(), Some(AgentErrorOwnership::UserAgent), "{detail}");
@@ -1925,7 +1925,7 @@ mod tests {
             AgentErrorResolutionKind::CheckProviderBaseUrl,
         );
         assert_resolution_target(detail, AgentErrorResolutionTarget::ProviderSettings);
-        let err = AgentSendError::from_agent_error(AgentError::bad_gateway(detail));
+        let err = RuntimeSendError::from_agent_error(AgentError::bad_gateway(detail));
         assert_eq!(err.stream_error().retryable, Some(false));
     }
 

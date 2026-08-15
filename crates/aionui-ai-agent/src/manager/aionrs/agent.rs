@@ -32,7 +32,7 @@ use crate::capability::image_input::resolve_image_input_capability;
 use crate::dev_prompt_dump::{AgentFinalInputDump, dump_agent_final_input};
 use crate::error::AgentError;
 use crate::protocol::events::AgentStreamEvent;
-use crate::protocol::send_error::AgentSendError;
+use crate::protocol::runtime_send_error::RuntimeSendError;
 use crate::types::{AionrsResolvedConfig, SendMessageData};
 
 use super::content::build_content_blocks;
@@ -380,7 +380,7 @@ impl IAgentTask for AionrsAgentManager {
         self.runtime.subscribe()
     }
 
-    async fn send_message(&self, data: SendMessageData) -> Result<(), AgentSendError> {
+    async fn send_message(&self, data: SendMessageData) -> Result<(), RuntimeSendError> {
         let started_at = now_ms();
         info!(
             conversation_id = %self.runtime.conversation_id(),

@@ -3,7 +3,7 @@
 use aionui_common::ApiError;
 
 use crate::error::AgentError;
-use crate::protocol::error::AcpError;
+use crate::protocol::runtime_error::RuntimeError;
 
 pub(crate) fn agent_error_to_api_error(err: AgentError) -> ApiError {
     match err {
@@ -18,50 +18,50 @@ pub(crate) fn agent_error_to_api_error(err: AgentError) -> ApiError {
         AgentError::ConversationArchived(message) => ApiError::ConversationArchived(message),
         AgentError::WorkspacePathRuntimeUnavailable(path) => ApiError::WorkspacePathRuntimeUnavailable(path),
         AgentError::Internal(message) => ApiError::Internal(message),
-        AgentError::Acp(err) => acp_error_to_api_error(err),
+        AgentError::Runtime(err) => runtime_error_to_api_error(err),
     }
 }
 
-fn acp_error_to_api_error(err: AcpError) -> ApiError {
+fn runtime_error_to_api_error(err: RuntimeError) -> ApiError {
     match &err {
-        AcpError::SpawnFailed { .. } | AcpError::StartupCrash { .. } | AcpError::Disconnected { .. } => {
-            ApiError::BadGateway(acp_error_public_message(&err))
+        RuntimeError::SpawnFailed { .. } | RuntimeError::StartupCrash { .. } | RuntimeError::Disconnected { .. } => {
+            ApiError::BadGateway(runtime_error_public_message(&err))
         }
-        AcpError::AuthRequired => ApiError::Unauthorized("Agent requires authentication".into()),
-        AcpError::ProtocolParseError { .. } => ApiError::BadGateway(acp_error_public_message(&err)),
-        AcpError::InvalidRequest { .. } => ApiError::BadRequest(acp_error_public_message(&err)),
-        AcpError::SessionNotFound { .. } => ApiError::NotFound(acp_error_public_message(&err)),
-        AcpError::ResourceNotFound { .. } => ApiError::NotFound(acp_error_public_message(&err)),
-        AcpError::MethodNotFound { .. } => ApiError::BadRequest(acp_error_public_message(&err)),
-        AcpError::InvalidParams { .. } => ApiError::BadRequest(acp_error_public_message(&err)),
-        AcpError::AgentInternal { .. } => ApiError::BadGateway(acp_error_public_message(&err)),
-        AcpError::OtherProtocolError { .. } => ApiError::BadGateway(acp_error_public_message(&err)),
-        AcpError::NotConnected => ApiError::BadGateway(acp_error_public_message(&err)),
-        AcpError::InitTimeout { .. } => ApiError::BadGateway(acp_error_public_message(&err)),
+        RuntimeError::AuthRequired => ApiError::Unauthorized("Agent requires authentication".into()),
+        RuntimeError::ProtocolParseError { .. } => ApiError::BadGateway(runtime_error_public_message(&err)),
+        RuntimeError::InvalidRequest { .. } => ApiError::BadRequest(runtime_error_public_message(&err)),
+        RuntimeError::SessionNotFound { .. } => ApiError::NotFound(runtime_error_public_message(&err)),
+        RuntimeError::ResourceNotFound { .. } => ApiError::NotFound(runtime_error_public_message(&err)),
+        RuntimeError::MethodNotFound { .. } => ApiError::BadRequest(runtime_error_public_message(&err)),
+        RuntimeError::InvalidParams { .. } => ApiError::BadRequest(runtime_error_public_message(&err)),
+        RuntimeError::AgentInternal { .. } => ApiError::BadGateway(runtime_error_public_message(&err)),
+        RuntimeError::OtherProtocolError { .. } => ApiError::BadGateway(runtime_error_public_message(&err)),
+        RuntimeError::NotConnected => ApiError::BadGateway(runtime_error_public_message(&err)),
+        RuntimeError::InitTimeout { .. } => ApiError::BadGateway(runtime_error_public_message(&err)),
         // Short config/mode/model RPC timeout: connection is alive, the agent
         // just did not answer in time. Surface as a retryable Timeout so the
         // user can immediately retry the config change (see ELECTRON-3MS).
-        AcpError::RequestTimeout { .. } => ApiError::Timeout(acp_error_public_message(&err)),
+        RuntimeError::RequestTimeout { .. } => ApiError::Timeout(runtime_error_public_message(&err)),
     }
 }
 
-fn acp_error_public_message(err: &AcpError) -> String {
+fn runtime_error_public_message(err: &RuntimeError) -> String {
     match err {
-        AcpError::SpawnFailed { .. } | AcpError::StartupCrash { .. } | AcpError::Disconnected { .. } => {
+        RuntimeError::SpawnFailed { .. } | RuntimeError::StartupCrash { .. } | RuntimeError::Disconnected { .. } => {
             "Agent process is unavailable.".to_owned()
         }
-        AcpError::AuthRequired => "Agent requires authentication.".to_owned(),
-        AcpError::ProtocolParseError { .. } => "Agent returned malformed protocol data.".to_owned(),
-        AcpError::InvalidRequest { .. } => "Agent rejected an invalid protocol request.".to_owned(),
-        AcpError::SessionNotFound { .. } => "Agent session was not found.".to_owned(),
-        AcpError::ResourceNotFound { .. } => "Agent resource was not found.".to_owned(),
-        AcpError::MethodNotFound { .. } => "Agent method is not supported.".to_owned(),
-        AcpError::InvalidParams { .. } => "Invalid ACP request parameters.".to_owned(),
-        AcpError::AgentInternal { code, .. } => format!("Agent internal error (code {code})"),
-        AcpError::OtherProtocolError { code, .. } => format!("Agent protocol error (code {code})"),
-        AcpError::NotConnected => "ACP protocol is not connected.".to_owned(),
-        AcpError::InitTimeout { .. } => "Agent initialization timed out.".to_owned(),
-        AcpError::RequestTimeout { .. } => "Agent did not respond to the request in time.".to_owned(),
+        RuntimeError::AuthRequired => "Agent requires authentication.".to_owned(),
+        RuntimeError::ProtocolParseError { .. } => "Agent returned malformed protocol data.".to_owned(),
+        RuntimeError::InvalidRequest { .. } => "Agent rejected an invalid protocol request.".to_owned(),
+        RuntimeError::SessionNotFound { .. } => "Agent session was not found.".to_owned(),
+        RuntimeError::ResourceNotFound { .. } => "Agent resource was not found.".to_owned(),
+        RuntimeError::MethodNotFound { .. } => "Agent method is not supported.".to_owned(),
+        RuntimeError::InvalidParams { .. } => "Invalid ACP request parameters.".to_owned(),
+        RuntimeError::AgentInternal { code, .. } => format!("Agent internal error (code {code})"),
+        RuntimeError::OtherProtocolError { code, .. } => format!("Agent protocol error (code {code})"),
+        RuntimeError::NotConnected => "ACP protocol is not connected.".to_owned(),
+        RuntimeError::InitTimeout { .. } => "Agent initialization timed out.".to_owned(),
+        RuntimeError::RequestTimeout { .. } => "Agent did not respond to the request in time.".to_owned(),
     }
 }
 
@@ -71,37 +71,46 @@ mod tests {
     use axum::http::StatusCode;
 
     #[test]
-    fn acp_error_to_api_error_status_codes() {
+    fn runtime_error_to_api_error_status_codes() {
         let cases = vec![
-            (AcpError::SpawnFailed { message: "x".into() }, StatusCode::BAD_GATEWAY),
-            (AcpError::AuthRequired, StatusCode::UNAUTHORIZED),
             (
-                AcpError::ProtocolParseError {
+                RuntimeError::SpawnFailed { message: "x".into() },
+                StatusCode::BAD_GATEWAY,
+            ),
+            (RuntimeError::AuthRequired, StatusCode::UNAUTHORIZED),
+            (
+                RuntimeError::ProtocolParseError {
                     message: "Parse error".into(),
                 },
                 StatusCode::BAD_GATEWAY,
             ),
             (
-                AcpError::InvalidRequest {
+                RuntimeError::InvalidRequest {
                     message: "Invalid request".into(),
                 },
                 StatusCode::BAD_REQUEST,
             ),
             (
-                AcpError::SessionNotFound { session_id: "s".into() },
+                RuntimeError::SessionNotFound { session_id: "s".into() },
                 StatusCode::NOT_FOUND,
             ),
             (
-                AcpError::ResourceNotFound {
+                RuntimeError::ResourceNotFound {
                     resource: Some("file:///missing.txt".into()),
                     message: "Resource not found".into(),
                 },
                 StatusCode::NOT_FOUND,
             ),
-            (AcpError::MethodNotFound { method: "m".into() }, StatusCode::BAD_REQUEST),
-            (AcpError::InvalidParams { message: "p".into() }, StatusCode::BAD_REQUEST),
             (
-                AcpError::AgentInternal {
+                RuntimeError::MethodNotFound { method: "m".into() },
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                RuntimeError::InvalidParams { message: "p".into() },
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                RuntimeError::AgentInternal {
                     message: "e".into(),
                     code: -1,
                     data: None,
@@ -109,26 +118,26 @@ mod tests {
                 StatusCode::BAD_GATEWAY,
             ),
             (
-                AcpError::OtherProtocolError {
+                RuntimeError::OtherProtocolError {
                     code: -32099,
                     message: "custom error".into(),
                     data: None,
                 },
                 StatusCode::BAD_GATEWAY,
             ),
-            (AcpError::NotConnected, StatusCode::BAD_GATEWAY),
-            (AcpError::InitTimeout { timeout_secs: 30 }, StatusCode::BAD_GATEWAY),
+            (RuntimeError::NotConnected, StatusCode::BAD_GATEWAY),
+            (RuntimeError::InitTimeout { timeout_secs: 30 }, StatusCode::BAD_GATEWAY),
         ];
 
-        for (acp_err, expected_status) in cases {
-            let api_err = acp_error_to_api_error(acp_err);
+        for (runtime_err, expected_status) in cases {
+            let api_err = runtime_error_to_api_error(runtime_err);
             assert_eq!(api_err.status_code(), expected_status, "Mismatch for {api_err:?}");
         }
     }
 
     #[test]
-    fn acp_error_to_api_error_omits_stderr_and_structured_data() {
-        let startup = acp_error_to_api_error(AcpError::StartupCrash {
+    fn runtime_error_to_api_error_omits_stderr_and_structured_data() {
+        let startup = runtime_error_to_api_error(RuntimeError::StartupCrash {
             exit_code: Some(1),
             signal: None,
             stderr: "Authorization: Bearer sk-secret".into(),
@@ -136,7 +145,7 @@ mod tests {
         assert!(!startup.to_string().contains("sk-secret"));
         assert!(!startup.to_string().contains("Authorization"));
 
-        let internal = acp_error_to_api_error(AcpError::AgentInternal {
+        let internal = runtime_error_to_api_error(RuntimeError::AgentInternal {
             message: "Internal error".into(),
             code: -32603,
             data: Some(serde_json::json!({
@@ -152,21 +161,21 @@ mod tests {
     }
 
     #[test]
-    fn acp_error_to_api_error_uses_fixed_public_messages() {
+    fn runtime_error_to_api_error_uses_fixed_public_messages() {
         let cases = vec![
-            acp_error_to_api_error(AcpError::SpawnFailed {
+            runtime_error_to_api_error(RuntimeError::SpawnFailed {
                 message: "spawn failed at /tmp/agent with token sk-secret".into(),
             }),
-            acp_error_to_api_error(AcpError::SessionNotFound {
+            runtime_error_to_api_error(RuntimeError::SessionNotFound {
                 session_id: "/tmp/session-123".into(),
             }),
-            acp_error_to_api_error(AcpError::MethodNotFound {
+            runtime_error_to_api_error(RuntimeError::MethodNotFound {
                 method: "debug.dumpSecrets".into(),
             }),
-            acp_error_to_api_error(AcpError::InvalidParams {
+            runtime_error_to_api_error(RuntimeError::InvalidParams {
                 message: "invalid path /tmp/private and token sk-secret".into(),
             }),
-            acp_error_to_api_error(AcpError::InitTimeout { timeout_secs: 42 }),
+            runtime_error_to_api_error(RuntimeError::InitTimeout { timeout_secs: 42 }),
         ];
 
         for api_err in cases {
