@@ -12,7 +12,7 @@ use super::{ConfigKey, ConfigValue, ModeId, ModelId};
 ///
 /// Shared between the factory (seeds `RuntimeSessionParams`), the aggregate
 /// root (`AcpSession::preload_persisted`), and the persistence consumer
-/// (`AcpSessionSyncService::load_snapshot_state`), so it lives in
+/// (`RuntimeSessionSyncService::load_snapshot_state`), so it lives in
 /// `shared_kernel` rather than any of those layers.
 #[derive(Debug, Clone, Default)]
 pub struct PersistedSessionState {

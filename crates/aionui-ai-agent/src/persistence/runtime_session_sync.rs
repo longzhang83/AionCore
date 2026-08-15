@@ -1,6 +1,6 @@
 //! Per-session persistence consumer driven by domain events.
 //!
-//! Subscribes to `mpsc::Receiver<AcpSessionEvent>` (not the UI broadcast)
+//! Subscribes to `mpsc::Receiver<RuntimeSessionEvent>` (not the UI broadcast)
 //! and writes CLI-observed state to `acp_session.session_config.runtime`.
 //!
 //! The consumer listens to `Observed*` events (mode, model, config,
@@ -21,7 +21,7 @@ use tokio::task::JoinHandle;
 use tokio::time::sleep_until;
 use tracing::{debug, warn};
 
-use crate::manager::acp::agent_event_tracker::AcpSessionEvent;
+use crate::manager::acp::runtime_event_tracker::RuntimeSessionEvent;
 use crate::shared_kernel::{ConfigKey, ConfigValue, ModeId, ModelId, PersistedSessionState};
 
 const DEBOUNCE_WINDOW: Duration = Duration::from_millis(500);
@@ -29,12 +29,12 @@ const DEBOUNCE_WINDOW: Duration = Duration::from_millis(500);
 /// Global service that loads and persists ACP per-session runtime
 /// state on behalf of the conversation route. One instance per
 /// process, held by `AppServices`.
-pub struct AcpSessionSyncService {
+pub struct RuntimeSessionSyncService {
     repo: Arc<dyn IAcpSessionRepository>,
     active: RwLock<HashMap<String, JoinHandle<()>>>,
 }
 
-impl AcpSessionSyncService {
+impl RuntimeSessionSyncService {
     pub fn new(repo: Arc<dyn IAcpSessionRepository>) -> Arc<Self> {
         Arc::new(Self {
             repo,
@@ -63,7 +63,7 @@ impl AcpSessionSyncService {
                     user_id,
                     conversation_id,
                     error = %err,
-                    "AcpSessionSyncService::load_persisted failed"
+                    "RuntimeSessionSyncService::load_persisted failed"
                 );
                 None
             }
@@ -133,7 +133,12 @@ impl AcpSessionSyncService {
     /// the per-conversation persistence consumer. Lifetime of the
     /// spawned task is tied to the sender being dropped when the manager
     /// is destroyed.
-    pub async fn attach(&self, user_id: String, conversation_id: String, domain_rx: mpsc::Receiver<AcpSessionEvent>) {
+    pub async fn attach(
+        &self,
+        user_id: String,
+        conversation_id: String,
+        domain_rx: mpsc::Receiver<RuntimeSessionEvent>,
+    ) {
         let repo = self.repo.clone();
         let cid = conversation_id.clone();
         let task = tokio::spawn(domain_event_consumer(user_id, cid, domain_rx, repo));
@@ -171,17 +176,17 @@ impl PendingUpdate {
         }
     }
 
-    fn merge_from_domain_event(&mut self, event: &AcpSessionEvent) -> bool {
+    fn merge_from_domain_event(&mut self, event: &RuntimeSessionEvent) -> bool {
         match event {
-            AcpSessionEvent::ObservedModeSynced { mode } => {
+            RuntimeSessionEvent::ObservedModeSynced { mode } => {
                 self.current_mode_id = Some(Some(mode.as_str().to_owned()));
                 true
             }
-            AcpSessionEvent::ObservedModelSynced { model } => {
+            RuntimeSessionEvent::ObservedModelSynced { model } => {
                 self.current_model_id = Some(Some(model.as_str().to_owned()));
                 true
             }
-            AcpSessionEvent::ObservedConfigSynced { selections } => {
+            RuntimeSessionEvent::ObservedConfigSynced { selections } => {
                 let string_map: HashMap<String, String> = selections
                     .iter()
                     .map(|(k, v)| (k.as_str().to_owned(), v.as_str().to_owned()))
@@ -190,7 +195,7 @@ impl PendingUpdate {
                 self.config_selections_json = Some(Some(json));
                 true
             }
-            AcpSessionEvent::ObservedContextUsageChanged { usage_json } => {
+            RuntimeSessionEvent::ObservedContextUsageChanged { usage_json } => {
                 self.context_usage_json = Some(Some(usage_json.clone()));
                 true
             }
@@ -208,7 +213,7 @@ impl PendingUpdate {
 async fn domain_event_consumer(
     user_id: String,
     conversation_id: String,
-    mut rx: mpsc::Receiver<AcpSessionEvent>,
+    mut rx: mpsc::Receiver<RuntimeSessionEvent>,
     repo: Arc<dyn IAcpSessionRepository>,
 ) {
     let mut pending = PendingUpdate::default();
@@ -232,7 +237,7 @@ async fn domain_event_consumer(
 
         match recv {
             Some(event) => {
-                if let AcpSessionEvent::SessionAssigned { session_id } = &event {
+                if let RuntimeSessionEvent::SessionAssigned { session_id } = &event {
                     match repo
                         .update_session_id_for_user(&user_id, &conversation_id, session_id.as_str())
                         .await
@@ -304,7 +309,7 @@ mod tests {
     use aionui_db::{CreateAcpSessionParams, SqliteAcpSessionRepository, init_database_memory};
     use tokio::time::sleep;
 
-    async fn setup() -> (Arc<AcpSessionSyncService>, Arc<dyn IAcpSessionRepository>) {
+    async fn setup() -> (Arc<RuntimeSessionSyncService>, Arc<dyn IAcpSessionRepository>) {
         let db = init_database_memory().await.unwrap();
         sqlx::query(
             "INSERT OR IGNORE INTO users \
@@ -332,7 +337,7 @@ mod tests {
         })
         .await
         .unwrap();
-        let svc = AcpSessionSyncService::new(repo.clone());
+        let svc = RuntimeSessionSyncService::new(repo.clone());
         (svc, repo)
     }
 
@@ -363,7 +368,7 @@ mod tests {
         let cid = "conv-1".to_owned();
         tokio::spawn(domain_event_consumer("user-1".to_owned(), cid, rx, repo.clone()));
 
-        tx.send(AcpSessionEvent::ObservedModeSynced { mode: "plan".into() })
+        tx.send(RuntimeSessionEvent::ObservedModeSynced { mode: "plan".into() })
             .await
             .unwrap();
 
@@ -394,7 +399,7 @@ mod tests {
         tokio::spawn(domain_event_consumer("user-1".to_owned(), cid, rx, repo.clone()));
 
         for label in ["code", "plan", "ask"] {
-            tx.send(AcpSessionEvent::ObservedModeSynced { mode: label.into() })
+            tx.send(RuntimeSessionEvent::ObservedModeSynced { mode: label.into() })
                 .await
                 .unwrap();
             sleep(Duration::from_millis(100)).await;
@@ -418,7 +423,7 @@ mod tests {
         let cid = "conv-1".to_owned();
         tokio::spawn(domain_event_consumer("user-1".to_owned(), cid, rx, repo.clone()));
 
-        tx.send(AcpSessionEvent::SessionOpened).await.unwrap();
+        tx.send(RuntimeSessionEvent::SessionOpened).await.unwrap();
         sleep(Duration::from_millis(600)).await;
 
         let state = repo
@@ -438,7 +443,7 @@ mod tests {
         let cid = "conv-1".to_owned();
         tokio::spawn(domain_event_consumer("user-1".to_owned(), cid, rx, repo.clone()));
 
-        tx.send(AcpSessionEvent::ObservedModeSynced { mode: "plan".into() })
+        tx.send(RuntimeSessionEvent::ObservedModeSynced { mode: "plan".into() })
             .await
             .unwrap();
         drop(tx);
@@ -469,7 +474,7 @@ mod tests {
         let cid = "conv-1".to_owned();
         tokio::spawn(domain_event_consumer("user-1".to_owned(), cid, rx, repo.clone()));
 
-        tx.send(AcpSessionEvent::ObservedModelSynced {
+        tx.send(RuntimeSessionEvent::ObservedModelSynced {
             model: "claude-opus-4".into(),
         })
         .await
@@ -492,7 +497,7 @@ mod tests {
         let cid = "conv-1".to_owned();
         tokio::spawn(domain_event_consumer("user-1".to_owned(), cid, rx, repo.clone()));
 
-        tx.send(AcpSessionEvent::DesiredModelChanged {
+        tx.send(RuntimeSessionEvent::DesiredModelChanged {
             model: "claude-opus-4".into(),
         })
         .await
@@ -518,7 +523,7 @@ mod tests {
         let cid = "conv-1".to_owned();
         tokio::spawn(domain_event_consumer("user-1".to_owned(), cid, rx, repo.clone()));
 
-        tx.send(AcpSessionEvent::DesiredModeChanged { mode: "plan".into() })
+        tx.send(RuntimeSessionEvent::DesiredModeChanged { mode: "plan".into() })
             .await
             .unwrap();
 
@@ -545,7 +550,7 @@ mod tests {
         let cid = "conv-1".to_owned();
         tokio::spawn(domain_event_consumer("user-1".to_owned(), cid, rx, repo.clone()));
 
-        tx.send(AcpSessionEvent::ObservedContextUsageChanged {
+        tx.send(RuntimeSessionEvent::ObservedContextUsageChanged {
             usage_json: r#"{"used":12345,"size":200000}"#.to_owned(),
         })
         .await
@@ -573,7 +578,7 @@ mod tests {
         let cid = "conv-1".to_owned();
         tokio::spawn(domain_event_consumer("user-1".to_owned(), cid, rx, repo.clone()));
 
-        tx.send(AcpSessionEvent::SessionAssigned {
+        tx.send(RuntimeSessionEvent::SessionAssigned {
             session_id: SessionId::new("sess-42"),
         })
         .await

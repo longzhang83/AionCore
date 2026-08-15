@@ -7,13 +7,13 @@ use agent_client_protocol::schema::v1::{
     SessionConfigOptionCategory, SessionConfigSelectOptions, SessionModeState, UsageUpdate,
 };
 
-use super::agent_event_tracker::AcpSessionEvent;
 use super::agent_reconciler::ReconcileAction;
 use super::legacy_runtime_model::LegacySessionModelState;
 use super::runtime_config::ConfigSnapshot;
 use super::runtime_config_catalog::{
     derive_models_from_config_options, derive_modes_from_config_options, merge_config_options,
 };
+use super::runtime_event_tracker::RuntimeSessionEvent;
 use crate::protocol::runtime_error::CloseReason;
 use crate::shared_kernel::{ConfigKey, ConfigValue, ModeId, ModelId, PersistedSessionState, SessionId};
 
@@ -87,7 +87,7 @@ pub struct AcpSession {
     /// recovery rebuilt the session. Cloning `AcpSession` shares the flag
     /// (transient in-flight state); no invariant depends on it being distinct.
     config_set_in_flight: Arc<AtomicBool>,
-    pending_events: Vec<AcpSessionEvent>,
+    pending_events: Vec<RuntimeSessionEvent>,
     /// Whether `open_session_new` has just completed and the next prompt
     /// should receive preset_context / skill-index injection.
     ///
@@ -213,7 +213,7 @@ impl AcpSession {
         }
         self.session_id = Some(sid.clone());
         self.pending_events
-            .push(AcpSessionEvent::SessionAssigned { session_id: sid });
+            .push(RuntimeSessionEvent::SessionAssigned { session_id: sid });
     }
 
     /// Drop a stale session id so the aggregate can be re-seeded with a
@@ -259,7 +259,7 @@ impl AcpSession {
     pub fn mark_opened(&mut self) {
         if !self.opened {
             self.opened = true;
-            self.pending_events.push(AcpSessionEvent::SessionOpened);
+            self.pending_events.push(RuntimeSessionEvent::SessionOpened);
         }
     }
 
@@ -332,7 +332,8 @@ impl AcpSession {
             return false;
         }
         self.desired.mode_id = Some(mode.clone());
-        self.pending_events.push(AcpSessionEvent::DesiredModeChanged { mode });
+        self.pending_events
+            .push(RuntimeSessionEvent::DesiredModeChanged { mode });
         true
     }
 
@@ -350,7 +351,8 @@ impl AcpSession {
             return false;
         }
         self.desired.model_id = Some(model.clone());
-        self.pending_events.push(AcpSessionEvent::DesiredModelChanged { model });
+        self.pending_events
+            .push(RuntimeSessionEvent::DesiredModelChanged { model });
         true
     }
 
@@ -389,7 +391,7 @@ impl AcpSession {
         if changed {
             let selections = self.desired.config_selections.clone();
             self.pending_events
-                .push(AcpSessionEvent::DesiredConfigChanged { selections });
+                .push(RuntimeSessionEvent::DesiredConfigChanged { selections });
         }
     }
 
@@ -582,7 +584,8 @@ impl AcpSession {
             .unwrap_or_default();
         self.advertised.modes = Some(SessionModeState::new(mode.as_str().to_owned(), available));
         if changed {
-            self.pending_events.push(AcpSessionEvent::ObservedModeSynced { mode });
+            self.pending_events
+                .push(RuntimeSessionEvent::ObservedModeSynced { mode });
         }
     }
 
@@ -600,7 +603,8 @@ impl AcpSession {
             .unwrap_or_default();
         self.advertised.models = Some(LegacySessionModelState::new(model.as_str().to_owned(), available));
         if changed {
-            self.pending_events.push(AcpSessionEvent::ObservedModelSynced { model });
+            self.pending_events
+                .push(RuntimeSessionEvent::ObservedModelSynced { model });
         }
     }
 
@@ -635,7 +639,7 @@ impl AcpSession {
         if changed {
             let selections = self.observed.config_current.clone();
             self.pending_events
-                .push(AcpSessionEvent::ObservedConfigSynced { selections });
+                .push(RuntimeSessionEvent::ObservedConfigSynced { selections });
         }
     }
 
@@ -664,7 +668,7 @@ impl AcpSession {
         self.advertised.modes = Some(modes);
         if changed {
             self.pending_events
-                .push(AcpSessionEvent::ObservedModeSynced { mode: new_id });
+                .push(RuntimeSessionEvent::ObservedModeSynced { mode: new_id });
         }
     }
 
@@ -693,7 +697,7 @@ impl AcpSession {
         self.advertised.models = Some(models);
         if changed {
             self.pending_events
-                .push(AcpSessionEvent::ObservedModelSynced { model: new_id });
+                .push(RuntimeSessionEvent::ObservedModelSynced { model: new_id });
         }
     }
 
@@ -782,7 +786,7 @@ impl AcpSession {
         if changed {
             let selections = self.observed.config_current.clone();
             self.pending_events
-                .push(AcpSessionEvent::ObservedConfigSynced { selections });
+                .push(RuntimeSessionEvent::ObservedConfigSynced { selections });
         }
     }
 
@@ -808,7 +812,7 @@ impl AcpSession {
         if changed {
             let usage_json = serde_json::to_string(&usage).unwrap_or_default();
             self.pending_events
-                .push(AcpSessionEvent::ObservedContextUsageChanged { usage_json });
+                .push(RuntimeSessionEvent::ObservedContextUsageChanged { usage_json });
         }
     }
 }
@@ -957,7 +961,7 @@ impl AcpSession {
     // ─── Event drain ───────────────────────────────────────────────────
 
     /// Consume and return all pending domain events.
-    pub fn drain_events(&mut self) -> Vec<AcpSessionEvent> {
+    pub fn drain_events(&mut self) -> Vec<RuntimeSessionEvent> {
         std::mem::take(&mut self.pending_events)
     }
 

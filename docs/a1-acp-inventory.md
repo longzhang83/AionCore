@@ -445,3 +445,27 @@ Session/MCP/API/App/Team：
 - `cargo test -p aionui-ai-agent --test acp_error_public` 通过（3 passed / 0 failed）。
 
 未纳入本切片：`manager/acp`、factory、API DTO、DB 和 wire 中的 ACP 命名仍保留给后续 slice。
+
+---
+
+## 11. V3 A1 clean-cut Slice 3a 进度（2026-08-15）
+
+状态：已实现并验证。
+
+- manager 辅助模块迁移为 Runtime 词汇：`agent_close -> runtime_close`、
+  `agent_event_tracker -> runtime_event_tracker`、`agent_session_flow -> runtime_session_flow`。
+- 跟踪器定义的内部领域事件改名：`AcpSessionEvent -> RuntimeSessionEvent`；
+  `agent.rs`、`session.rs`、测试与持久化消费者仅同步模块导入和符号调用，未改其内部结构或控制流。
+- 持久化消费者迁移：`acp_session_sync -> runtime_session_sync`、
+  `AcpSessionSyncService -> RuntimeSessionSyncService`，并更新 crate 公开导出与 factory 注入类型。
+- ACP SDK、`session/new` / `session/load` 等线上协议事实性注释，以及既有 `AcpAgentManager` /
+  `AcpSession` 和数据库 `acp_session` 命名均保留；本切片未改变 wire、DB、serde 或运行行为。
+- 未新增日志：这是一项可由编译和现有 manager 单元测试覆盖的纯重命名，现有日志足够。
+
+验证：
+
+- `/Users/zhanglong/.cargo/bin/cargo check -p aionui-ai-agent` 通过（exit 0）。
+- `/Users/zhanglong/.cargo/bin/cargo test -p aionui-ai-agent --lib manager::` 通过（340 passed / 0 failed，exit 0）。
+- `/Users/zhanglong/.cargo/bin/cargo fmt --all -- --check` 与 `git diff --check` 通过。
+
+未纳入本切片：`AcpAgentManager`、`AcpSession`、数据库 `acp_session`、ACP wire/SDK 术语，以及 Slice 3b 及之后的迁移。

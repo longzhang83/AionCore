@@ -21,7 +21,7 @@ fn assign_session_id_emits_event() {
     assert_eq!(events.len(), 1);
     assert_eq!(
         events[0],
-        AcpSessionEvent::SessionAssigned {
+        RuntimeSessionEvent::SessionAssigned {
             session_id: SessionId::new("sess-1"),
         }
     );
@@ -43,7 +43,7 @@ fn mark_opened_emits_once() {
     session.mark_opened();
     let events = session.drain_events();
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0], AcpSessionEvent::SessionOpened);
+    assert_eq!(events[0], RuntimeSessionEvent::SessionOpened);
     assert!(session.is_opened());
 }
 
@@ -171,7 +171,7 @@ fn set_desired_mode_emits_when_changed() {
     let events = session.drain_events();
     assert_eq!(
         events[0],
-        AcpSessionEvent::DesiredModeChanged {
+        RuntimeSessionEvent::DesiredModeChanged {
             mode: ModeId::new("plan"),
         }
     );
@@ -303,7 +303,7 @@ fn confirm_mode_aligns_desired_and_current() {
     assert!(session.plan_reconcile().is_empty());
     assert_eq!(
         session.drain_events(),
-        vec![AcpSessionEvent::ObservedModeSynced {
+        vec![RuntimeSessionEvent::ObservedModeSynced {
             mode: ModeId::new("plan"),
         }]
     );
@@ -330,7 +330,7 @@ fn confirm_model_aligns_desired_and_current() {
     assert!(session.plan_reconcile().is_empty());
     assert_eq!(
         session.drain_events(),
-        vec![AcpSessionEvent::ObservedModelSynced {
+        vec![RuntimeSessionEvent::ObservedModelSynced {
             model: ModelId::new("claude-opus-4"),
         }]
     );
@@ -390,7 +390,7 @@ fn apply_observed_config_emits_on_change_and_is_idempotent() {
     let events = session.drain_events();
     assert_eq!(events.len(), 1);
     match &events[0] {
-        AcpSessionEvent::ObservedConfigSynced { selections } => {
+        RuntimeSessionEvent::ObservedConfigSynced { selections } => {
             assert_eq!(
                 selections.get(&ConfigKey::new("reasoning")),
                 Some(&ConfigValue::new("high"))
@@ -509,7 +509,7 @@ fn set_desired_model_emits_when_changed() {
     assert_eq!(events.len(), 1);
     assert_eq!(
         events[0],
-        AcpSessionEvent::DesiredModelChanged {
+        RuntimeSessionEvent::DesiredModelChanged {
             model: ModelId::new("claude-sonnet-4"),
         }
     );
@@ -666,7 +666,7 @@ fn apply_advertised_config_options_emits_observed_config_synced_on_change() {
     let events = session.drain_events();
     assert_eq!(events.len(), 1);
     match &events[0] {
-        AcpSessionEvent::ObservedConfigSynced { selections } => {
+        RuntimeSessionEvent::ObservedConfigSynced { selections } => {
             assert_eq!(
                 selections.get(&ConfigKey::new("reasoning")),
                 Some(&ConfigValue::new("high"))

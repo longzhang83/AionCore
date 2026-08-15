@@ -366,7 +366,7 @@ impl SessionAgentTask {
     ///
     /// `session_repo`, when present, is the persistence sink the event pump writes
     /// on the SAME signals the legacy ACP path persisted via
-    /// `AcpSessionSyncService` (which this direct-CLI path bypasses): `BackendBound`
+    /// `RuntimeSessionSyncService` (which this direct-CLI path bypasses): `BackendBound`
     /// → `acp_session.session_id` (the resume anchor `build_session_instance` reads
     /// back), `ConfigChanged` → `current_mode_id`/`current_model_id` (the mode/model
     /// precedence source). `None` (tests) = no persistence.
@@ -1182,7 +1182,7 @@ impl IAgentTask for SessionAgentTask {
             },
         };
         // Emit the turn-start lifecycle frame BEFORE dispatch, exactly like the ACP
-        // path (agent_session_flow.rs emits Start{session_id} right before prompt()).
+        // path (runtime_session_flow.rs emits Start{session_id} right before prompt()).
         // The backend's own turn-start signal (claude/codex PromptAccepted) arrives
         // AFTER the first text delta, so it cannot drive an at-the-front Start — the
         // send call is the correct, ordering-stable anchor. session_id is None on the
@@ -1361,7 +1361,7 @@ pub struct SessionBuildInputs<'a> {
     pub catalog_writeback: Option<(String, crate::registry::CatalogSender)>,
     /// The `acp_session` persistence sink. The event pump writes the resume anchor
     /// (`BackendBound` → `session_id`) + observed mode/model (`ConfigChanged`) here —
-    /// the writes the legacy ACP path performed via `AcpSessionSyncService`, which
+    /// the writes the legacy ACP path performed via `RuntimeSessionSyncService`, which
     /// this direct-CLI path bypasses. `None` (tests) = no persistence.
     pub acp_session_repo: Option<Arc<dyn IAcpSessionRepository>>,
     /// DEV (`--dump-prompts`): the already-resolved `<data_dir>/prompt-dumps`
@@ -2418,7 +2418,7 @@ fn spawn_event_pump(
         // cleared at settlement, so it cannot rely on `stamp_tool_name` either.
         let mut tool_args: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
         // Did the CURRENT turn emit any user-visible output (text / thinking / tool /
-        // plan / permission)? Mirrors the ACP path's `is_empty_turn` (agent_session_flow.rs):
+        // plan / permission)? Mirrors the ACP path's `is_empty_turn` (runtime_session_flow.rs):
         // a clean terminal with this still `false` is a "blank reply" (ELECTRON-1JG) and
         // gets a diagnostic Tip so the user isn't left staring at an empty bubble. Set as
         // events are observed, reset at the per-turn terminal (with `tool_output`/`tool_name`).
@@ -2972,7 +2972,7 @@ fn spawn_event_pump(
                         terminal_result_seen = true;
                     }
                     // Empty-turn (blank-reply) diagnostic, mirroring the ACP path
-                    // (agent_session_flow.rs `prompt_outcome_from_stop_reason`): a turn
+                    // (runtime_session_flow.rs `prompt_outcome_from_stop_reason`): a turn
                     // that reached a CLEAN terminal (`TurnResult{is_error:false}`, not
                     // cancelled) without emitting any user-visible output gets an
                     // informational/warning Tip so the user isn't left with an empty
@@ -3008,7 +3008,7 @@ fn spawn_event_pump(
                 _ => {}
             }
             // Persist the Tier-2 side-effects the legacy ACP path wrote via
-            // AcpSessionSyncService (which this direct-CLI path bypasses). Best-effort:
+            // RuntimeSessionSyncService (which this direct-CLI path bypasses). Best-effort:
             // a repo error is warn-logged, never fatal to the stream.
             if let Some(repo) = session_repo.as_ref() {
                 persist_side_effects(repo.as_ref(), &user_id, &conversation_id, &env.event).await;
@@ -3161,7 +3161,7 @@ fn is_dead_resume_anchor(event: &SessionEvent) -> bool {
 }
 
 /// Persist the backend-observed session identity + config to `acp_session`, the
-/// SAME writes the legacy `AcpSessionSyncService` domain-event consumer performed
+/// SAME writes the legacy `RuntimeSessionSyncService` domain-event consumer performed
 /// for the ACP-manager path. Without this the resume anchor
 /// (`build_session_instance` GAP #1) and the mode/model precedence source (GAP #2)
 /// are never written, so a restart always loses continuity.
@@ -3839,7 +3839,7 @@ fn stamp_tool_name(names: &mut std::collections::HashMap<String, String>, ev: &m
 /// the output targets origin's `AgentStreamEvent` enum instead of `ConvDomainEvent`.
 /// Whether a translated stream event represents user-visible turn output —
 /// anything that renders in chat. Mirrors the ACP path's
-/// `event_is_user_visible_output` (agent_session_flow.rs) so the direct-CLI
+/// `event_is_user_visible_output` (runtime_session_flow.rs) so the direct-CLI
 /// empty-turn detection uses the same definition of "the turn said something".
 fn event_is_user_visible_output(event: &AgentStreamEvent) -> bool {
     matches!(
@@ -3861,7 +3861,7 @@ fn event_is_user_visible_output(event: &AgentStreamEvent) -> bool {
 }
 
 /// Build the empty-turn diagnostic Tip for a clean terminal that produced no
-/// user-visible output, mirroring the ACP path (agent_session_flow.rs:388-448):
+/// user-visible output, mirroring the ACP path (runtime_session_flow.rs:388-448):
 /// a normal `EndTurn` is an informational "no reply" note; any other stop reason
 /// (truncation / refusal / failure) is a warning naming the cause. Codes match
 /// the `conversation.agentTip.codes.*` i18n keys the frontend `MessageTips`
@@ -5420,7 +5420,7 @@ mod translate_tests {
     #[test]
     fn empty_turn_truncation_and_refusal_map_to_acp_warning_codes() {
         use aionui_session::{StopReason, TruncationKind, TurnOutcome};
-        // Exactly the codes the ACP path emits (agent_session_flow.rs empty_finish_tip_code).
+        // Exactly the codes the ACP path emits (runtime_session_flow.rs empty_finish_tip_code).
         assert_eq!(
             tip_code(TurnOutcome::Completed {
                 stop_reason: StopReason::Truncated(TruncationKind::MaxTokens),
@@ -5492,7 +5492,7 @@ mod translate_tests {
 #[cfg(test)]
 mod persist_tests {
     //! The pump's persistence hookup — the writes the legacy ACP path performed via
-    //! `AcpSessionSyncService` but which this direct-CLI path must do itself. Without
+    //! `RuntimeSessionSyncService` but which this direct-CLI path must do itself. Without
     //! these the resume anchor + mode/model precedence source are never written.
     use super::*;
     use aionui_db::{CreateAcpSessionParams, IAcpSessionRepository, SqliteAcpSessionRepository, init_database_memory};

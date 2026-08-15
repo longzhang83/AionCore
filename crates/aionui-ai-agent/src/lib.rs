@@ -52,7 +52,7 @@ pub use idle_scanner::{
     IdleCleanupCoordinator, resolve_idle_config_from_env, start_idle_scanner, start_idle_scanner_with_coordinator,
 };
 pub use manager::acp::RequiredFullAutoApplication;
-pub use persistence::AcpSessionSyncService;
+pub use persistence::RuntimeSessionSyncService;
 pub use protocol::events::AgentStreamEvent;
 pub use protocol::runtime_error::RuntimeError;
 pub use protocol::runtime_send_error::RuntimeSendError;

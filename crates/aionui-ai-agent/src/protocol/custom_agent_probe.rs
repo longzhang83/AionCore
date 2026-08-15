@@ -235,7 +235,7 @@ async fn run_handshake(proc: &CliAgentProcess) -> ProbeOutcome {
     // it meant a probed-online agent still showed an empty picker.
     let outcome = match protocol.new_session(NewSessionRequest::new(std::env::temp_dir())).await {
         Ok((response, legacy_models)) => {
-            // Same extraction the live session path performs (`agent_session_flow`):
+            // Same extraction the live session path performs (`runtime_session_flow`):
             // models ride beside the response because the SDK dropped the field.
             let models = legacy_models
                 .as_ref()

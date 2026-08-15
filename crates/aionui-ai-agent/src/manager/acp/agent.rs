@@ -5,7 +5,7 @@ use crate::capability::prompt_pipeline::PromptPipeline;
 use crate::capability::skill_manager::AcpSkillManager;
 use crate::error::AgentError;
 use crate::factory::runtime_assembler::RuntimeSessionParams;
-use crate::manager::acp::{AcpSession, AcpSessionEvent, PermissionRouter, SessionNewPreludeHook};
+use crate::manager::acp::{AcpSession, PermissionRouter, RuntimeSessionEvent, SessionNewPreludeHook};
 use crate::manager::process_registry::{register_session_process, unregister_agent_process};
 use crate::protocol::events::AgentStreamEvent;
 use crate::protocol::npx_cache_repair::CorruptNpxCacheRepair;
@@ -34,8 +34,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
 use tracing::{debug, error, info, warn};
 
-use super::agent_session_flow::PromptOutcome;
 use super::error_mapping::AcpSendFailure;
+use super::runtime_session_flow::PromptOutcome;
 
 /// The user-visible body inside an [`AgentError`].
 ///
@@ -45,7 +45,7 @@ use super::error_mapping::AcpSendFailure;
 /// to the renderer and gets shown verbatim — the prefix only adds noise. Strip
 /// it so the user sees the upstream message.
 ///
-/// `pub(super)` so the close-path helpers in `agent_close.rs` can reuse the
+/// `pub(super)` so the close-path helpers in `runtime_close.rs` can reuse the
 /// same prefix-stripping logic when fabricating the `Failed { display }` arm.
 pub(super) fn user_facing_message(err: &AgentError) -> String {
     let full = err.to_string();
@@ -104,7 +104,7 @@ struct AcpStartupConnection {
 /// POSIX signals, so `signal` stays `None` and the upstream exit code is the
 /// only diagnostic.
 ///
-/// `pub(super)` so the close-path helpers in `agent_close.rs` can read the
+/// `pub(super)` so the close-path helpers in `runtime_close.rs` can read the
 /// child's status when a `send_message` fails after init.
 pub(super) fn exit_status_parts(exit: Option<std::process::ExitStatus>) -> (Option<i32>, Option<String>) {
     let Some(status) = exit else {
@@ -540,15 +540,15 @@ pub struct AcpAgentManager {
     pub(super) skill_manager: Arc<AcpSkillManager>,
 
     /// Domain event sender — session aggregate events are forwarded here
-    /// for the persistence consumer (`AcpSessionSyncService`).
-    pub(super) domain_event_tx: mpsc::Sender<AcpSessionEvent>,
+    /// for the persistence consumer (`RuntimeSessionSyncService`).
+    pub(super) domain_event_tx: mpsc::Sender<RuntimeSessionEvent>,
 
     /// Outbound prompt transformation chain. Constructed once at build
     /// time with the two built-in hooks; not swapped at runtime.
     pub(super) pipeline: PromptPipeline,
 
     /// Underlying CLI process (for lifecycle management: kill, is_running).
-    /// `pub(super)` so the close-path helpers in `agent_close.rs` can read
+    /// `pub(super)` so the close-path helpers in `runtime_close.rs` can read
     /// `exit_status` and peek stderr without going through a wrapper method.
     pub(super) process: Arc<CliAgentProcess>,
 
@@ -572,7 +572,7 @@ impl AcpAgentManager {
     ) -> Result<
         (
             Self,
-            mpsc::Receiver<AcpSessionEvent>,
+            mpsc::Receiver<RuntimeSessionEvent>,
             mpsc::Receiver<SessionNotification>,
         ),
         AgentError,
@@ -588,7 +588,7 @@ impl AcpAgentManager {
     ) -> Result<
         (
             Self,
-            mpsc::Receiver<AcpSessionEvent>,
+            mpsc::Receiver<RuntimeSessionEvent>,
             mpsc::Receiver<SessionNotification>,
         ),
         AgentError,
@@ -1674,7 +1674,7 @@ impl AcpAgentManager {
 }
 
 // `augment_with_stderr` and `build_close_reason_from_error` live in
-// `agent_close.rs` to keep this file under the 1000-line budget.
+// `runtime_close.rs` to keep this file under the 1000-line budget.
 
 #[cfg(test)]
 mod tests {
@@ -2191,7 +2191,7 @@ mod tests {
         ));
     }
 
-    // Close-reason compositional tests live in `agent_close.rs` so that
+    // Close-reason compositional tests live in `runtime_close.rs` so that
     // (a) `agent.rs` stays under the 1000-line budget, and (b) the test
     // suite for the close-path helpers sits next to the production logic.
 

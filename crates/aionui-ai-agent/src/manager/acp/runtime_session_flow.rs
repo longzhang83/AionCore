@@ -18,9 +18,9 @@ use serde_json::Value;
 use tokio::sync::broadcast::error::TryRecvError;
 
 use super::agent::sdk_to_snake_value;
-use super::agent_close::STDERR_PEEK_LINES;
 use super::error_mapping::{AcpSendFailure, is_acp_session_not_found, is_missing_resumed_session};
 use super::legacy_runtime_model::LegacySessionModelState;
+use super::runtime_close::STDERR_PEEK_LINES;
 use tracing::warn;
 
 #[derive(Debug)]
@@ -805,7 +805,7 @@ mod tests {
     //! must end up with `is_opened() == true` and a populated
     //! `session_id()` — the same terminal state the real `open_session_new`
     //! / `open_session_resume` helpers leave behind.
-    use crate::manager::acp::{AcpSession, AcpSessionEvent};
+    use crate::manager::acp::{AcpSession, RuntimeSessionEvent};
     use crate::protocol::runtime_error::RuntimeError;
     use crate::shared_kernel::SessionId as DomainSessionId;
     use crate::types::SendMessageData;
@@ -816,7 +816,7 @@ mod tests {
     use super::{end_turn_usage_frame, end_turn_usage_frame_from_response, preserve_known_window};
 
     /// The end-of-turn usage frame must stay deserializable as `UsageUpdate` —
-    /// that is the contract with `agent_event_tracker`, which persists the
+    /// that is the contract with `runtime_event_tracker`, which persists the
     /// frame into the session snapshot (and thus GET /usage) via
     /// `from_value::<UsageUpdate>`. If this breaks, the indicator still lights
     /// up live but silently stops surviving hydration.
@@ -1085,11 +1085,11 @@ mod tests {
         assert!(
             events
                 .iter()
-                .any(|e| matches!(e, AcpSessionEvent::SessionAssigned { .. })),
+                .any(|e| matches!(e, RuntimeSessionEvent::SessionAssigned { .. })),
             "warmup must emit SessionAssigned for the persistence consumer"
         );
         assert!(
-            events.iter().any(|e| matches!(e, AcpSessionEvent::SessionOpened)),
+            events.iter().any(|e| matches!(e, RuntimeSessionEvent::SessionOpened)),
             "warmup must emit SessionOpened exactly once"
         );
     }

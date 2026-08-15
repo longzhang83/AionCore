@@ -17,7 +17,7 @@ use crate::agent_task::AgentInstance;
 use crate::capability::skill_manager::AcpSkillManager;
 use crate::error::AgentError;
 use crate::factory::context::FactoryContext;
-use crate::persistence::AcpSessionSyncService;
+use crate::persistence::RuntimeSessionSyncService;
 use crate::registry::AgentRegistry;
 use crate::session_context::AgentSessionKind;
 use crate::task_manager::AgentFactory;
@@ -29,7 +29,7 @@ pub struct AgentFactoryDeps {
     pub provider_repo: Arc<dyn IProviderRepository>,
     pub encryption_key: [u8; 32],
     pub agent_registry: Arc<AgentRegistry>,
-    pub acp_agent_service: Arc<AcpSessionSyncService>,
+    pub acp_agent_service: Arc<RuntimeSessionSyncService>,
     pub data_dir: PathBuf,
     pub dump_prompts: bool,
     pub broadcaster: Arc<dyn EventBroadcaster>,

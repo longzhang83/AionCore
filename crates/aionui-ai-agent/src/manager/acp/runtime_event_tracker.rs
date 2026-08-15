@@ -24,7 +24,7 @@ use super::runtime_config_catalog::extract_config_options_from_value;
 /// so the persistence consumer can forward it to the DB without another
 /// round-trip through serde.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AcpSessionEvent {
+pub enum RuntimeSessionEvent {
     SessionOpened,
     SessionAssigned {
         session_id: SessionId,
@@ -152,17 +152,17 @@ impl AcpAgentManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manager::acp::agent_event_tracker::AcpSessionEvent;
+    use crate::manager::acp::runtime_event_tracker::RuntimeSessionEvent;
     use crate::manager::acp::session::AcpSession;
     use crate::shared_kernel::{ModeId, ModelId};
     use agent_client_protocol::schema::v1::SessionModeState;
 
     #[test]
     fn event_equality() {
-        let a = AcpSessionEvent::SessionAssigned {
+        let a = RuntimeSessionEvent::SessionAssigned {
             session_id: SessionId::new("s1"),
         };
-        let b = AcpSessionEvent::SessionAssigned {
+        let b = RuntimeSessionEvent::SessionAssigned {
             session_id: SessionId::new("s1"),
         };
         assert_eq!(a, b);
@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn event_debug_format() {
-        let e = AcpSessionEvent::DesiredModeChanged {
+        let e = RuntimeSessionEvent::DesiredModeChanged {
             mode: ModeId::new("plan"),
         };
         let dbg = format!("{e:?}");
@@ -203,7 +203,7 @@ mod tests {
         );
         assert_eq!(
             events[0],
-            AcpSessionEvent::ObservedModeSynced {
+            RuntimeSessionEvent::ObservedModeSynced {
                 mode: ModeId::new("plan")
             }
         );
@@ -233,7 +233,7 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(
             events[0],
-            AcpSessionEvent::ObservedModeSynced {
+            RuntimeSessionEvent::ObservedModeSynced {
                 mode: ModeId::new("plan")
             }
         );
@@ -252,7 +252,7 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(
             events[0],
-            AcpSessionEvent::ObservedModelSynced {
+            RuntimeSessionEvent::ObservedModelSynced {
                 model: ModelId::new("claude-3-5-sonnet")
             }
         );
