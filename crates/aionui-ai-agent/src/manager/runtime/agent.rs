@@ -5,7 +5,7 @@ use crate::capability::prompt_pipeline::PromptPipeline;
 use crate::capability::skill_manager::AcpSkillManager;
 use crate::error::AgentError;
 use crate::factory::runtime_assembler::RuntimeSessionParams;
-use crate::manager::acp::{PermissionRouter, RuntimeAgentSession, RuntimeSessionEvent, SessionNewPreludeHook};
+use crate::manager::runtime::{PermissionRouter, RuntimeAgentSession, RuntimeSessionEvent, SessionNewPreludeHook};
 use crate::manager::process_registry::{register_session_process, unregister_agent_process};
 use crate::protocol::events::AgentStreamEvent;
 use crate::protocol::npx_cache_repair::CorruptNpxCacheRepair;
@@ -1684,8 +1684,8 @@ mod tests {
     };
     use crate::agent_runtime::AgentRuntime;
     use crate::error::AgentError;
-    use crate::manager::acp::runtime_config::ConfigSnapshot;
-    use crate::manager::acp::{RuntimeAgentManager, RuntimeAgentSession};
+    use crate::manager::runtime::runtime_config::ConfigSnapshot;
+    use crate::manager::runtime::{RuntimeAgentManager, RuntimeAgentSession};
     use crate::protocol::runtime_error::{CloseReason, RuntimeError};
     use crate::shared_kernel::{ConfigKey, ConfigValue, ModeId, SessionId as DomainSessionId};
     use agent_client_protocol::schema::v1::{

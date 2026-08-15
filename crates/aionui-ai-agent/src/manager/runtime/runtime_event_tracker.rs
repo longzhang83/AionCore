@@ -1,4 +1,4 @@
-use crate::manager::acp::{RuntimeAgentManager, RuntimeAgentSession};
+use crate::manager::runtime::{RuntimeAgentManager, RuntimeAgentSession};
 use crate::protocol::events::AgentStreamEvent;
 use agent_client_protocol::schema::v1::{SessionModeState, SessionNotification, UsageUpdate};
 
@@ -152,8 +152,8 @@ impl RuntimeAgentManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manager::acp::runtime_event_tracker::RuntimeSessionEvent;
-    use crate::manager::acp::session::RuntimeAgentSession;
+    use crate::manager::runtime::runtime_event_tracker::RuntimeSessionEvent;
+    use crate::manager::runtime::session::RuntimeAgentSession;
     use crate::shared_kernel::{ModeId, ModelId};
     use agent_client_protocol::schema::v1::SessionModeState;
 

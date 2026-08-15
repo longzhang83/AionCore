@@ -1,6 +1,6 @@
 use crate::error::AgentError;
-use crate::manager::acp::RuntimeAgentManager;
-use crate::manager::acp::runtime_mode::agent_metadata_uses_meta_resume;
+use crate::manager::runtime::RuntimeAgentManager;
+use crate::manager::runtime::runtime_mode::agent_metadata_uses_meta_resume;
 use crate::protocol::events::{
     AgentStreamEvent, AvailableCommandsEventData, ErrorEventData, SessionAssignedEventData, StartEventData, TipType,
     TipsEventData,
@@ -805,7 +805,7 @@ mod tests {
     //! must end up with `is_opened() == true` and a populated
     //! `session_id()` — the same terminal state the real `open_session_new`
     //! / `open_session_resume` helpers leave behind.
-    use crate::manager::acp::{RuntimeAgentSession, RuntimeSessionEvent};
+    use crate::manager::runtime::{RuntimeAgentSession, RuntimeSessionEvent};
     use crate::protocol::runtime_error::RuntimeError;
     use crate::shared_kernel::SessionId as DomainSessionId;
     use crate::types::SendMessageData;

@@ -15,8 +15,8 @@
 //! is logged via `tracing` only.
 
 use crate::error::AgentError;
-use crate::manager::acp::RuntimeAgentManager;
-use crate::manager::acp::agent::{exit_status_parts, user_facing_message};
+use crate::manager::runtime::RuntimeAgentManager;
+use crate::manager::runtime::agent::{exit_status_parts, user_facing_message};
 use crate::protocol::runtime_error::CloseReason;
 
 /// How many trailing stderr lines we hand to the extractor.
@@ -146,7 +146,7 @@ mod tests {
 
     use crate::capability::cli_process::CliAgentProcess;
     use crate::error::AgentError;
-    use crate::manager::acp::agent::{exit_status_parts, user_facing_message};
+    use crate::manager::runtime::agent::{exit_status_parts, user_facing_message};
     use crate::protocol::runtime_error::CloseReason;
 
     fn capture_logs(max_level: tracing::Level, f: impl FnOnce()) -> String {
@@ -237,7 +237,7 @@ mod tests {
             let (exit_code, signal) = exit_status_parts(Some(status));
             let tail = proc.peek_stderr_tail(super::STDERR_PEEK_LINES).await;
             let redacted_summary =
-                crate::manager::acp::runtime_error_extractor::extract_error_message(&tail).unwrap_or_default();
+                crate::manager::runtime::runtime_error_extractor::extract_error_message(&tail).unwrap_or_default();
             return CloseReason::ProcessExited {
                 exit_code,
                 signal,
@@ -251,7 +251,7 @@ mod tests {
         let is_default_internal = display.starts_with(SDK_DEFAULT_BAD_GATEWAY_PREFIX) && display.ends_with(')');
         if is_default_internal {
             let tail = proc.peek_stderr_tail(super::STDERR_PEEK_LINES).await;
-            if let Some(extracted) = crate::manager::acp::runtime_error_extractor::extract_error_message(&tail) {
+            if let Some(extracted) = crate::manager::runtime::runtime_error_extractor::extract_error_message(&tail) {
                 return CloseReason::Failed { display: extracted };
             }
         }

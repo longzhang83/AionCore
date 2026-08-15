@@ -8,7 +8,7 @@
 use crate::agent_runtime::AgentRuntime;
 use crate::capability::skill_manager::AcpSkillManager;
 use crate::factory::runtime_assembler::RuntimeSessionParams;
-use crate::manager::acp::RuntimeAgentSession;
+use crate::manager::runtime::RuntimeAgentSession;
 use std::sync::Arc;
 
 /// Read/write slice handed to each hook. `session` is a mutable borrow

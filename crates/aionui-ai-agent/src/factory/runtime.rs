@@ -6,7 +6,7 @@ use crate::factory::AgentFactoryDeps;
 use crate::factory::context::FactoryContext;
 use crate::factory::runtime_assembler::{WorkspaceInfo, assemble_runtime_params};
 use crate::factory::runtime_launch_policy::{RuntimeLaunchPolicyInput, apply_runtime_launch_policy};
-use crate::manager::acp::{CatalogForwarder, RuntimeAgentManager};
+use crate::manager::runtime::{CatalogForwarder, RuntimeAgentManager};
 use crate::registry::AgentRegistry;
 use crate::session_context::RuntimeSessionBuildContext;
 use agent_client_protocol::schema::v1::{

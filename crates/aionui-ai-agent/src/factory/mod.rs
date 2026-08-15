@@ -3,7 +3,6 @@ pub mod runtime_assembler;
 pub(crate) mod aionrs;
 mod antigravity;
 mod context;
-#[path = "acp.rs"]
 mod runtime;
 mod runtime_launch_policy;
 

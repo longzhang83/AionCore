@@ -1,8 +1,8 @@
-use crate::manager::acp::RuntimeAgentManager;
+use crate::manager::runtime::RuntimeAgentManager;
 
-use crate::manager::acp::error_mapping::is_acp_session_not_found;
-use crate::manager::acp::runtime_mode::normalize_requested_mode_for_available_values;
-use crate::manager::acp::session::PendingStartupConfigSeedResult;
+use crate::manager::runtime::error_mapping::is_acp_session_not_found;
+use crate::manager::runtime::runtime_mode::normalize_requested_mode_for_available_values;
+use crate::manager::runtime::session::PendingStartupConfigSeedResult;
 use crate::protocol::runtime_error::RuntimeError;
 use crate::shared_kernel::{ConfigKey, ConfigValue, ModeId, ModelId};
 use agent_client_protocol::schema::v1::{SessionId, SetSessionConfigOptionRequest, SetSessionModeRequest};
@@ -39,7 +39,7 @@ impl RuntimeAgentManager {
     /// - Any other error: logged and skipped (best-effort), so a failed
     ///   `set_config_option` doesn't block a successful `set_mode`.
     pub(super) async fn reconcile_session(&self, session_id: &str) -> Result<(), RuntimeError> {
-        use crate::manager::acp::ReconcileAction;
+        use crate::manager::runtime::ReconcileAction;
 
         let (startup_config_seed_results, invalid_mode, invalid_model, actions) = {
             let mut session = self.session.write().await;
@@ -281,7 +281,7 @@ impl RuntimeAgentManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manager::acp::RuntimeAgentSession;
+    use crate::manager::runtime::RuntimeAgentSession;
     use std::collections::HashMap;
 
     #[test]

@@ -21,7 +21,7 @@ use tokio::task::JoinHandle;
 use tokio::time::sleep_until;
 use tracing::{debug, warn};
 
-use crate::manager::acp::runtime_event_tracker::RuntimeSessionEvent;
+use crate::manager::runtime::runtime_event_tracker::RuntimeSessionEvent;
 use crate::shared_kernel::{ConfigKey, ConfigValue, ModeId, ModelId, PersistedSessionState};
 
 const DEBOUNCE_WINDOW: Duration = Duration::from_millis(500);

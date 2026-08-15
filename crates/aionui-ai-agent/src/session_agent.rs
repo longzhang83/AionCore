@@ -226,7 +226,7 @@ impl CatalogPreload {
     /// dropped: the handshake catalog does not carry per-model efforts, and the
     /// getters this feeds do not surface efforts.
     fn from_handshake(handshake: &aionui_api_types::AgentHandshake) -> Self {
-        use crate::manager::acp::runtime_config_catalog::{extract_models_from_value, extract_modes_from_value};
+        use crate::manager::runtime::runtime_config_catalog::{extract_models_from_value, extract_modes_from_value};
         let (available_models, current_model) = handshake
             .available_models
             .as_ref()
@@ -1426,7 +1426,7 @@ pub(crate) fn resolved_session_mode(
     session_snapshot
         .and_then(|s| s.current_mode_id.as_ref().map(|m| m.as_str().to_owned()))
         .or_else(|| config.session_mode.clone())
-        .map(|m| crate::manager::acp::runtime_mode::normalize_requested_mode(metadata, &m))
+        .map(|m| crate::manager::runtime::runtime_mode::normalize_requested_mode(metadata, &m))
         .filter(|s| !s.is_empty())
 }
 

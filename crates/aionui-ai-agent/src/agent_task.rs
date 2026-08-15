@@ -17,7 +17,7 @@ use aionui_common::{AgentKillReason, AgentType, ConversationStatus, TimestampMs}
 use tokio::sync::broadcast;
 
 use crate::error::AgentError;
-use crate::manager::acp::{RequiredFullAutoApplication, RuntimeAgentManager};
+use crate::manager::runtime::{RequiredFullAutoApplication, RuntimeAgentManager};
 use crate::manager::aionrs::AionrsAgentManager;
 use crate::protocol::events::AgentStreamEvent;
 use crate::protocol::runtime_send_error::RuntimeSendError;
@@ -518,7 +518,7 @@ impl AgentInstance {
 /// [`AgentInstance::get_model`]. Mirrors the helper formerly living in
 /// `services/agent.rs`; do not duplicate — if the shape of
 /// `ModelInfoPayload` changes, update it here.
-fn map_sdk_model_to_payload(m: crate::manager::acp::legacy_runtime_model::LegacySessionModelState) -> ModelInfoPayload {
+fn map_sdk_model_to_payload(m: crate::manager::runtime::legacy_runtime_model::LegacySessionModelState) -> ModelInfoPayload {
     let available: Vec<ModelInfoEntry> = m
         .available_models
         .iter()

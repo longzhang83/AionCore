@@ -51,7 +51,7 @@ pub use factory::{AgentFactoryDeps, build_agent_factory};
 pub use idle_scanner::{
     IdleCleanupCoordinator, resolve_idle_config_from_env, start_idle_scanner, start_idle_scanner_with_coordinator,
 };
-pub use manager::acp::RequiredFullAutoApplication;
+pub use manager::runtime::RequiredFullAutoApplication;
 pub use persistence::RuntimeSessionSyncService;
 pub use protocol::events::AgentStreamEvent;
 pub use protocol::runtime_error::RuntimeError;

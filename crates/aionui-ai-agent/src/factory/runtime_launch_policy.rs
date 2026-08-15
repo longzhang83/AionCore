@@ -1,5 +1,5 @@
 use crate::cc_switch;
-use crate::manager::acp::runtime_mode::normalize_requested_mode;
+use crate::manager::runtime::runtime_mode::normalize_requested_mode;
 use crate::shared_kernel::PersistedSessionState;
 use aionui_api_types::{AgentMetadata, RuntimeBuildConfig};
 use aionui_common::CommandSpec;

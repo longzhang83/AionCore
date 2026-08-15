@@ -195,7 +195,7 @@ mod tests {
     /// Feeds one state through both and compares.
     #[test]
     fn probe_projection_matches_event_projection() {
-        use crate::manager::acp::legacy_runtime_model::{LegacyModelEntry, LegacySessionModelState};
+        use crate::manager::runtime::legacy_runtime_model::{LegacyModelEntry, LegacySessionModelState};
         use agent_client_protocol::schema::v1::{SessionMode, SessionModeState};
 
         let modes = SessionModeState::new("code", vec![SessionMode::new("code", "Code")]);
@@ -214,7 +214,7 @@ mod tests {
         // Rebuild the events `emit_snapshot_events` would broadcast for the same
         // state, then run them through the forwarder's own projection.
         let mode_event = catalog_partial_from_event(&AgentStreamEvent::ModeInfo(
-            crate::manager::acp::agent::sdk_to_snake_value(&modes).expect("modes serialize"),
+            crate::manager::runtime::agent::sdk_to_snake_value(&modes).expect("modes serialize"),
         ))
         .expect("mode event projects");
         assert_eq!(probe.available_modes, mode_event.available_modes, "modes shape");
@@ -228,7 +228,7 @@ mod tests {
             }],
         };
         let model_event = catalog_partial_from_event(&AgentStreamEvent::ModelInfo(
-            crate::manager::acp::agent::sdk_to_snake_value(&model_payload).expect("models serialize"),
+            crate::manager::runtime::agent::sdk_to_snake_value(&model_payload).expect("models serialize"),
         ))
         .expect("model event projects");
         assert_eq!(probe.available_models, model_event.available_models, "models shape");
