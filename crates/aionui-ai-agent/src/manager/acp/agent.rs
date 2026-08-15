@@ -561,7 +561,7 @@ impl RuntimeAgentManager {
     /// establishing an ACP protocol connection.
     ///
     /// `params` is the pre-computed, immutable session bundle assembled by
-    /// `assemble_acp_params` in the factory layer. `catalog_tx` is the
+    /// `assemble_runtime_params` in the factory layer. `catalog_tx` is the
     /// MPSC sender used for the one-shot initialize handshake write;
     /// session-driven fields flow through the `CatalogForwarder` the
     /// factory spawns after construction.

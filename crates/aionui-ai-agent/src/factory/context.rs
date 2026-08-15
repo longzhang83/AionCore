@@ -29,7 +29,7 @@ impl FactoryContext {
 mod tests {
     use super::*;
     use crate::session_context::{
-        AcpSessionBuildContext, AgentSessionContext, AgentSessionKind, ConversationContext, WorkspaceContext,
+        AgentSessionContext, AgentSessionKind, ConversationContext, RuntimeSessionBuildContext, WorkspaceContext,
     };
     use aionui_common::{AgentType, ProviderWithModel};
 
@@ -55,7 +55,7 @@ mod tests {
             skills: vec![],
             runtime_env: vec![("AIONUI_USER_ID".into(), "user-1".into())],
             team: None,
-            kind: AgentSessionKind::Acp(Box::new(AcpSessionBuildContext {
+            kind: AgentSessionKind::Runtime(Box::new(RuntimeSessionBuildContext {
                 config: Default::default(),
                 team: None,
                 belongs_to_team: false,

@@ -40,13 +40,13 @@ pub struct WorkspaceContext {
 
 #[derive(Debug, Clone)]
 pub enum AgentSessionKind {
-    Acp(Box<AcpSessionBuildContext>),
+    Runtime(Box<RuntimeSessionBuildContext>),
     Aionrs(Box<AionrsSessionBuildContext>),
     Antigravity(Box<AntigravitySessionBuildContext>),
 }
 
 #[derive(Debug, Clone)]
-pub struct AcpSessionBuildContext {
+pub struct RuntimeSessionBuildContext {
     pub config: RuntimeBuildConfig,
     pub team: Option<TeamSessionBinding>,
     pub belongs_to_team: bool,
@@ -56,7 +56,7 @@ pub struct AcpSessionBuildContext {
 
 /// Build inputs for an Antigravity (`agy` CLI) session.
 ///
-/// Structurally the same as [`AcpSessionBuildContext`] — both describe a CLI
+/// Structurally the same as [`RuntimeSessionBuildContext`] — both describe a CLI
 /// agent with a workspace, MCP servers, skills and a resume anchor — but kept
 /// separate so the two never share a factory path (agy does not speak ACP).
 #[derive(Debug, Clone)]

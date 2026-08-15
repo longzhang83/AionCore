@@ -1603,7 +1603,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn find_builtin_claude_uses_managed_acp_runtime_metadata() {
+    async fn find_builtin_claude_uses_managed_runtime_metadata() {
         let reg = registry().await;
         let m = reg.find_builtin_by_backend("claude").await.unwrap();
         assert!(m.command.is_none());
@@ -1640,7 +1640,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pi_builtin_uses_stable_acp_adapter_and_requires_pi_cli() {
+    async fn pi_builtin_uses_stable_runtime_adapter_and_requires_pi_cli() {
         let reg = registry().await;
         let pi = reg.find_builtin_by_backend("pi").await.unwrap();
 

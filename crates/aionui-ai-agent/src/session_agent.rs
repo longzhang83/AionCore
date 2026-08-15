@@ -1309,7 +1309,7 @@ impl SessionAgentTask {
 /// backend is claude/codex and a spawner is available. `backend_label` is the
 /// authoritative vendor ("claude"/"codex"); other labels return `None` so the caller
 /// falls back to the ACP manager path.
-/// Everything the caller (`factory::acp::build`) already resolved and that the
+/// Everything the caller (`factory::runtime::build`) already resolved and that the
 /// session assembly needs. Bundled so `build_session_instance` is the SINGLE
 /// place that maps an ACP build request → the clean-slate `SessionSpec`/
 /// `SessionConfig`, mirroring clean-slate's `build_runtime` (spec_and_config +
@@ -1347,7 +1347,7 @@ pub struct SessionBuildInputs<'a> {
     /// `AIONUI_CONVERSATION_ID` / `AIONUI_HELPER_BIN` / `AIONUI_BASE_URL` /
     /// `AIONUI_RUNTIME_TOKEN`, filled by `apply_conversation_runtime_context`).
     /// The legacy ACP path injects these into every agent spawn via
-    /// `apply_acp_launch_policy`; the direct-CLI path forwards them through
+    /// `apply_runtime_launch_policy`; the direct-CLI path forwards them through
     /// `SessionConfig.spawn_env` so team/helper tooling inside the agent process
     /// keeps working. Empty ⇒ nothing injected.
     pub runtime_env: &'a [(String, String)],
@@ -1924,7 +1924,7 @@ fn resolve_session_cli_program(
 ///  2. the `AIONUI_*` conversation runtime context (`AIONUI_USER_ID` /
 ///     `AIONUI_CONVERSATION_ID` / `AIONUI_HELPER_BIN` / `AIONUI_BASE_URL` /
 ///     `AIONUI_RUNTIME_TOKEN`) — the legacy path appended these via
-///     `apply_acp_launch_policy` for every agent spawn.
+///     `apply_runtime_launch_policy` for every agent spawn.
 fn assemble_spawn_env(
     agent_env: &[aionui_api_types::AgentEnvEntry],
     runtime_env: &[(String, String)],

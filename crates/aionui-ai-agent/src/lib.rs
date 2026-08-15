@@ -66,7 +66,7 @@ pub use services::AgentAvailabilityFeedbackPort;
 pub use services::AgentService;
 pub use services::RemoteAgentService;
 pub use session_context::{
-    AcpSessionBuildContext, AgentSessionContext, AgentSessionKind, AionrsSessionBuildContext, ConversationContext,
+    AgentSessionContext, AgentSessionKind, AionrsSessionBuildContext, ConversationContext, RuntimeSessionBuildContext,
     WorkspaceContext,
 };
 pub use task_manager::{IWorkerTaskManager, WorkerTaskManagerImpl};

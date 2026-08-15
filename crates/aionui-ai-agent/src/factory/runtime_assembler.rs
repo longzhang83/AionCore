@@ -14,7 +14,7 @@ pub struct WorkspaceInfo {
 
 /// All pre-computed parameters needed to create and drive an ACP session.
 ///
-/// Assembled once by `assemble_acp_params` in the factory layer; the
+/// Assembled once by `assemble_runtime_params` in the factory layer; the
 /// `RuntimeAgentManager` reads from this but never mutates it. By front-loading
 /// the decision logic (which MCP servers to inject, what preset context to
 /// compose) we keep the manager focused on execution + state.
@@ -58,7 +58,7 @@ impl RuntimeSessionParams {
 /// by the factory layer; they are appended after the team injection so
 /// the agent gets *all* the user's tools on `session/new` (ELECTRON-1JG fix).
 #[allow(clippy::too_many_arguments)]
-pub async fn assemble_acp_params(
+pub async fn assemble_runtime_params(
     conversation_id: String,
     user_id: String,
     workspace: WorkspaceInfo,
@@ -191,7 +191,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn assemble_acp_params_uses_frozen_preset_context_and_snapshot_seeds() {
+    async fn assemble_runtime_params_uses_frozen_preset_context_and_snapshot_seeds() {
         let config = RuntimeBuildConfig {
             backend: Some("claude".into()),
             preset_context: Some("frozen rules".into()),
@@ -201,7 +201,7 @@ mod tests {
             ..Default::default()
         };
 
-        let params = assemble_acp_params(
+        let params = assemble_runtime_params(
             "conv-1".into(),
             "user-1".into(),
             WorkspaceInfo {

@@ -3,7 +3,7 @@
 //! [`SessionMcpServer`] shape the clean-slate session stack carries in
 //! `SessionConfig.init.mcp_servers`.
 //!
-//! The legacy per-backend resolvers (`factory::acp::load_user_mcp_servers` →
+//! The legacy per-backend resolvers (`factory::runtime::load_user_mcp_servers` →
 //! `Vec<agent_client_protocol::McpServer>`, `factory::aionrs::load_user_mcp_servers`
 //! → `HashMap<String, McpServerConfig>`) emit SDK/engine-specific types. This
 //! module emits the NEUTRAL `aionui_api_types::SessionMcpServer` so the app
@@ -85,7 +85,7 @@ pub async fn resolve_session_mcp_servers(
 }
 
 /// Parse one `McpServerRow` into a neutral `SessionMcpServer`, resolving the stdio
-/// launch command. Mirrors `factory::acp::row_to_sdk_mcp_server` but emits the
+/// launch command. Mirrors `factory::runtime::row_to_sdk_mcp_server` but emits the
 /// neutral type. Returns an error string when `transport_config` is malformed.
 async fn row_to_session_mcp_server(row: &McpServerRow) -> Result<SessionMcpServer, String> {
     let value: serde_json::Value =

@@ -183,7 +183,7 @@ mod tests {
     #[test]
     fn build_task_options_applies_conversation_runtime_context_once() {
         use crate::session_context::{
-            AcpSessionBuildContext, AgentSessionContext, AgentSessionKind, ConversationContext, WorkspaceContext,
+            AgentSessionContext, AgentSessionKind, ConversationContext, RuntimeSessionBuildContext, WorkspaceContext,
         };
         use aionui_common::{AgentType, ProviderWithModel};
 
@@ -212,7 +212,7 @@ mod tests {
                 ("EXISTING".into(), "1".into()),
             ],
             team: None,
-            kind: AgentSessionKind::Acp(Box::new(AcpSessionBuildContext {
+            kind: AgentSessionKind::Runtime(Box::new(RuntimeSessionBuildContext {
                 config: Default::default(),
                 team: None,
                 belongs_to_team: false,

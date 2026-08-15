@@ -1,9 +1,10 @@
 pub mod runtime_assembler;
 
-mod acp;
 pub(crate) mod aionrs;
 mod antigravity;
 mod context;
+#[path = "acp.rs"]
+mod runtime;
 mod runtime_launch_policy;
 
 use std::path::PathBuf;
@@ -78,7 +79,7 @@ async fn build_agent(deps: Arc<AgentFactoryDeps>, options: BuildTaskOptions) -> 
     let ctx = FactoryContext::resolve(&context).await?;
     let model = context.model.clone();
     match context.kind {
-        AgentSessionKind::Acp(acp_context) => acp::build(deps, *acp_context, ctx).await,
+        AgentSessionKind::Runtime(runtime_context) => runtime::build(deps, *runtime_context, ctx).await,
         AgentSessionKind::Aionrs(aionrs_context) => aionrs::build(deps, *aionrs_context, model, ctx).await,
         AgentSessionKind::Antigravity(agy_context) => antigravity::build(deps, *agy_context, ctx).await,
     }

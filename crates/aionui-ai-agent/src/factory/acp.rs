@@ -4,11 +4,11 @@ use crate::agent_task::AgentInstance;
 use crate::error::AgentError;
 use crate::factory::AgentFactoryDeps;
 use crate::factory::context::FactoryContext;
-use crate::factory::runtime_assembler::{WorkspaceInfo, assemble_acp_params};
-use crate::factory::runtime_launch_policy::{RuntimeLaunchPolicyInput, apply_acp_launch_policy};
+use crate::factory::runtime_assembler::{WorkspaceInfo, assemble_runtime_params};
+use crate::factory::runtime_launch_policy::{RuntimeLaunchPolicyInput, apply_runtime_launch_policy};
 use crate::manager::acp::{CatalogForwarder, RuntimeAgentManager};
 use crate::registry::AgentRegistry;
-use crate::session_context::AcpSessionBuildContext;
+use crate::session_context::RuntimeSessionBuildContext;
 use agent_client_protocol::schema::v1::{
     EnvVariable, HttpHeader, McpServer, McpServerHttp, McpServerSse, McpServerStdio,
 };
@@ -35,20 +35,20 @@ pub(crate) enum BackendRoute {
     /// agy — direct-CLI via its own factory (does NOT speak ACP).
     Antigravity,
     /// A real ACP vendor: the `RuntimeAgentManager` handshake path.
-    AcpManager,
+    RuntimeManager,
 }
 
 pub(crate) fn route_for_backend(backend: Option<&str>) -> BackendRoute {
     match backend {
         Some("antigravity") => BackendRoute::Antigravity,
         Some("claude" | "codex") => BackendRoute::DirectCli,
-        _ => BackendRoute::AcpManager,
+        _ => BackendRoute::RuntimeManager,
     }
 }
 
 pub(super) async fn build(
     deps: Arc<AgentFactoryDeps>,
-    build_context: AcpSessionBuildContext,
+    build_context: RuntimeSessionBuildContext,
     ctx: FactoryContext,
 ) -> Result<AgentInstance, AgentError> {
     let mut config = build_context.config;
@@ -111,7 +111,7 @@ pub(super) async fn build(
                 backend_session_id: build_context.session_id.clone(),
                 mcp_server_repo: deps.mcp_server_repo.as_ref(),
                 // The AIONUI_* conversation runtime context the legacy path
-                // injects via apply_acp_launch_policy — forwarded into
+                // injects via apply_runtime_launch_policy — forwarded into
                 // SessionConfig.spawn_env so direct-CLI spawns get it too.
                 runtime_env: &ctx.runtime_env,
                 broadcaster: deps.broadcaster.clone(),
@@ -156,7 +156,7 @@ pub(super) async fn build(
         deps.broadcaster.clone(),
     )
     .await?;
-    apply_acp_launch_policy(
+    apply_runtime_launch_policy(
         &mut command_spec,
         RuntimeLaunchPolicyInput {
             metadata: &meta,
@@ -217,7 +217,7 @@ pub(super) async fn build(
     }
 
     let params = Arc::new(
-        assemble_acp_params(
+        assemble_runtime_params(
             ctx.conversation_id.clone(),
             ctx.user_id.clone(),
             WorkspaceInfo {
@@ -1205,7 +1205,7 @@ mod tests {
     /// user sees "The selected Agent failed to start", with a fully working agy
     /// installed. Verified end-to-end from the AionUi UI.
     #[test]
-    fn antigravity_never_routes_to_the_acp_manager() {
+    fn antigravity_never_routes_to_the_runtime_manager() {
         assert_eq!(route_for_backend(Some("antigravity")), BackendRoute::Antigravity);
     }
 
@@ -1216,10 +1216,10 @@ mod tests {
     }
 
     #[test]
-    fn a_real_acp_vendor_still_reaches_the_manager() {
+    fn a_runtime_vendor_still_reaches_the_manager() {
         // The default must stay the manager: every other vendor DOES speak ACP.
-        assert_eq!(route_for_backend(Some("gemini")), BackendRoute::AcpManager);
-        assert_eq!(route_for_backend(Some("opencode")), BackendRoute::AcpManager);
-        assert_eq!(route_for_backend(None), BackendRoute::AcpManager);
+        assert_eq!(route_for_backend(Some("gemini")), BackendRoute::RuntimeManager);
+        assert_eq!(route_for_backend(Some("opencode")), BackendRoute::RuntimeManager);
+        assert_eq!(route_for_backend(None), BackendRoute::RuntimeManager);
     }
 }

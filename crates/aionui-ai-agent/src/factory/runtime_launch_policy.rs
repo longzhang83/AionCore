@@ -16,7 +16,7 @@ pub(super) struct RuntimeLaunchPolicyInput<'a> {
     pub runtime_env: &'a [(String, String)],
 }
 
-pub(super) fn apply_acp_launch_policy(command_spec: &mut CommandSpec, input: RuntimeLaunchPolicyInput<'_>) {
+pub(super) fn apply_runtime_launch_policy(command_spec: &mut CommandSpec, input: RuntimeLaunchPolicyInput<'_>) {
     apply_codex_runtime_config_args(
         command_spec,
         input.metadata,
@@ -147,7 +147,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_acp_launch_policy_adds_runtime_env_and_codex_full_access_config() {
+    fn apply_runtime_launch_policy_adds_runtime_env_and_codex_full_access_config() {
         let mut command_spec = CommandSpec {
             command: "node".into(),
             args: vec!["codex-acp.js".into()],
@@ -160,7 +160,7 @@ mod tests {
             ..Default::default()
         };
 
-        apply_acp_launch_policy(
+        apply_runtime_launch_policy(
             &mut command_spec,
             RuntimeLaunchPolicyInput {
                 metadata: &metadata,
@@ -193,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_acp_launch_policy_adds_codex_full_access_config_for_agent_full_access() {
+    fn apply_runtime_launch_policy_adds_codex_full_access_config_for_agent_full_access() {
         let mut command_spec = CommandSpec {
             command: "node".into(),
             args: vec!["codex-acp.js".into()],
@@ -206,7 +206,7 @@ mod tests {
             ..Default::default()
         };
 
-        apply_acp_launch_policy(
+        apply_runtime_launch_policy(
             &mut command_spec,
             RuntimeLaunchPolicyInput {
                 metadata: &metadata,
@@ -231,7 +231,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_acp_launch_policy_keeps_legacy_full_access_dangerous_for_persisted_snapshots() {
+    fn apply_runtime_launch_policy_keeps_legacy_full_access_dangerous_for_persisted_snapshots() {
         let mut command_spec = CommandSpec {
             command: "node".into(),
             args: vec!["codex-acp.js".into()],
@@ -244,7 +244,7 @@ mod tests {
             ..Default::default()
         };
 
-        apply_acp_launch_policy(
+        apply_runtime_launch_policy(
             &mut command_spec,
             RuntimeLaunchPolicyInput {
                 metadata: &metadata,
@@ -269,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_acp_launch_policy_skips_codex_config_for_non_codex_agents() {
+    fn apply_runtime_launch_policy_skips_codex_config_for_non_codex_agents() {
         let mut command_spec = CommandSpec {
             command: "node".into(),
             args: vec!["claude-agent-acp.js".into()],
@@ -279,7 +279,7 @@ mod tests {
         let metadata = agent_metadata_with_backend(Some("claude"));
         let config = RuntimeBuildConfig::default();
 
-        apply_acp_launch_policy(
+        apply_runtime_launch_policy(
             &mut command_spec,
             RuntimeLaunchPolicyInput {
                 metadata: &metadata,

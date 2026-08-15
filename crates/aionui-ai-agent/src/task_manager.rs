@@ -389,7 +389,7 @@ mod tests {
     use crate::protocol::events::AgentStreamEvent;
     use crate::runtime_token::RuntimeTokenError;
     use crate::session_context::{
-        AcpSessionBuildContext, AgentSessionContext, AgentSessionKind, ConversationContext, WorkspaceContext,
+        AgentSessionContext, AgentSessionKind, ConversationContext, RuntimeSessionBuildContext, WorkspaceContext,
     };
     use crate::types::{CONVERSATION_RUNTIME_CONTEXT_VERSION, SendMessageData};
     use aionui_common::{AgentKillReason, AgentType, ConversationStatus, ProviderWithModel};
@@ -509,7 +509,7 @@ mod tests {
             skills: vec![],
             runtime_env: vec![],
             team: None,
-            kind: AgentSessionKind::Acp(Box::new(AcpSessionBuildContext {
+            kind: AgentSessionKind::Runtime(Box::new(RuntimeSessionBuildContext {
                 config: Default::default(),
                 team: None,
                 belongs_to_team: false,
@@ -529,7 +529,7 @@ mod tests {
             mcp: None,
         };
         options.context.team = Some(team.clone());
-        if let AgentSessionKind::Acp(context) = &mut options.context.kind {
+        if let AgentSessionKind::Runtime(context) = &mut options.context.kind {
             context.team = Some(team);
             context.belongs_to_team = true;
         }

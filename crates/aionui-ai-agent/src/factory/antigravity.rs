@@ -1,7 +1,7 @@
 //! Factory branch for Antigravity (`agy` CLI) sessions.
 //!
 //! Antigravity is a direct-CLI backend that does NOT speak ACP, so it does not
-//! go through `factory::acp` (nor through `session_agent::build_session_instance`,
+//! go through `factory::runtime` (nor through `session_agent::build_session_instance`,
 //! which carries claude/codex-private assembly). It assembles here and hands the
 //! opened backend to the generic `SessionAgentTask`.
 
@@ -47,7 +47,7 @@ pub(super) async fn build(
     // Trust the catalog row over a client-supplied backend label, mirroring the
     // ACP factory: the frontend collapses row-scoped rows to a shared slot
     // string that downstream consumers would misread.
-    let meta = crate::factory::acp::resolve_catalog_metadata(&deps.agent_registry, &config, &ctx.user_id).await?;
+    let meta = crate::factory::runtime::resolve_catalog_metadata(&deps.agent_registry, &config, &ctx.user_id).await?;
     if config.agent_id.is_some() || config.backend.is_none() {
         config.backend.clone_from(&meta.backend);
     }
