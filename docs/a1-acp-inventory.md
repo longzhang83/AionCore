@@ -494,3 +494,29 @@ Session/MCP/API/App/Team：
 
 未纳入本切片：`AcpSessionBuildContext`、`AcpSkillManager`、API DTO、数据库 `acp_session`、
 ACP wire/SDK 术语以及后续 clean-cut slices。
+
+---
+
+## 13. V3 A1 clean-cut Slice 6 进度（2026-08-15）
+
+状态：已实现并验证（全 workspace 格式门禁仍受 4 处既有未格式化文件阻塞）。
+
+- 集成测试文件已收口：`acp_agent_integration.rs -> runtime_agent_integration.rs`、
+  `acp_module_surface.rs -> runtime_module_surface.rs`、
+  `acp_error_public.rs -> runtime_error_public.rs`。
+- 测试导入、局部变量、函数名及 module-surface 探针已改用 Runtime 名称；仅协议 fixture 字段和
+  既有 `AgentInstance::Acp` 兼容 variant 保留。
+- 旧内部流程注释改为中性“previous runtime flow”；真实 ACP wire/SDK、前端兼容帧、数据库命名和
+  `AcpSkillManager` 等尚未纳入本 slice 的类型保留。
+- 未新增日志：这是纯命名与注释收口，现有编译和测试信号足够。
+
+验证：
+
+- `/Users/zhanglong/.cargo/bin/cargo check -p aionui-ai-agent` 通过（exit 0）。
+- `GOCACHE=/tmp/aionui-gocache /Users/zhanglong/.cargo/bin/cargo test -p aionui-ai-agent`
+  通过（exit 0；测试期间既有 npm 缓存权限警告未影响结果）。
+- `git diff --check` 通过；`cargo fmt --all -- --check` 仅报告本 slice 外的
+  `src/agent_task.rs`、`src/manager/mod.rs` 和 `src/manager/runtime/agent.rs` 既有格式差异。
+
+未纳入本切片：`AgentInstance::Acp`、`AgentError::Acp`（已在 Slice 2 改为 `Runtime`）、
+`AcpSendFailure::Acp` 及 wire/SDK、DB、兼容帧、`AcpSkillManager` 命名。

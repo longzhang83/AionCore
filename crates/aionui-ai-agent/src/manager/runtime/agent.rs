@@ -5,8 +5,8 @@ use crate::capability::prompt_pipeline::PromptPipeline;
 use crate::capability::skill_manager::AcpSkillManager;
 use crate::error::AgentError;
 use crate::factory::runtime_assembler::RuntimeSessionParams;
-use crate::manager::runtime::{PermissionRouter, RuntimeAgentSession, RuntimeSessionEvent, SessionNewPreludeHook};
 use crate::manager::process_registry::{register_session_process, unregister_agent_process};
+use crate::manager::runtime::{PermissionRouter, RuntimeAgentSession, RuntimeSessionEvent, SessionNewPreludeHook};
 use crate::protocol::events::AgentStreamEvent;
 use crate::protocol::npx_cache_repair::CorruptNpxCacheRepair;
 use crate::protocol::runtime::{PermissionRequest, RuntimeProtocol};
@@ -516,7 +516,7 @@ pub struct RuntimeAgentManager {
     /// Session aggregate root — owns desired/observed/advertised state.
     /// Single in-memory source of truth for session lifecycle, modes,
     /// models, config, and all runtime data previously split across
-    /// `AcpRuntimeSnapshot` and `AcpState`.
+    /// the previous runtime snapshot and state holders.
     pub(super) session: RwLock<RuntimeAgentSession>,
 
     /// Shared runtime holding status, last_activity, and the event

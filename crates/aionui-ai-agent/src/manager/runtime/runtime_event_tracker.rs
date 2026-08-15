@@ -305,7 +305,7 @@ mod tests {
         drop(notification_tx);
 
         // The notification_rx should be empty — no SessionNotification was
-        // sent merely because event_tx received an AcpModeInfo event.
+        // sent merely because event_tx received a ModeInfo event.
         assert!(
             notification_rx.recv().await.is_none(),
             "notification_rx must not receive events that were broadcast on event_tx"

@@ -31,7 +31,7 @@ pub(crate) fn normalize_requested_mode(metadata: &AgentMetadata, mode: &str) -> 
 
     // Codex has legacy `default`/`autoEdit` aliases that map to its
     // native `auto` mode. Keep the mapping data-driven by keying on the
-    // vendor backend label rather than re-introducing an AcpBackend
+    // vendor backend label rather than re-introducing a dedicated backend
     // enum variant.
     if is_codex(metadata) && matches!(trimmed, "default" | "autoEdit") {
         return "auto".to_owned();

@@ -303,7 +303,7 @@ impl AgentInstance {
         match self {
             Self::Acp(m) => m.get_confirmations(),
             Self::Aionrs(m) => m.get_confirmations(),
-            // Session permissions surface as AcpPermission stream events + are
+            // Session permissions surface as approval-request stream events + are
             // answered via confirm(); no separate cached-confirmation list yet.
             Self::Session(m) => m.get_confirmations(),
             #[cfg(any(test, feature = "test-support"))]

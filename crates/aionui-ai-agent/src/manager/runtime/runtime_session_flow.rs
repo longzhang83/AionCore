@@ -362,7 +362,7 @@ impl RuntimeAgentManager {
         // End-of-turn usage: agents that never emit UsageUpdate notifications
         // report token usage on the prompt response instead — either via the
         // unstable `usage` field or a `_meta` dialect. Re-emit it as the same
-        // AcpContextUsage frame the notification path produces — it must
+        // ContextUsage frame the notification path produces — it must
         // precede the Finish frame, because the stream relay stops forwarding
         // a turn once Finish is seen. The session event tracker only observes
         // CLI notifications, not runtime-emitted frames, so the snapshot
@@ -606,7 +606,7 @@ fn event_is_user_visible_output(event: &AgentStreamEvent) -> bool {
     )
 }
 
-/// Build the `AcpContextUsage` frame value from an end-of-turn usage report.
+/// Build the `ContextUsage` frame value from an end-of-turn usage report.
 ///
 /// The shape mirrors the `UsageUpdate` notification passthrough (`{used,
 /// size}`) so the event tracker can persist it into the session snapshot.
@@ -797,9 +797,9 @@ fn empty_finish_tip_code(stop_reason: StopReason) -> &'static str {
 mod tests {
     //! Contract tests for the post-`warmup_session` session invariant.
     //!
-    //! The integration-test harness in `tests/acp_agent_integration.rs`
+    //! The integration-test harness in `tests/runtime_agent_integration.rs`
     //! cannot drive `RuntimeAgentManager` through a JSON-RPC mock today (all
-    //! existing ACP tests there are `#[ignore]` for the same reason), so we
+    //! existing runtime tests there are `#[ignore]` for the same reason), so we
     //! pin the observable contract at the aggregate-root layer instead:
     //! whatever `warmup_session` does internally, the session aggregate
     //! must end up with `is_opened() == true` and a populated

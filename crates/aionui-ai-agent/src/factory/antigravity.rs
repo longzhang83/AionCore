@@ -45,7 +45,7 @@ pub(super) async fn build(
     let mut config = build_context.config;
 
     // Trust the catalog row over a client-supplied backend label, mirroring the
-    // ACP factory: the frontend collapses row-scoped rows to a shared slot
+    // Runtime factory: the frontend collapses row-scoped rows to a shared slot
     // string that downstream consumers would misread.
     let meta = crate::factory::runtime::resolve_catalog_metadata(&deps.agent_registry, &config, &ctx.user_id).await?;
     if config.agent_id.is_some() || config.backend.is_none() {

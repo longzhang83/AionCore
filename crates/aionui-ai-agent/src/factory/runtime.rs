@@ -22,7 +22,7 @@ use tracing::{info, warn};
 
 use crate::runtime_status::conversation_runtime_reporter;
 
-/// Where a conversation that arrived on the ACP factory actually has to run.
+/// Where a conversation that arrived on the runtime factory actually has to run.
 ///
 /// Conversations reach this factory by their *family*, not by how their agent
 /// talks: the frontend renders every non-aionrs agent through the ACP chat
@@ -122,7 +122,7 @@ pub(super) async fn build(
                 // catalog events).
                 catalog_writeback: Some((meta.id.clone(), deps.agent_registry.catalog_sender())),
                 // Persist the resume anchor + observed mode/model from the session
-                // pump (the ACP path does this via acp_agent_service.attach, which
+                // pump (the previous runtime flow does this via acp_agent_service.attach, which
                 // this early-return bypasses).
                 acp_session_repo: Some(deps.acp_agent_service.repo()),
                 // DEV (`--dump-prompts`): resolve the dump dir once (mirrors the
@@ -1199,7 +1199,7 @@ mod tests {
         assert!(servers.is_empty());
     }
 
-    /// Antigravity arrives on the ACP factory because the renderer puts every
+    /// Antigravity arrives on the runtime factory because the renderer puts every
     /// non-aionrs agent on the ACP chat surface — but agy does not speak ACP.
     /// Routing it to the manager makes the initialize handshake time out and the
     /// user sees "The selected Agent failed to start", with a fully working agy

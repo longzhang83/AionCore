@@ -10,7 +10,7 @@
 //! boundary (`aionui-app`) can convert it once into the crate-local
 //! `aionui_session::McpServerSpec`, and each backend serializes that into its own
 //! wire shape. Same row-walking + selection + stdio-launch-resolution logic as
-//! the legacy ACP path, but vendor-neutral.
+//! the previous runtime flow, but vendor-neutral.
 
 use std::sync::Arc;
 

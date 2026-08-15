@@ -1,9 +1,9 @@
-//! Integration tests for AcpAgentManager.
+//! Integration tests for the runtime agent manager.
 //!
 //! **Status: TEMPORARILY IGNORED** — These tests use mock shell scripts that
 //! produce line-delimited JSON on stdout. After the ACP SDK integration
 //! (replacing raw JSON-over-stdio with `agent-client-protocol` JSON-RPC),
-//! `AcpAgentManager::new()` now performs an SDK `initialize` handshake that
+//! `RuntimeAgentManager::new()` now performs an SDK `initialize` handshake that
 //! mock shell scripts cannot respond to.
 //!
 //! To re-enable these tests, the mock scripts need to be replaced with a
@@ -20,8 +20,8 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use aionui_ai_agent::factory::runtime_assembler::{WorkspaceInfo, assemble_acp_params};
-use aionui_ai_agent::manager::acp::AcpAgentManager;
+use aionui_ai_agent::factory::runtime_assembler::{WorkspaceInfo, assemble_runtime_params};
+use aionui_ai_agent::manager::runtime::RuntimeAgentManager;
 use aionui_ai_agent::registry::AgentRegistry;
 use aionui_ai_agent::{AgentInstance, AgentStreamEvent, IAgentTask};
 use aionui_common::ConversationStatus;
@@ -40,14 +40,17 @@ fn serial() -> MutexGuard<'static, ()> {
     SERIAL_LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Create an AcpAgentManager wrapping a mock shell script.
+/// Create a runtime agent manager wrapping a mock shell script.
 ///
 /// Returns the Arc-wrapped manager and a pre-subscribed event receiver
 /// (subscribed BEFORE the relay starts, so no events are missed).
-async fn make_mock_agent(script: &str, backend: &str) -> (Arc<AcpAgentManager>, broadcast::Receiver<AgentStreamEvent>) {
+async fn make_mock_agent(
+    script: &str,
+    backend: &str,
+) -> (Arc<RuntimeAgentManager>, broadcast::Receiver<AgentStreamEvent>) {
     let temp_dir = std::env::temp_dir();
     let script_path = temp_dir.join(format!(
-        "mock_acp_{}_{}.sh",
+        "mock_runtime_{}_{}.sh",
         std::process::id(),
         aionui_common::now_ms()
     ));
@@ -97,7 +100,7 @@ async fn make_mock_agent(script: &str, backend: &str) -> (Arc<AcpAgentManager>, 
     let catalog_tx = registry.catalog_sender();
 
     let params = Arc::new(
-        assemble_acp_params(
+        assemble_runtime_params(
             "test-conv-1".into(),
             "user-acp-test".into(),
             WorkspaceInfo {
@@ -120,7 +123,7 @@ async fn make_mock_agent(script: &str, backend: &str) -> (Arc<AcpAgentManager>, 
         .await,
     );
 
-    let (manager, _, _) = AcpAgentManager::build(params, skill_manager, &catalog_tx)
+    let (manager, _, _) = RuntimeAgentManager::build(params, skill_manager, &catalog_tx)
         .await
         .expect("Failed to spawn mock ACP agent");
 
@@ -205,7 +208,7 @@ fn event_type_name(event: &AgentStreamEvent) -> &'static str {
 }
 
 #[test]
-fn acp_build_extra_populates_skills_from_extra_json() {
+fn runtime_build_extra_populates_skills_from_extra_json() {
     let json = serde_json::json!({
         "backend": "claude",
         "skills": ["cron", "pdf"],
@@ -220,7 +223,7 @@ fn acp_build_extra_populates_skills_from_extra_json() {
 
 #[tokio::test]
 #[ignore = "requires JSON-RPC mock agent"]
-async fn acp_agent_type_is_acp() {
+async fn runtime_agent_type_is_acp() {
     let _guard = serial();
     let (agent, _rx) = make_mock_agent(r#"echo '{"type":"finish","data":{}}'"#, "claude").await;
 
@@ -232,7 +235,7 @@ async fn acp_agent_type_is_acp() {
 
 #[tokio::test]
 #[ignore = "requires JSON-RPC mock agent"]
-async fn acp_agent_receives_stream_events() {
+async fn runtime_agent_receives_stream_events() {
     let _guard = serial();
     let (_agent, mut rx) = make_mock_agent(
         r#"echo '{"type":"start","data":{"session_id":"sess-1"}}' && echo '{"type":"text","data":{"content":"Hello"}}' && echo '{"type":"finish","data":{"session_id":"sess-1"}}'"#,
@@ -254,7 +257,7 @@ async fn acp_agent_receives_stream_events() {
 
 #[tokio::test]
 #[ignore = "requires JSON-RPC mock agent"]
-async fn acp_agent_session_id_captured_from_start() {
+async fn runtime_agent_session_id_captured_from_start() {
     let _guard = serial();
     let (agent, mut rx) = make_mock_agent(
         r#"echo '{"type":"start","data":{"session_id":"sess-abc"}}' && sleep 1"#,
@@ -272,7 +275,7 @@ async fn acp_agent_session_id_captured_from_start() {
 
 #[tokio::test]
 #[ignore = "requires JSON-RPC mock agent"]
-async fn acp_agent_status_transitions() {
+async fn runtime_agent_status_transitions() {
     let _guard = serial();
     let (agent, mut rx) = make_mock_agent(
         r#"sleep 0.1 && echo '{"type":"start","data":{}}' && sleep 0.3 && echo '{"type":"finish","data":{}}'"#,
@@ -294,7 +297,7 @@ async fn acp_agent_status_transitions() {
 
 #[tokio::test]
 #[ignore = "requires JSON-RPC mock agent"]
-async fn acp_agent_error_event_sets_finished() {
+async fn runtime_agent_error_event_sets_finished() {
     let _guard = serial();
     let (agent, mut rx) = make_mock_agent(
         r#"echo '{"type":"start","data":{}}' && sleep 0.1 && echo '{"type":"error","data":{"message":"timeout"}}'"#,
@@ -308,7 +311,7 @@ async fn acp_agent_error_event_sets_finished() {
 
 #[tokio::test]
 #[ignore = "requires JSON-RPC mock agent"]
-async fn acp_agent_model_info_captured() {
+async fn runtime_agent_model_info_captured() {
     let _guard = serial();
     let (agent, mut rx) = make_mock_agent(
         r#"echo '{"type":"acp_model_info","data":{"current_model_id":"claude-sonnet-4","current_model_label":"Claude Sonnet 4","available_models":[{"id":"claude-sonnet-4","label":"Claude Sonnet 4"},{"id":"claude-opus-4","label":"Claude Opus 4"}],"can_switch":true,"source":"models","source_detail":"acp-models"}}' && sleep 0.5"#,
@@ -319,7 +322,7 @@ async fn acp_agent_model_info_captured() {
     wait_for_event(&mut rx, |e| matches!(e, AgentStreamEvent::ModelInfo(_))).await;
 
     // Route through the public `AgentInstance` API rather than reaching
-    // into the private `AcpAgentManager::model()`: the ai-agent crate only
+    // into the private `RuntimeAgentManager::model()`: the ai-agent crate only
     // exposes `AgentInstance` to downstream callers, so tests should
     // exercise the same surface.
     let instance = AgentInstance::Acp(agent.clone());
@@ -334,7 +337,7 @@ async fn acp_agent_model_info_captured() {
 
 #[tokio::test]
 #[ignore = "requires JSON-RPC mock agent"]
-async fn acp_agent_kill_terminates_process() {
+async fn runtime_agent_kill_terminates_process() {
     let _guard = serial();
     let (agent, _rx) = make_mock_agent(r#"trap '' TERM; while true; do sleep 1; done"#, "claude").await;
 
@@ -347,7 +350,7 @@ async fn acp_agent_kill_terminates_process() {
 
 #[tokio::test]
 #[ignore = "requires JSON-RPC mock agent"]
-async fn acp_agent_last_activity_updates() {
+async fn runtime_agent_last_activity_updates() {
     let _guard = serial();
     let (agent, _rx) = make_mock_agent(r#"sleep 10"#, "claude").await;
 
@@ -362,7 +365,7 @@ async fn acp_agent_last_activity_updates() {
 
 #[tokio::test]
 #[ignore = "requires JSON-RPC mock agent"]
-async fn acp_agent_text_content_received() {
+async fn runtime_agent_text_content_received() {
     let _guard = serial();
     let (_agent, mut rx) = make_mock_agent(
         r#"echo '{"type":"text","data":{"content":"Hello from ACP"}}'"#,
@@ -380,7 +383,7 @@ async fn acp_agent_text_content_received() {
 
 #[tokio::test]
 #[ignore = "requires JSON-RPC mock agent"]
-async fn acp_agent_agent_status_event_captures_session() {
+async fn runtime_agent_status_event_captures_session() {
     let _guard = serial();
     let (agent, mut rx) = make_mock_agent(
         r#"echo '{"type":"agent_status","data":{"backend":"claude","status":"running","session_id":"sess-xyz"}}' && sleep 1"#,
@@ -398,7 +401,7 @@ async fn acp_agent_agent_status_event_captures_session() {
 
 #[tokio::test]
 #[ignore = "requires JSON-RPC mock agent"]
-async fn acp_agent_multiple_event_types() {
+async fn runtime_agent_multiple_event_types() {
     let _guard = serial();
     let (_agent, mut rx) = make_mock_agent(
         r#"echo '{"type":"start","data":{"session_id":"sess-multi"}}' && echo '{"type":"thinking","data":{"content":"Analyzing...","subject":"code","duration":100,"status":"in_progress"}}' && echo '{"type":"text","data":{"content":"Result"}}' && echo '{"type":"finish","data":{"session_id":"sess-multi"}}'"#,

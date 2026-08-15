@@ -19,7 +19,7 @@ pub struct InjectionConfig<'a> {
     pub skills: &'a [String],
     /// True iff the agent's native CLI reads skills from the workspace
     /// without needing prompt injection. Derived by callers from
-    /// `AcpBackend::native_skills_dirs().is_some()` for ACP.
+    /// the runtime backend's native-skills capability.
     pub native_skill_support: bool,
 }
 

@@ -37,13 +37,13 @@ pub struct AgentFactoryDeps {
     /// stdio MCP bridge injected into ACP `session/new` for team sessions.
     /// Captured once at app startup (`std::env::current_exe()`).
     pub backend_binary_path: Arc<PathBuf>,
-    /// User-configured MCP servers repository. Used by ACP factory to
+    /// User-configured MCP servers repository. Used by the runtime factory to
     /// inject enabled servers into `session/new` (ELECTRON-1JG fix).
     /// `None` for tests/composition paths that do not need MCP injection.
     pub mcp_server_repo: Option<Arc<dyn IMcpServerRepository>>,
     /// Subprocess spawner for the clean-slate session model. claude/codex always
-    /// run through `SessionAgentTask` (direct-CLI) instead of the ACP manager, so
-    /// the spawner is unconditionally wired — there is no fallback to the ACP path.
+    /// run through `SessionAgentTask` (direct-CLI) instead of the runtime manager, so
+    /// the spawner is unconditionally wired — there is no fallback to the previous runtime flow.
     pub session_spawner: Arc<dyn aionui_process::Spawner>,
     /// Base URL the Antigravity permission hook calls back on (e.g.
     /// `http://127.0.0.1:25808`). agy cannot prompt for permission in headless

@@ -85,8 +85,8 @@ struct SessionRuntime {
     live_background_tasks: std::sync::atomic::AtomicUsize,
     /// Coarse status derived from the FSM edge the translator observes.
     status: std::sync::Mutex<Option<ConversationStatus>>,
-    /// The CLI-assigned backend session id, learned from `BackendBound`. The ACP
-    /// path stamps every Start/Finish with its session id; we mirror that so the
+    /// The CLI-assigned backend session id, learned from `BackendBound`. The
+    /// previous runtime flow stamps every Start/Finish with its session id; we mirror that so the
     /// frontend + resume-anchor consumer see the same id. `None` until the backend
     /// binds (first turn); a resume seeds it via the first BackendBound echo.
     session_id: std::sync::Mutex<Option<String>>,
@@ -158,8 +158,8 @@ impl SessionRuntime {
     /// Atomic clean-converge frame: if not already `Finished`, set status ←
     /// `Finished` AND broadcast a clean `Finish` on `tx`. Idempotent in the
     /// `Finished` absorbing state (a repeat cancel / a late real Finish is a
-    /// no-op — no second broadcast). This is the precise isomorph of the ACP
-    /// path's `AgentRuntime::emit_finish`: it drives the SAME convergence chain
+    /// no-op — no second broadcast). This is the precise isomorph of the previous
+    /// runtime flow's `AgentRuntime::emit_finish`: it drives the SAME convergence chain
     /// (relay break → orchestrator releases the turn claim → `cancelling`
     /// cleared → `Idle`) so the gate recovers in seconds on the `UserCancel`
     /// force-kill path, WITHOUT waiting for the workflow to finish naturally.
@@ -218,7 +218,7 @@ fn efforts_for_model(available_models: Option<&serde_json::Value>, model_id: &st
 
 impl CatalogPreload {
     /// Parse the persisted handshake's `available_models` / `available_modes`
-    /// columns into the live-capabilities shape. Reuses the ACP path's
+    /// columns into the live-capabilities shape. Reuses the prior runtime flow's
     /// `extract_models_from_value` / `extract_modes_from_value` (the same
     /// multi-shape parser that accepts both the `{available_models:[{id,label}]}`
     /// column shape `spawn_catalog_writeback` persists AND a live-claude handshake),
@@ -239,7 +239,7 @@ impl CatalogPreload {
                         id: m.model_id.to_string(),
                         name: m.name.clone(),
                         description: m.description.clone(),
-                        // Read straight from the stored JSON: the ACP
+                        // Read straight from the stored JSON: the prior runtime
                         // `SessionModelState` this comes from has no effort
                         // axis, so the parser cannot carry it through.
                         reasoning_efforts: efforts_for_model(
@@ -349,7 +349,7 @@ pub struct SessionAgentTask {
     /// round-trip lands (~seconds on resume); the mode/model getters serve this in
     /// the meantime so the `/api/agents` picker is populated immediately instead of
     /// blank, then the live catalog overwrites it the moment it arrives. Empty on
-    /// paths with no persisted catalog (fresh agent, tests). Mirrors the ACP path's
+    /// paths with no persisted catalog (fresh agent, tests). Mirrors the prior runtime flow's
     /// `preload_advertised_catalogs` "fill-when-empty, live-overwrites" semantics.
     catalog_preload: CatalogPreload,
     /// Command-id counter for `CommandMeta` (dispatch correlation).
@@ -361,11 +361,10 @@ pub struct SessionAgentTask {
 
 impl SessionAgentTask {
     /// Build a task around an already-opened `SessionBackend` and start the
-    /// event-translation pump. `agent_type` is `AgentType::Acp` for claude/codex
-    /// (they present as the ACP family to the rest of the app).
+    /// event-translation pump. `agent_type` is `AgentType::Acp` for claude/codex.
     ///
     /// `session_repo`, when present, is the persistence sink the event pump writes
-    /// on the SAME signals the legacy ACP path persisted via
+    /// on the SAME signals the previous runtime flow persisted via
     /// `RuntimeSessionSyncService` (which this direct-CLI path bypasses): `BackendBound`
     /// → `acp_session.session_id` (the resume anchor `build_session_instance` reads
     /// back), `ConfigChanged` → `current_mode_id`/`current_model_id` (the mode/model
@@ -477,7 +476,7 @@ impl SessionAgentTask {
     }
 
     /// DEV (`--dump-prompts`): dump this turn's final input blocks as a
-    /// `session-cli-final-input` JSON, symmetric with the ACP path's
+    /// `session-cli-final-input` JSON, symmetric with the previous runtime flow's
     /// `acp-final-input`. Best-effort: a failure only warns and never affects
     /// the send. No-op when `--dump-prompts` is off (`prompt_dump == None`).
     fn dump_session_cli_final_input(&self, content: &[ContentBlock], client_msg_id: Option<&str>) {
@@ -523,7 +522,7 @@ impl SessionAgentTask {
     /// this returning them, a mid-turn permission (or AskUserQuestion) raised before
     /// the client subscribed is lost and the turn hangs forever waiting for an answer
     /// that can never be given. The card id == call_id == request_id, matching the
-    /// live `AcpPermission` frame so a duplicate live+recovered pair de-dups. Options
+    /// live approval-request frame so a duplicate live+recovered pair de-dups. Options
     /// mirror the live translation: AskUserQuestion → its question options, else the
     /// generic allow/deny.
     /// Raise a tool approval that came from OUTSIDE the backend's stream and
@@ -841,8 +840,8 @@ impl SessionAgentTask {
                     .collect(),
             });
         }
-        // Reasoning-effort ("thought level") axis — the direct-CLI analogue of the ACP
-        // path's `thought_level` config option (category-keyed so AionUi's
+        // Reasoning-effort ("thought level") axis — the direct-CLI analogue of the
+        // previous runtime flow's `thought_level` config option (category-keyed so AionUi's
         // `deriveSelectOption(..., 'thought_level', ['reasoning_effort'])` lights the
         // picker's effort group). Only claude advertises per-model `supportedEffortLevels`;
         // the option is emitted only when the resolved current model actually offers
@@ -880,9 +879,9 @@ impl SessionAgentTask {
         value: &str,
     ) -> Result<aionui_api_types::SetConfigOptionResponse, AgentError> {
         // Validate a runtime mode/model switch against the advertised catalog BEFORE
-        // dispatch — the ACP `clear_invalid_desired_*` semantic, but as REJECT+report
+        // dispatch — the prior runtime flow's `clear_invalid_desired_*` semantic, but as REJECT+report
         // (not silent-drop) since this is an explicit user action at the single runtime
-        // chokepoint. An EMPTY / not-yet-discovered catalog is permissive (matches ACP
+        // chokepoint. An EMPTY / not-yet-discovered catalog is permissive (matching the prior runtime flow's
         // `is_mode_valid`/`is_model_valid`: an absent catalog cannot invalidate — the
         // capabilities snapshot may simply not have the list yet). Only a NON-empty
         // catalog that omits `value` rejects. Other option ids (effort/thought_level)
@@ -1181,8 +1180,8 @@ impl IAgentTask for SessionAgentTask {
                 client_msg_id: Some(data.msg_id),
             },
         };
-        // Emit the turn-start lifecycle frame BEFORE dispatch, exactly like the ACP
-        // path (runtime_session_flow.rs emits Start{session_id} right before prompt()).
+        // Emit the turn-start lifecycle frame BEFORE dispatch, exactly like the
+        // previous runtime flow (runtime_session_flow.rs emits Start{session_id} right before prompt()).
         // The backend's own turn-start signal (claude/codex PromptAccepted) arrives
         // AFTER the first text delta, so it cannot drive an at-the-front Start — the
         // send call is the correct, ordering-stable anchor. session_id is None on the
@@ -1305,13 +1304,13 @@ impl SessionAgentTask {
 }
 
 /// Open a claude/codex `SessionBackend` via the clean-slate connection and wrap it
-/// as an `AgentInstance::Session`. Called from the ACP factory when the resolved
+/// as an `AgentInstance::Session`. Called from the runtime factory when the resolved
 /// backend is claude/codex and a spawner is available. `backend_label` is the
 /// authoritative vendor ("claude"/"codex"); other labels return `None` so the caller
-/// falls back to the ACP manager path.
+/// falls back to the legacy manager path.
 /// Everything the caller (`factory::runtime::build`) already resolved and that the
 /// session assembly needs. Bundled so `build_session_instance` is the SINGLE
-/// place that maps an ACP build request → the clean-slate `SessionSpec`/
+/// place that maps a runtime build request → the clean-slate `SessionSpec`/
 /// `SessionConfig`, mirroring clean-slate's `build_runtime` (spec_and_config +
 /// resolve_session_init + the per-backend spawn_env/sandbox/approval seams). Every
 /// field here has a 1:1 counterpart in that path.
@@ -1327,7 +1326,7 @@ pub struct SessionBuildInputs<'a> {
     pub config: &'a RuntimeBuildConfig,
     /// The resolved catalog row. Used to normalize the persisted/requested mode
     /// alias (`yolo`/`yoloNoSandbox` → the row's `yolo_id`; codex `default`/`autoEdit`
-    /// → `auto`) into the backend-native mode id, exactly as the ACP path does via
+    /// → `auto`) into the backend-native mode id, exactly as the prior runtime flow does via
     /// `initial_mode_from_params`. Without this a conversation persisted with a
     /// generic alias resumes by handing the raw alias to the backend (claude rejects
     /// an unknown permission-mode id; codex gets a non-native mode → wrong policy).
@@ -1346,13 +1345,13 @@ pub struct SessionBuildInputs<'a> {
     /// The conversation runtime context env (`AIONUI_USER_ID` /
     /// `AIONUI_CONVERSATION_ID` / `AIONUI_HELPER_BIN` / `AIONUI_BASE_URL` /
     /// `AIONUI_RUNTIME_TOKEN`, filled by `apply_conversation_runtime_context`).
-    /// The legacy ACP path injects these into every agent spawn via
+    /// The prior runtime flow injects these into every agent spawn via
     /// `apply_runtime_launch_policy`; the direct-CLI path forwards them through
     /// `SessionConfig.spawn_env` so team/helper tooling inside the agent process
     /// keeps working. Empty ⇒ nothing injected.
     pub runtime_env: &'a [(String, String)],
     /// Broadcaster forwarded to the MCP resolver for runtime-resolution reporting
-    /// parity with the legacy ACP path.
+    /// parity with the prior runtime flow.
     pub broadcaster: Arc<dyn EventBroadcaster>,
     /// The resolved catalog row id + the registry's catalog sender, used to write
     /// the backend's discovered modes/models/commands back into `agent_metadata`
@@ -1361,7 +1360,7 @@ pub struct SessionBuildInputs<'a> {
     pub catalog_writeback: Option<(String, crate::registry::CatalogSender)>,
     /// The `acp_session` persistence sink. The event pump writes the resume anchor
     /// (`BackendBound` → `session_id`) + observed mode/model (`ConfigChanged`) here —
-    /// the writes the legacy ACP path performed via `RuntimeSessionSyncService`, which
+    /// the writes the prior runtime flow performed via `RuntimeSessionSyncService`, which
     /// this direct-CLI path bypasses. `None` (tests) = no persistence.
     pub acp_session_repo: Option<Arc<dyn IAcpSessionRepository>>,
     /// DEV (`--dump-prompts`): the already-resolved `<data_dir>/prompt-dumps`
@@ -1473,7 +1472,7 @@ fn spec_mode_model(
         },
     };
     // Normalize the resolved mode alias into the backend-native id — the SAME
-    // transform the ACP path applies in `initial_mode_from_params`. AionUi persists
+    // transform the prior runtime flow applies in `initial_mode_from_params`. AionUi persists
     // generic aliases (`yolo`/`yoloNoSandbox`; codex `default`/`autoEdit`); handing
     // those raw to the backend on resume rejects (claude unknown permission-mode) or
     // mis-policies (codex non-native mode). `normalize_requested_mode` maps them via
@@ -1489,7 +1488,7 @@ fn spec_mode_model(
 }
 
 /// Build a claude/codex `SessionAgentTask` (the session-model port's `IAgentTask`)
-/// from a resolved ACP build request, or `Ok(None)` for a non-session backend.
+/// from a resolved runtime build request, or `Ok(None)` for a non-session backend.
 ///
 /// This is the faithful port of clean-slate `build_runtime`'s per-conversation
 /// assembly (`crates/aionui-app/src/session_runtime/mod.rs`): it resolves the
@@ -1605,7 +1604,7 @@ pub async fn build_antigravity_instance(
     Ok(crate::agent_task::AgentInstance::Session(task))
 }
 
-/// claude/codex session started through the ACP factory is byte-equivalent to one
+/// claude/codex session started through the runtime factory is byte-equivalent to one
 /// started through the clean-slate registry.
 pub async fn build_session_instance(
     backend_label: &str,
@@ -1740,7 +1739,7 @@ pub async fn build_session_instance(
 
     // GAP #5 — claude cc-switch provider env: inject ANTHROPIC_BASE_URL /
     // ANTHROPIC_AUTH_TOKEN (third-party relay creds) into the spawn, mirroring the
-    // legacy ACP-claude path. Empty (no cc-switch config) = byte-identical spawn.
+    // prior runtime Claude path. Empty (no cc-switch config) = byte-identical spawn.
     if backend_label == "claude" {
         let provider_env = crate::cc_switch::read_claude_provider_env();
         if !provider_env.is_empty() {
@@ -1944,7 +1943,7 @@ fn assemble_spawn_env(
 }
 
 /// Build the `session-cli-config` dump payload from the resolved `SessionConfig`
-/// captured just before `open_session`. Symmetric with the ACP path's
+/// captured just before `open_session`. Symmetric with the previous runtime flow's
 /// `build_acp_final_input_dump_value`: returns `{ "input", "resolved_context" }`.
 /// `SessionConfig` has no `Serialize`, so fields are mapped by hand. Contents
 /// are RAW (dev-only, `--dump-prompts`): secrets in `spawn_env` / MCP env are
@@ -2039,7 +2038,7 @@ fn session_server_to_spec(server: &aionui_api_types::SessionMcpServer) -> aionui
 /// The team coordination MCP server as a neutral stdio spec. Verbatim port of
 /// clean-slate `session_runtime::team_mcp_server_spec` (name = TEAM_MCP_SERVER_NAME,
 /// arg `mcp-team-stdio`, env PORT/TOKEN/SLOT_ID) so a session-model teammate joins
-/// the SAME per-team TCP bridge the ACP path used.
+/// the SAME per-team TCP bridge the previous runtime flow used.
 fn team_mcp_server_spec(cfg: &aionui_api_types::TeamMcpStdioConfig) -> aionui_session::McpServerSpec {
     use aionui_api_types::TeamMcpStdioConfig as C;
     aionui_session::McpServerSpec {
@@ -2057,7 +2056,7 @@ fn team_mcp_server_spec(cfg: &aionui_api_types::TeamMcpStdioConfig) -> aionui_se
 }
 
 /// GAP #7 (G5): spawn the one-shot catalog write-back for a session-model
-/// (claude/codex) backend. The ACP catalog (modes/models/commands) lands a beat
+/// (claude/codex) backend. The runtime catalog (modes/models/commands) lands a beat
 /// AFTER `open_session` returns (the session/new|load response is parsed
 /// asynchronously by the reader), so this waits for a discovery (bounded to ~5s),
 /// then forwards the projected partial via the registry's `CatalogSender`
@@ -2118,7 +2117,7 @@ pub fn spawn_catalog_writeback(
 
 /// Project a backend's discovered `Capabilities` (modes / models / slash commands)
 /// into an `AgentHandshake` partial for the `agent_metadata` catalog. Verbatim port
-/// of clean-slate `session_runtime::catalog_partial_from_caps`: emits both the ACP
+/// of clean-slate `session_runtime::catalog_partial_from_caps`: emits both the runtime
 /// `config_options[]` wire shape AND the top-level `available_modes`/`available_models`
 /// columns directly (the shape-stable path that keeps the codex model picker from
 /// going empty).
@@ -2291,7 +2290,7 @@ fn codex_approval_for_mode(mode: Option<&str>) -> Option<&'static str> {
 
 /// Discriminant name of a `SessionEvent`, for the pump's diagnostic debug log
 /// (no payload — safe at debug; used to confirm which backend events actually
-/// arrive when comparing the session path against the legacy ACP path).
+/// arrive when comparing the session path against the previous runtime flow).
 fn session_event_name(e: &SessionEvent) -> &'static str {
     match e {
         SessionEvent::TurnStarted { .. } => "TurnStarted",
@@ -2418,7 +2417,7 @@ fn spawn_event_pump(
         // cleared at settlement, so it cannot rely on `stamp_tool_name` either.
         let mut tool_args: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
         // Did the CURRENT turn emit any user-visible output (text / thinking / tool /
-        // plan / permission)? Mirrors the ACP path's `is_empty_turn` (runtime_session_flow.rs):
+        // plan / permission)? Mirrors the previous runtime flow's `is_empty_turn` (runtime_session_flow.rs):
         // a clean terminal with this still `false` is a "blank reply" (ELECTRON-1JG) and
         // gets a diagnostic Tip so the user isn't left staring at an empty bubble. Set as
         // events are observed, reset at the per-turn terminal (with `tool_output`/`tool_name`).
@@ -2579,8 +2578,8 @@ fn spawn_event_pump(
             }
 
             // Async catalog discovery (claude `initialize` / codex `model/list` +
-            // `collaborationMode/list` RESPONSE). Project it into an `AcpConfigOption`
-            // frame — the direct-CLI analogue of the ACP path's `emit_snapshot_events`
+            // `collaborationMode/list` RESPONSE). Project it into a `ConfigOption`
+            // frame — the direct-CLI analogue of the previous runtime flow's `emit_snapshot_events`
             // catalog push. The frontend's `useAcpConfigOptions` handler REPLACES its
             // whole snapshot on this frame and re-derives the picker's `canSwitch`, so a
             // catalog that arrived ~6s after `open_session` (long after the frontend read
@@ -2675,7 +2674,7 @@ fn spawn_event_pump(
                 // async `initialize` response — the same late-catalog timing that
                 // strands the model/mode picker — and the frontend's mount-time REST
                 // read (`fetchAcpSlashCommands`) returns empty before it lands. The
-                // legacy ACP path recovers via a live `AvailableCommands` push
+                // previous runtime flow recovers via a live `AvailableCommands` push
                 // (translate.rs `AvailableCommandsUpdate` arm); this is its direct-CLI
                 // analogue, so the `/` menu fills once discovery completes instead of
                 // staying empty until a manual refetch.
@@ -2971,7 +2970,7 @@ fn spawn_event_pump(
                     if matches!(env.event, SessionEvent::TurnResult { .. }) {
                         terminal_result_seen = true;
                     }
-                    // Empty-turn (blank-reply) diagnostic, mirroring the ACP path
+                    // Empty-turn (blank-reply) diagnostic, mirroring the previous runtime flow
                     // (runtime_session_flow.rs `prompt_outcome_from_stop_reason`): a turn
                     // that reached a CLEAN terminal (`TurnResult{is_error:false}`, not
                     // cancelled) without emitting any user-visible output gets an
@@ -3001,13 +3000,13 @@ fn spawn_event_pump(
                     saw_visible_output = false;
                 }
                 // Learn the CLI-assigned session id so send_message (Start) and the
-                // Finish stamping below carry it, matching the ACP path.
+                // Finish stamping below carry it, matching the previous runtime flow.
                 SessionEvent::BackendBound {
                     backend_session_id: Some(bid),
                 } => runtime.set_session_id(bid.clone()),
                 _ => {}
             }
-            // Persist the Tier-2 side-effects the legacy ACP path wrote via
+            // Persist the Tier-2 side-effects the previous runtime flow wrote via
             // RuntimeSessionSyncService (which this direct-CLI path bypasses). Best-effort:
             // a repo error is warn-logged, never fatal to the stream.
             if let Some(repo) = session_repo.as_ref() {
@@ -3086,14 +3085,14 @@ fn spawn_event_pump(
                     let _ = runtime.tx.send(AgentStreamEvent::SegmentBreak);
                     continue;
                 }
-                // Stamp the CLI session id onto the Finish frame, matching the ACP path
+                // Stamp the CLI session id onto the Finish frame, matching the previous runtime flow
                 // which sends Finish{session_id}. The resume anchor rides it to the
                 // frontend. (Start is emitted by send_message, already stamped.)
                 //
                 // NOTE: claude emits its `UsageDelta` a few ms AFTER `TurnResult`
                 // (it rides the `result` frame), and the relay stops forwarding a
                 // turn the moment it sees this Finish — so the translated
-                // AcpContextUsage below is shouted into an empty room and used to
+                // ContextUsage below is shouted into an empty room and used to
                 // leave the context indicator blank. That gap is now closed WITHOUT
                 // an end-of-turn barrier: the pump persists every UsageDelta to
                 // `context_usage` and broadcasts it directly (see the UsageDelta
@@ -3316,7 +3315,7 @@ fn broadcast_usage_frame(bus: &dyn EventBroadcaster, conversation_id: &str, user
 /// Shape is the ACP `UsageUpdate` the frontend already consumes:
 /// `{used, size, cost:{amount, currency}}`.
 ///
-/// MERGE, not replace (mirrors the ACP path): `used` always takes the newer value,
+/// MERGE, not replace (mirrors the previous runtime flow): `used` always takes the newer value,
 /// while `size`/`cost` are only overwritten when the incoming report carries them.
 /// codex sends no cost at all and may send `modelContextWindow: null`, so a blind
 /// replace would blank a window the previous turn had already established.
@@ -3394,7 +3393,7 @@ async fn persist_context_usage(
 
 /// Extract the picked option id from the confirm `data` payload. The frontend sends
 /// either a bare string (the option_id) or an object `{option_id|optionId|value}`.
-/// Mirrors the ACP path's `confirm_option_id`.
+/// Mirrors the previous runtime flow's `confirm_option_id`.
 fn confirm_option_id(data: &serde_json::Value) -> Option<String> {
     match data {
         serde_json::Value::String(v) => Some(v.clone()),
@@ -3838,7 +3837,7 @@ fn stamp_tool_name(names: &mut std::collections::HashMap<String, String>, ev: &m
 /// `AgentStreamEvent`s. The fold SHAPE mirrors the clean-slate TurnFinalizer, but
 /// the output targets origin's `AgentStreamEvent` enum instead of `ConvDomainEvent`.
 /// Whether a translated stream event represents user-visible turn output —
-/// anything that renders in chat. Mirrors the ACP path's
+/// anything that renders in chat. Mirrors the previous runtime flow's
 /// `event_is_user_visible_output` (runtime_session_flow.rs) so the direct-CLI
 /// empty-turn detection uses the same definition of "the turn said something".
 fn event_is_user_visible_output(event: &AgentStreamEvent) -> bool {
@@ -3861,7 +3860,7 @@ fn event_is_user_visible_output(event: &AgentStreamEvent) -> bool {
 }
 
 /// Build the empty-turn diagnostic Tip for a clean terminal that produced no
-/// user-visible output, mirroring the ACP path (runtime_session_flow.rs:388-448):
+/// user-visible output, mirroring the previous runtime flow (runtime_session_flow.rs:388-448):
 /// a normal `EndTurn` is an informational "no reply" note; any other stop reason
 /// (truncation / refusal / failure) is a warning naming the cause. Codes match
 /// the `conversation.agentTip.codes.*` i18n keys the frontend `MessageTips`
@@ -3905,7 +3904,7 @@ fn empty_turn_tip(outcome: &aionui_session::TurnOutcome) -> Option<TipsEventData
 fn translate_event(event: SessionEvent, conversation_id: &str, terminal_result_seen: bool) -> Vec<AgentStreamEvent> {
     match event {
         // NOTE: the Start lifecycle frame is emitted by `send_message` (before
-        // dispatch), mirroring the ACP path which emits Start right before prompt().
+        // dispatch), mirroring the previous runtime flow which emits Start right before prompt().
         // The backend's own turn-start signals — claude/codex `PromptAccepted`
         // (arrives AFTER the first text delta) and the orchestrator-lowered
         // `TurnStarted` (never reaches this stream) — are therefore NOT re-projected
@@ -4007,7 +4006,7 @@ fn translate_event(event: SessionEvent, conversation_id: &str, terminal_result_s
             //     crash) — the empty-turn Tip already rode the status match above;
             //   - signal / non-zero / unknown(None) exit, no result → CRASH.
             // Only the crash case surfaces as an error; the rest end with a plain
-            // Finish (behaviour-preserving). This restores the legacy ACP path's
+            // Finish (behaviour-preserving). This restores the previous runtime flow's
             // `RuntimeError::Disconnected → UserAgentDisconnected` terminal that the
             // direct-CLI bridge previously dropped: a CLI that dies mid-reply used
             // to render as a normal (empty) completion instead of a "disconnected,
@@ -4037,7 +4036,7 @@ fn translate_event(event: SessionEvent, conversation_id: &str, terminal_result_s
                 }
             }
         }
-        // Interactive tool approval: surface as an AcpPermission Request so the
+        // Interactive tool approval: surface as an approval request so the
         // frontend renders the allow/deny card. The `tool_call_id` MUST equal the
         // `request_id` — `SessionAgentTask::confirm` dispatches `AnswerPermission`
         // keyed on the same id (the frontend echoes the `call_id` it received here).
@@ -4093,7 +4092,7 @@ fn translate_event(event: SessionEvent, conversation_id: &str, terminal_result_s
         }
         // Structured question (claude AskUserQuestion) → its own `ask` frame; the
         // frontend renders a multi-question card and answers via confirm with the
-        // full per-question set. Deliberately NOT projected into AcpPermission
+        // full per-question set. Deliberately NOT projected into an approval request
         // options anymore — that flattening dropped every question after the first
         // (the reason the tool was disabled at spawn until 2026-08-04).
         SessionEvent::Ask { request_id, questions } => {
@@ -4107,7 +4106,7 @@ fn translate_event(event: SessionEvent, conversation_id: &str, terminal_result_s
         // card on its own answer. A cross-client "someone else answered" push is a
         // follow-up (the recovery REST path re-lists open asks on reload).
         SessionEvent::AskResolved { .. } => Vec::new(),
-        // Per-turn usage/cost → the AcpContextUsage passthrough frame the frontend
+        // Per-turn usage/cost → the ContextUsage passthrough frame the frontend
         // usage indicator reads (shape: cumulative token counters).
         SessionEvent::UsageDelta {
             input_tokens,
@@ -4159,7 +4158,7 @@ fn translate_event(event: SessionEvent, conversation_id: &str, terminal_result_s
             vec![AgentStreamEvent::ContextUsage(usage)]
         }
         // A confirmed mode/model switch is NOT forwarded as a stream frame. The origin
-        // frontend's mode/model pickers (AgentModeSelector / AcpModelSelector) track the
+        // frontend's mode/model pickers track the
         // selection in local state updated optimistically on the PUT /config-options
         // call + its REST response — they do NOT consume a config stream frame. And the
         // origin `useAcpMessage` has no `acp_config_option` case, so any such frame falls
@@ -4168,7 +4167,7 @@ fn translate_event(event: SessionEvent, conversation_id: &str, terminal_result_s
         // the selection persist is handled separately by `persist_side_effects`.
         SessionEvent::ConfigChanged { .. } => Vec::new(),
         // Handled earlier in the pump (needs runtime overrides for the current-value
-        // highlight; projected to an AcpConfigOption frame there). Never reaches this
+        // highlight; projected to a ConfigOption frame there). Never reaches this
         // stateless translator, but the match is total so give it an explicit no-op arm.
         SessionEvent::CatalogUpdated { .. } => Vec::new(),
         // Live plan / to-do snapshot (codex `turn/plan/updated`; claude never emits it).
@@ -4625,7 +4624,7 @@ mod build_mapping_tests {
 
     // HIGH-1 regression guard (equivalence audit): a persisted generic mode alias must
     // be normalized to the backend-native id via the catalog row — the SAME transform
-    // the ACP path applies. Without it the raw alias reaches the backend on resume
+    // the previous runtime flow applies. Without it the raw alias reaches the backend on resume
     // (claude rejects an unknown permission-mode; codex mis-policies).
     #[test]
     fn mode_alias_is_normalized_via_catalog() {
@@ -4831,7 +4830,7 @@ mod translate_tests {
         );
         match events.into_iter().next() {
             Some(AgentStreamEvent::ContextUsage(v)) => v,
-            other => panic!("expected AcpContextUsage, got {other:?}"),
+            other => panic!("expected ContextUsage, got {other:?}"),
         }
     }
 
@@ -4870,7 +4869,7 @@ mod translate_tests {
         );
         let v = match with.into_iter().next() {
             Some(AgentStreamEvent::ContextUsage(v)) => v,
-            other => panic!("expected AcpContextUsage, got {other:?}"),
+            other => panic!("expected ContextUsage, got {other:?}"),
         };
         assert_eq!(v["_meta"]["input_tokens"], 1_100);
         assert_eq!(v["_meta"]["output_tokens"], 194);
@@ -5035,7 +5034,7 @@ mod translate_tests {
         );
         assert_eq!(events.len(), 1, "permission must project to exactly one card");
         let crate::protocol::events::AgentStreamEvent::ApprovalRequest(req) = &events[0] else {
-            panic!("expected AcpPermission Request, got {:?}", events[0]);
+            panic!("expected approval request, got {:?}", events[0]);
         };
         // The confirm() path answers AnswerPermission keyed on this id — it MUST
         // equal the originating request_id or the approval never resolves.
@@ -5076,7 +5075,7 @@ mod translate_tests {
             false,
         );
         let crate::protocol::events::AgentStreamEvent::ApprovalRequest(req) = &events[0] else {
-            panic!("expected AcpPermission Request, got {:?}", events[0]);
+            panic!("expected approval request, got {:?}", events[0]);
         };
         let ids: Vec<&str> = req.options.iter().map(|o| o.option_id.as_str()).collect();
         let names: Vec<&str> = req.options.iter().map(|o| o.name.as_str()).collect();
@@ -5107,7 +5106,7 @@ mod translate_tests {
             false,
         );
         let crate::protocol::events::AgentStreamEvent::ApprovalRequest(req) = &events[0] else {
-            panic!("expected AcpPermission Request");
+            panic!("expected approval request");
         };
         let ids: Vec<&str> = req.options.iter().map(|o| o.option_id.as_str()).collect();
         assert_eq!(ids, vec!["allow", "allow_always", "reject"], "fallback to generic");
@@ -5129,10 +5128,10 @@ mod translate_tests {
         );
         assert_eq!(events.len(), 1);
         let crate::protocol::events::AgentStreamEvent::ContextUsage(v) = &events[0] else {
-            panic!("expected AcpContextUsage, got {:?}", events[0]);
+            panic!("expected ContextUsage, got {:?}", events[0]);
         };
         // Frontend ContextUsageIndicator reads `used` (not `total_tokens`) — the
-        // shape the ACP path forwards. `cost` rides as {amount,currency}.
+        // shape the previous runtime flow forwards. `cost` rides as {amount,currency}.
         assert_eq!(v.get("used").and_then(|x| x.as_u64()), Some(30), "used = total_tokens");
         assert_eq!(
             v.get("cost").and_then(|c| c.get("amount")).and_then(|x| x.as_f64()),
@@ -5396,7 +5395,7 @@ mod translate_tests {
         );
     }
 
-    // --- empty-turn (blank-reply) diagnostic Tip, mirroring the ACP path ---
+    // --- empty-turn (blank-reply) diagnostic Tip, mirroring the previous runtime flow ---
 
     fn tip_code(outcome: aionui_session::TurnOutcome) -> Option<(TipType, String)> {
         empty_turn_tip(&outcome).map(|t| (t.tip_type, t.code.unwrap()))
@@ -5420,7 +5419,7 @@ mod translate_tests {
     #[test]
     fn empty_turn_truncation_and_refusal_map_to_acp_warning_codes() {
         use aionui_session::{StopReason, TruncationKind, TurnOutcome};
-        // Exactly the codes the ACP path emits (runtime_session_flow.rs empty_finish_tip_code).
+        // Exactly the codes the previous runtime flow emits (runtime_session_flow.rs empty_finish_tip_code).
         assert_eq!(
             tip_code(TurnOutcome::Completed {
                 stop_reason: StopReason::Truncated(TruncationKind::MaxTokens),
@@ -5491,7 +5490,7 @@ mod translate_tests {
 
 #[cfg(test)]
 mod persist_tests {
-    //! The pump's persistence hookup — the writes the legacy ACP path performed via
+    //! The pump's persistence hookup — the writes the previous runtime flow performed via
     //! `RuntimeSessionSyncService` but which this direct-CLI path must do itself. Without
     //! these the resume anchor + mode/model precedence source are never written.
     use super::*;
@@ -5946,7 +5945,7 @@ mod persist_tests {
     }
 
     // The effort ("thought level") axis MUST be surfaced as a config option so the origin
-    // frontend renders it in the top-right model selector (parity with the ACP path's
+    // frontend renders it in the top-right model selector (parity with the previous runtime flow's
     // `thought_level` option). Asserts the exact shape the frontend keys off: category
     // `thought_level`, id `reasoning_effort`, and the current model's advertised levels.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -6634,7 +6633,7 @@ mod pump_tests {
     }
 
     // SessionTitle (claude generate_session_title, spec 2026-08-04) maps to the
-    // SAME AcpSessionInfo frame the ACP bridge emits for session_info_update, so
+    // SAME SessionInfo frame the runtime bridge emits for session_info_update, so
     // the StreamRelay's guarded consumer handles both backends through one path.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn session_title_maps_to_acp_session_info_frame() {
@@ -6657,7 +6656,7 @@ mod pump_tests {
                 AgentStreamEvent::SessionInfo(v) => Some(v.clone()),
                 _ => None,
             })
-            .expect("SessionTitle must surface as an AcpSessionInfo frame");
+            .expect("SessionTitle must surface as a SessionInfo frame");
         assert_eq!(payload["title"], "Fix login bug");
     }
 
@@ -6792,7 +6791,7 @@ mod pump_tests {
 
     // The FIX (async catalog-arrival push): a `CatalogUpdated` (the direct-CLI
     // analogue of ACP's `emit_snapshot_events`) MUST project to exactly one
-    // `AcpConfigOption` frame carrying BOTH the model and mode categories — the
+    // `ConfigOption` frame carrying BOTH the model and mode categories — the
     // frontend's `useAcpConfigOptions` replaces its whole snapshot on this frame, so
     // omitting a sibling category would wipe that picker. Before this the catalog
     // arrived ~6s after open with no upward frame, so the model selector stayed
@@ -6829,7 +6828,7 @@ mod pump_tests {
                 AgentStreamEvent::ConfigOption(v) => Some(v),
                 _ => None,
             })
-            .expect("CatalogUpdated must project to an AcpConfigOption frame");
+            .expect("CatalogUpdated must project to a ConfigOption frame");
         let options = config
             .get("config_options")
             .and_then(|v| v.as_array())
@@ -6864,7 +6863,7 @@ mod pump_tests {
     // The FIX (async slash-command arrival push): claude advertises its command
     // list in the same late `initialize` response that carries the model/mode
     // catalog. The frontend's mount-time REST read returns empty before that
-    // lands, and the legacy ACP path recovers via a live `AvailableCommands`
+    // lands, and the previous runtime flow recovers via a live `AvailableCommands`
     // push — so the direct-CLI pump MUST emit one too, or the `/` menu stays
     // empty until a manual refetch. A CatalogUpdated carrying slash_commands
     // projects to an AvailableCommands frame whose commands carry name+description.

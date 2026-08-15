@@ -1,7 +1,7 @@
-//! Integration tests for the ACP prompt pipeline.
+//! Integration tests for the runtime prompt pipeline.
 //!
-//! Unlike acp_agent_integration.rs, these tests do not exercise
-//! AcpAgentManager or the JSON-RPC protocol. They construct a
+//! Unlike runtime_agent_integration.rs, these tests do not exercise
+//! RuntimeAgentManager or the JSON-RPC protocol. They construct a
 //! PromptPipeline with the built-in hooks and invoke
 //! pre_send against a real PromptCtx, asserting the observable
 //! prompt transformation.
@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use aionui_ai_agent::capability::prompt_pipeline::{PromptCtx, PromptPipeline};
-use aionui_ai_agent::factory::runtime_assembler::{RuntimeSessionParams, WorkspaceInfo, assemble_acp_params};
-use aionui_ai_agent::manager::acp::{AcpSession, SessionNewPreludeHook};
+use aionui_ai_agent::factory::runtime_assembler::{RuntimeSessionParams, WorkspaceInfo, assemble_runtime_params};
+use aionui_ai_agent::manager::runtime::{RuntimeAgentSession, SessionNewPreludeHook};
 use aionui_ai_agent::registry::AgentRegistry;
 use aionui_ai_agent::shared_kernel::ModelId;
 use aionui_ai_agent::{AcpSkillManager, AgentRuntime, RuntimeBuildConfig};
@@ -55,7 +55,7 @@ async fn fixture_params(
     };
 
     Arc::new(
-        assemble_acp_params(
+        assemble_runtime_params(
             "conv-pp-test".into(),
             "user-pp-test".into(),
             WorkspaceInfo {
@@ -104,7 +104,7 @@ async fn brand_new_first_prompt_injects_preset_context() {
     let params = fixture_params("claude", Some("Rule A"), true).await;
     let skill_manager = fixture_skill_manager();
     let runtime = fixture_runtime();
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
 
     // Simulate: open_session_new just succeeded.
     session.mark_pending_session_new_prelude();
@@ -136,7 +136,7 @@ async fn second_prompt_is_passthrough() {
     let params = fixture_params("claude", Some("Rule A"), true).await;
     let skill_manager = fixture_skill_manager();
     let runtime = fixture_runtime();
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.mark_pending_session_new_prelude();
 
     let pipeline = make_pipeline();
@@ -172,7 +172,7 @@ async fn resume_path_does_not_inject() {
 
     // Resume: session opened by open_session_resume which does NOT call
     // mark_pending_session_new_prelude. The flag stays false.
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
 
     let pipeline = make_pipeline();
 
@@ -192,7 +192,7 @@ async fn observed_model_change_does_not_inject_model_identity_reminder() {
     let params = fixture_params("claude", None, true).await;
     let skill_manager = fixture_skill_manager();
     let runtime = fixture_runtime();
-    let mut session = AcpSession::new(None, None, HashMap::new());
+    let mut session = RuntimeAgentSession::new(None, None, HashMap::new());
     session.apply_observed_model(ModelId::new("claude-opus-4"));
 
     let pipeline = make_pipeline();
