@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use aionui_ai_agent::AcpSkillManager;
 use aionui_ai_agent::RuntimeSessionSyncService;
+use aionui_ai_agent::SkillManager;
 use aionui_ai_agent::factory::{AgentFactoryDeps, build_agent_factory};
 use aionui_ai_agent::registry::AgentRegistry;
 use aionui_ai_agent::session_context::{
@@ -81,7 +81,7 @@ fn make_factory(
         aionui_process::local_machine_id(tmp.path()),
     ));
     build_agent_factory(AgentFactoryDeps {
-        skill_manager: AcpSkillManager::new(skill_paths),
+        skill_manager: SkillManager::new(skill_paths),
         provider_repo,
         encryption_key: test_encryption_key(),
         agent_registry,

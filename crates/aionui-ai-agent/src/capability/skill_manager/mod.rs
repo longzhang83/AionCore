@@ -44,7 +44,7 @@ pub struct SkillIndex {
 /// Skills are stored in directories containing a `SKILL.md` file.
 /// The SKILL.md frontmatter provides `name` and `description`.
 /// The body (content after frontmatter) is loaded on demand.
-pub struct AcpSkillManager {
+pub struct SkillManager {
     /// Cached skill definitions keyed by skill name.
     cache: RwLock<HashMap<String, SkillDefinition>>,
     /// Whether discovery has been performed.
@@ -58,7 +58,7 @@ pub struct AcpSkillManager {
     skill_repo: Option<Arc<dyn ISkillRepository>>,
 }
 
-impl AcpSkillManager {
+impl SkillManager {
     pub fn new(paths: Arc<aionui_extension::SkillPaths>) -> Arc<Self> {
         Arc::new(Self {
             cache: RwLock::new(HashMap::new()),
@@ -362,7 +362,7 @@ mod tests {
     async fn new_accepts_skill_paths() {
         let tmp = TempDir::new().unwrap();
         let paths = std::sync::Arc::new(aionui_extension::resolve_skill_paths(tmp.path(), tmp.path()));
-        let mgr = AcpSkillManager::new(paths.clone());
+        let mgr = SkillManager::new(paths.clone());
         assert!(!mgr.is_discovered().await);
     }
 
@@ -447,7 +447,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // AcpSkillManager async tests
+    // SkillManager async tests
     //
     // Discovery-layout tests moved to `tests/skill_manager_integration.rs`
     // because they now need `aionui_extension::BUILTIN_SKILLS_ENV_VAR` to
@@ -458,7 +458,7 @@ mod tests {
     #[tokio::test]
     async fn get_skill_unknown_returns_none() {
         let tmp = TempDir::new().unwrap();
-        let mgr = AcpSkillManager::new(std::sync::Arc::new(aionui_extension::resolve_skill_paths(
+        let mgr = SkillManager::new(std::sync::Arc::new(aionui_extension::resolve_skill_paths(
             tmp.path(),
             tmp.path(),
         )));

@@ -14,7 +14,7 @@ use aionui_realtime::EventBroadcaster;
 use futures_util::FutureExt;
 
 use crate::agent_task::AgentInstance;
-use crate::capability::skill_manager::AcpSkillManager;
+use crate::capability::skill_manager::SkillManager;
 use crate::error::AgentError;
 use crate::factory::context::FactoryContext;
 use crate::persistence::RuntimeSessionSyncService;
@@ -25,7 +25,7 @@ use crate::types::BuildTaskOptions;
 
 /// Dependencies needed by the agent factory to construct agents.
 pub struct AgentFactoryDeps {
-    pub skill_manager: Arc<AcpSkillManager>,
+    pub skill_manager: Arc<SkillManager>,
     pub provider_repo: Arc<dyn IProviderRepository>,
     pub encryption_key: [u8; 32],
     pub agent_registry: Arc<AgentRegistry>,

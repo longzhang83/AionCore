@@ -18,7 +18,7 @@ use serde_json::Value;
 use tokio::sync::broadcast::error::TryRecvError;
 
 use super::agent::sdk_to_snake_value;
-use super::error_mapping::{AcpSendFailure, is_acp_session_not_found, is_missing_resumed_session};
+use super::error_mapping::{ProtocolSendFailure, is_missing_resumed_session, is_protocol_session_not_found};
 use super::legacy_runtime_model::LegacySessionModelState;
 use super::runtime_close::STDERR_PEEK_LINES;
 use tracing::warn;
@@ -172,7 +172,7 @@ impl RuntimeAgentManager {
 
             return match self.reconcile_session(&new_sid).await {
                 Ok(()) => Ok(new_sid),
-                Err(e) if is_acp_session_not_found(&e) => self.rebuild_after_session_not_found(&new_sid, &e).await,
+                Err(e) if is_protocol_session_not_found(&e) => self.rebuild_after_session_not_found(&new_sid, &e).await,
                 Err(e) => Err(e.into()),
             };
         }
@@ -192,7 +192,7 @@ impl RuntimeAgentManager {
             }
             let (load_response, legacy_models) = match self.protocol.load_session(load_req).await {
                 Ok(r) => r,
-                Err(e) if is_acp_session_not_found(&e) => {
+                Err(e) if is_protocol_session_not_found(&e) => {
                     return self.rebuild_after_acp_session_not_found(session_id, e).await;
                 }
                 Err(e) => return Err(e.into()),
@@ -222,7 +222,9 @@ impl RuntimeAgentManager {
 
             return match self.reconcile_session(session_id).await {
                 Ok(()) => Ok(session_id.to_owned()),
-                Err(e) if is_acp_session_not_found(&e) => self.rebuild_after_session_not_found(session_id, &e).await,
+                Err(e) if is_protocol_session_not_found(&e) => {
+                    self.rebuild_after_session_not_found(session_id, &e).await
+                }
                 Err(e) => Err(e.into()),
             };
         }
@@ -238,7 +240,7 @@ impl RuntimeAgentManager {
         self.emit_snapshot_events().await;
         match self.reconcile_session(session_id).await {
             Ok(()) => Ok(session_id.to_owned()),
-            Err(e) if is_acp_session_not_found(&e) => self.rebuild_after_session_not_found(session_id, &e).await,
+            Err(e) if is_protocol_session_not_found(&e) => self.rebuild_after_session_not_found(session_id, &e).await,
             Err(e) => Err(e.into()),
         }
     }
@@ -279,7 +281,7 @@ impl RuntimeAgentManager {
         }
         let fork_response = match self.protocol.fork_session(req).await {
             Ok(r) => r,
-            Err(e) if is_acp_session_not_found(&e) => {
+            Err(e) if is_protocol_session_not_found(&e) => {
                 // NOT rebuild_after_session_not_found: an initial fork must not
                 // silently degrade to a fresh, context-free session.
                 return Err(AgentError::NotFound(format!(
@@ -317,7 +319,7 @@ impl RuntimeAgentManager {
             Ok(()) => Ok(new_sid),
             // Post-fork reconcile hiccups keep the normal resume-era semantics
             // (the fork itself succeeded and is persisted).
-            Err(e) if is_acp_session_not_found(&e) => self.rebuild_after_session_not_found(&new_sid, &e).await,
+            Err(e) if is_protocol_session_not_found(&e) => self.rebuild_after_session_not_found(&new_sid, &e).await,
             Err(e) => Err(e.into()),
         }
     }
@@ -328,10 +330,10 @@ impl RuntimeAgentManager {
         data: &SendMessageData,
         session_id: Option<&str>,
         matched_command: Option<&SlashCommandItem>,
-    ) -> Result<PromptOutcome, AcpSendFailure> {
+    ) -> Result<PromptOutcome, ProtocolSendFailure> {
         let sid = session_id
             .ok_or_else(|| AgentError::internal("Cannot prompt: no session ID available"))
-            .map_err(AcpSendFailure::from)?;
+            .map_err(ProtocolSendFailure::from)?;
 
         let prompt_blocks = {
             use crate::agent_task::IAgentTask as _;
@@ -357,7 +359,7 @@ impl RuntimeAgentManager {
             .protocol
             .prompt(PromptRequest::new(SessionId::new(sid), prompt_blocks))
             .await
-            .map_err(AcpSendFailure::from)?;
+            .map_err(ProtocolSendFailure::from)?;
 
         // End-of-turn usage: agents that never emit UsageUpdate notifications
         // report token usage on the prompt response instead — either via the
@@ -1141,25 +1143,25 @@ mod tests {
         );
     }
 
-    /// The `is_acp_session_not_found` discriminator powers
+    /// The `is_protocol_session_not_found` discriminator powers
     /// `open_session_resume`'s rescue path. Match strictly on the
     /// structured `RuntimeError::SessionNotFound` variant; other ACP failures
     /// must surface to callers instead of triggering a phantom session
     /// rebuild.
     #[test]
-    fn is_acp_session_not_found_matches_session_not_found_only() {
+    fn is_protocol_session_not_found_matches_session_not_found_only() {
         let session_err = RuntimeError::SessionNotFound {
             session_id: "ses-1".into(),
         };
-        assert!(super::is_acp_session_not_found(&session_err));
+        assert!(super::is_protocol_session_not_found(&session_err));
 
         let invalid_params = RuntimeError::InvalidParams {
             message: "Workspace not found".into(),
         };
-        assert!(!super::is_acp_session_not_found(&invalid_params));
+        assert!(!super::is_protocol_session_not_found(&invalid_params));
 
         let auth_required = RuntimeError::AuthRequired;
-        assert!(!super::is_acp_session_not_found(&auth_required));
+        assert!(!super::is_protocol_session_not_found(&auth_required));
     }
 
     #[test]

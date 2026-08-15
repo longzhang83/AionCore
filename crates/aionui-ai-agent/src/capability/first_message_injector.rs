@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use crate::capability::skill_manager::{AcpSkillManager, prepare_first_message_with_skills_index};
+use crate::capability::skill_manager::{SkillManager, prepare_first_message_with_skills_index};
 
 /// Configuration for the first-message injector.
 pub struct InjectionConfig<'a> {
@@ -32,7 +32,7 @@ pub struct InjectionConfig<'a> {
 ///   injected via `prepare_first_message_with_skills_index`.
 pub async fn inject_first_message_prefix(
     content: &str,
-    manager: &Arc<AcpSkillManager>,
+    manager: &Arc<SkillManager>,
     config: InjectionConfig<'_>,
 ) -> String {
     if config.native_skill_support {
@@ -58,9 +58,9 @@ mod tests {
     use aionui_extension::{BUILTIN_SKILLS_ENV_VAR, resolve_skill_paths};
     use tempfile::TempDir;
 
-    fn test_mgr(base: &std::path::Path) -> Arc<AcpSkillManager> {
+    fn test_mgr(base: &std::path::Path) -> Arc<SkillManager> {
         let paths = Arc::new(resolve_skill_paths(base, base));
-        AcpSkillManager::new(paths)
+        SkillManager::new(paths)
     }
 
     /// Point the embedded corpus at an empty dir so tests don't pick up

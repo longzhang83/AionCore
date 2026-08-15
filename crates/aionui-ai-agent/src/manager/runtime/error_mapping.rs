@@ -3,71 +3,71 @@ use crate::protocol::runtime_error::RuntimeError;
 use crate::protocol::runtime_send_error::RuntimeSendError;
 
 #[derive(Debug)]
-pub(super) enum AcpSendFailure {
+pub(super) enum ProtocolSendFailure {
     Agent(AgentError),
-    Acp(RuntimeError),
+    Protocol(RuntimeError),
 }
 
-impl AcpSendFailure {
+impl ProtocolSendFailure {
     #[allow(dead_code)]
     pub(super) fn to_agent_send_error(&self) -> RuntimeSendError {
         match self {
-            AcpSendFailure::Agent(err) => RuntimeSendError::from_agent_error_ref(err),
-            AcpSendFailure::Acp(err) => RuntimeSendError::from_runtime_error_ref(err),
+            ProtocolSendFailure::Agent(err) => RuntimeSendError::from_agent_error_ref(err),
+            ProtocolSendFailure::Protocol(err) => RuntimeSendError::from_runtime_error_ref(err),
         }
     }
 
     pub(super) fn to_agent_send_error_for_backend(&self, backend: Option<&str>) -> RuntimeSendError {
         match self {
-            AcpSendFailure::Agent(err) => RuntimeSendError::from_agent_error_ref_for_backend(err, backend),
-            AcpSendFailure::Acp(err) => RuntimeSendError::from_runtime_error_ref_for_backend(err, backend),
+            ProtocolSendFailure::Agent(err) => RuntimeSendError::from_agent_error_ref_for_backend(err, backend),
+            ProtocolSendFailure::Protocol(err) => RuntimeSendError::from_runtime_error_ref_for_backend(err, backend),
         }
     }
 
     pub(super) fn into_agent_error(self) -> AgentError {
         match self {
-            AcpSendFailure::Agent(err) => err,
-            AcpSendFailure::Acp(err) => AgentError::Runtime(err),
+            ProtocolSendFailure::Agent(err) => err,
+            ProtocolSendFailure::Protocol(err) => AgentError::Runtime(err),
         }
     }
 }
 
-impl From<AgentError> for AcpSendFailure {
+impl From<AgentError> for ProtocolSendFailure {
     fn from(err: AgentError) -> Self {
-        AcpSendFailure::Agent(err)
+        ProtocolSendFailure::Agent(err)
     }
 }
 
-impl From<RuntimeError> for AcpSendFailure {
+impl From<RuntimeError> for ProtocolSendFailure {
     fn from(err: RuntimeError) -> Self {
-        AcpSendFailure::Acp(err)
+        ProtocolSendFailure::Protocol(err)
     }
 }
 
-impl std::fmt::Display for AcpSendFailure {
+impl std::fmt::Display for ProtocolSendFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AcpSendFailure::Agent(err) => std::fmt::Display::fmt(err, f),
-            AcpSendFailure::Acp(err) => f.write_str(&acp_error_public_message(err)),
+            ProtocolSendFailure::Agent(err) => std::fmt::Display::fmt(err, f),
+            ProtocolSendFailure::Protocol(err) => f.write_str(&protocol_error_public_message(err)),
         }
     }
 }
 
-impl std::error::Error for AcpSendFailure {
+impl std::error::Error for ProtocolSendFailure {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            AcpSendFailure::Agent(err) => Some(err),
-            AcpSendFailure::Acp(err) => Some(err),
+            ProtocolSendFailure::Agent(err) => Some(err),
+            ProtocolSendFailure::Protocol(err) => Some(err),
         }
     }
 }
 
-pub(super) fn is_acp_session_not_found(err: &RuntimeError) -> bool {
+pub(super) fn is_protocol_session_not_found(err: &RuntimeError) -> bool {
     matches!(err, RuntimeError::SessionNotFound { .. })
 }
 
 pub(super) fn is_missing_resumed_session(err: &RuntimeError, resumed_session_id: &str) -> bool {
-    is_acp_session_not_found(err)
+    is_protocol_session_not_found(err)
         || matches!(
             err,
             RuntimeError::ResourceNotFound {
@@ -77,7 +77,7 @@ pub(super) fn is_missing_resumed_session(err: &RuntimeError, resumed_session_id:
         )
 }
 
-fn acp_error_public_message(err: &RuntimeError) -> String {
+fn protocol_error_public_message(err: &RuntimeError) -> String {
     match err {
         RuntimeError::AgentInternal { code, .. } => format!("Agent internal error (code {code})"),
         _ => err.to_string(),

@@ -2038,8 +2038,8 @@ fn enrich_acp_error_message(raw: &str, stderr_tail: Option<&str>) -> String {
 
 /// A JSON-RPC error message is "generic" (worth enriching from stderr) when it
 /// carries no actionable detail — the ACP bridges emit these for upstream failures
-/// whose real cause is only on stderr. Matches the legacy `acp_error_public_message`
-/// `AgentInternal` intent without needing the typed SDK error.
+/// whose real cause is only on stderr. Matches the protocol error public-message
+/// mapping's `AgentInternal` intent without needing the typed SDK error.
 fn is_generic_error_message(msg: &str) -> bool {
     let m = msg.trim().to_lowercase();
     m.is_empty()

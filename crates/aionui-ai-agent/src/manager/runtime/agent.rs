@@ -2,7 +2,7 @@ use crate::agent_runtime::AgentRuntime;
 use crate::capability::PromptCtx;
 use crate::capability::cli_process::CliAgentProcess;
 use crate::capability::prompt_pipeline::PromptPipeline;
-use crate::capability::skill_manager::AcpSkillManager;
+use crate::capability::skill_manager::SkillManager;
 use crate::error::AgentError;
 use crate::factory::runtime_assembler::RuntimeSessionParams;
 use crate::manager::process_registry::{register_session_process, unregister_agent_process};
@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
 use tracing::{debug, error, info, warn};
 
-use super::error_mapping::AcpSendFailure;
+use super::error_mapping::ProtocolSendFailure;
 use super::runtime_session_flow::PromptOutcome;
 
 /// The user-visible body inside an [`AgentError`].
@@ -537,7 +537,7 @@ pub struct RuntimeAgentManager {
     pub(super) permission_router: Arc<PermissionRouter>,
 
     /// Shared skill manager — used to discover skills for first-message injection.
-    pub(super) skill_manager: Arc<AcpSkillManager>,
+    pub(super) skill_manager: Arc<SkillManager>,
 
     /// Domain event sender — session aggregate events are forwarded here
     /// for the persistence consumer (`RuntimeSessionSyncService`).
@@ -557,7 +557,7 @@ pub struct RuntimeAgentManager {
 }
 
 impl RuntimeAgentManager {
-    /// Create a new ACP agent manager by spawning a CLI subprocess and
+    /// Create a new runtime agent manager by spawning a CLI subprocess and
     /// establishing an ACP protocol connection.
     ///
     /// `params` is the pre-computed, immutable session bundle assembled by
@@ -567,7 +567,7 @@ impl RuntimeAgentManager {
     /// factory spawns after construction.
     pub async fn build(
         params: Arc<RuntimeSessionParams>,
-        skill_manager: Arc<AcpSkillManager>,
+        skill_manager: Arc<SkillManager>,
         catalog_tx: &CatalogSender,
     ) -> Result<
         (
@@ -584,7 +584,7 @@ impl RuntimeAgentManager {
 
     async fn new(
         params: Arc<RuntimeSessionParams>,
-        skill_manager: Arc<AcpSkillManager>,
+        skill_manager: Arc<SkillManager>,
     ) -> Result<
         (
             Self,
@@ -1248,8 +1248,8 @@ impl RuntimeAgentManager {
     /// forwarded to the CLI. Each hook in the pipeline reads one-shot flags
     /// on `RuntimeAgentSession` (e.g. `pending_session_new_prelude`,
     /// flags) and prepends the appropriate block when set.
-    async fn ensure_session_and_send(&self, data: &SendMessageData) -> Result<PromptOutcome, AcpSendFailure> {
-        let sid = self.ensure_session_opened().await.map_err(AcpSendFailure::from)?;
+    async fn ensure_session_and_send(&self, data: &SendMessageData) -> Result<PromptOutcome, ProtocolSendFailure> {
+        let sid = self.ensure_session_opened().await.map_err(ProtocolSendFailure::from)?;
         self.runtime.reset_for_new_turn(ConversationStatus::Running);
         let raw_user_input = data.content.clone();
         let matched_command = {

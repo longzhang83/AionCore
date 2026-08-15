@@ -14,7 +14,7 @@ use aionui_ai_agent::factory::runtime_assembler::{RuntimeSessionParams, Workspac
 use aionui_ai_agent::manager::runtime::{RuntimeAgentSession, SessionNewPreludeHook};
 use aionui_ai_agent::registry::AgentRegistry;
 use aionui_ai_agent::shared_kernel::ModelId;
-use aionui_ai_agent::{AcpSkillManager, AgentRuntime, RuntimeBuildConfig};
+use aionui_ai_agent::{AgentRuntime, RuntimeBuildConfig, SkillManager};
 use aionui_db::{SqliteAgentMetadataRepository, init_database_memory};
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -79,13 +79,13 @@ async fn fixture_params(
     )
 }
 
-fn fixture_skill_manager() -> Arc<AcpSkillManager> {
+fn fixture_skill_manager() -> Arc<SkillManager> {
     let tmp = tempfile::TempDir::new().unwrap();
     let paths = Arc::new(aionui_extension::resolve_skill_paths(tmp.path(), tmp.path()));
     // tmp dir needs to live until the test finishes.
     // mem::forget is acceptable in test code — we just don't need the Drop cleanup.
     std::mem::forget(tmp);
-    AcpSkillManager::new(paths)
+    SkillManager::new(paths)
 }
 
 fn fixture_runtime() -> AgentRuntime {

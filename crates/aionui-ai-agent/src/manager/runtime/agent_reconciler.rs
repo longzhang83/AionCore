@@ -1,6 +1,6 @@
 use crate::manager::runtime::RuntimeAgentManager;
 
-use crate::manager::runtime::error_mapping::is_acp_session_not_found;
+use crate::manager::runtime::error_mapping::is_protocol_session_not_found;
 use crate::manager::runtime::runtime_mode::normalize_requested_mode_for_available_values;
 use crate::manager::runtime::session::PendingStartupConfigSeedResult;
 use crate::protocol::runtime_error::RuntimeError;
@@ -92,7 +92,7 @@ impl RuntimeAgentManager {
                         ))
                         .await
                     {
-                        if is_acp_session_not_found(&e) {
+                        if is_protocol_session_not_found(&e) {
                             warn!(
                                 conversation_id = %self.params.conversation_id,
                                 mode_id = %normalized,
@@ -113,7 +113,7 @@ impl RuntimeAgentManager {
 
                 ReconcileAction::SetModel { model } => {
                     if let Err(e) = self.protocol.set_model(session_id, model.as_str()).await {
-                        if is_acp_session_not_found(&e) {
+                        if is_protocol_session_not_found(&e) {
                             warn!(
                                 conversation_id = %self.params.conversation_id,
                                 model_id = %model,
@@ -206,7 +206,7 @@ impl RuntimeAgentManager {
                             actions = followup_actions.into();
                         }
                         Err(err) => {
-                            if is_acp_session_not_found(&err) {
+                            if is_protocol_session_not_found(&err) {
                                 warn!(
                                     conversation_id = %self.params.conversation_id,
                                     config_id = %key,

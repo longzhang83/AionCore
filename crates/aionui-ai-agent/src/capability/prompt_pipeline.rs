@@ -6,7 +6,7 @@
 //! execution order; each hook's output feeds the next hook's input.
 
 use crate::agent_runtime::AgentRuntime;
-use crate::capability::skill_manager::AcpSkillManager;
+use crate::capability::skill_manager::SkillManager;
 use crate::factory::runtime_assembler::RuntimeSessionParams;
 use crate::manager::runtime::RuntimeAgentSession;
 use std::sync::Arc;
@@ -16,7 +16,7 @@ use std::sync::Arc;
 pub struct PromptCtx<'a> {
     pub session: &'a mut RuntimeAgentSession,
     pub params: &'a RuntimeSessionParams,
-    pub skill_manager: &'a Arc<AcpSkillManager>,
+    pub skill_manager: &'a Arc<SkillManager>,
     pub runtime: &'a AgentRuntime,
 }
 

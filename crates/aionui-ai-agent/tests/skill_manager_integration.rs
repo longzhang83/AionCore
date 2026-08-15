@@ -16,8 +16,8 @@ use std::fs;
 use std::sync::{Arc, Mutex};
 
 use aionui_ai_agent::{
-    AcpSkillManager, build_skills_index_text, build_system_instructions, detect_skill_load_request,
-    prepare_first_message, prepare_first_message_with_skills_index,
+    SkillManager, build_skills_index_text, build_system_instructions, detect_skill_load_request, prepare_first_message,
+    prepare_first_message_with_skills_index,
 };
 use aionui_db::{ISkillRepository, SqliteSkillRepository, UpsertSkillParams, init_database_memory};
 use aionui_extension::{BUILTIN_SKILLS_ENV_VAR, resolve_skill_paths};
@@ -70,7 +70,7 @@ async fn discover_skills_uses_extension_service_layout() {
     }
 
     let paths = Arc::new(resolve_skill_paths(tmp.path(), &data_dir));
-    let mgr = AcpSkillManager::new(paths);
+    let mgr = SkillManager::new(paths);
 
     // No enabled_skills: opt-in builtin (mermaid) and custom (my-skill) should
     // be skipped. Only the auto-inject builtin (cron) appears.
@@ -109,7 +109,7 @@ async fn get_skill_loads_builtin_body_via_read_builtin_skill() {
     }
 
     let paths = Arc::new(resolve_skill_paths(tmp.path(), &data_dir));
-    let mgr = AcpSkillManager::new(paths);
+    let mgr = SkillManager::new(paths);
     mgr.discover_skills(None, None).await;
 
     let skill = mgr.get_skill("bodyskill").await.unwrap();
@@ -143,7 +143,7 @@ async fn get_skill_loads_custom_body_via_fs_read() {
     }
 
     let paths = Arc::new(resolve_skill_paths(tmp.path(), &data_dir));
-    let mgr = AcpSkillManager::new(paths);
+    let mgr = SkillManager::new(paths);
     let enabled = vec!["mine".to_string()];
     let idx = mgr.discover_skills(Some(&enabled), None).await;
 
@@ -239,7 +239,7 @@ async fn discover_by_names_for_user_ignores_other_users_skills() {
     .unwrap();
 
     let paths = Arc::new(resolve_skill_paths(tmp.path(), &data_dir));
-    let mgr = AcpSkillManager::new_with_repo(paths, repo);
+    let mgr = SkillManager::new_with_repo(paths, repo);
     let requested = vec![
         "current-skill".to_owned(),
         "foreign-skill".to_owned(),
@@ -278,7 +278,7 @@ async fn discover_skills_respects_exclude_builtin() {
     let data_dir = tmp.path().join("data");
     fs::create_dir_all(&data_dir).unwrap();
     let paths = Arc::new(resolve_skill_paths(tmp.path(), &data_dir));
-    let mgr = AcpSkillManager::new(paths);
+    let mgr = SkillManager::new(paths);
     let exclude = vec!["cron".to_string()];
     let idx = mgr.discover_skills(None, Some(&exclude)).await;
     assert!(idx.is_empty(), "excluded auto-inject skill should be dropped");

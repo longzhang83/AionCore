@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use crate::config::{AppConfig, IdentityMode, derive_encryption_key};
 use aionui_ai_agent::{
-    AcpSessionSyncService, AcpSkillManager, ActiveLeaseRegistry, AgentFactoryDeps, AgentRegistry, IWorkerTaskManager,
-    RuntimeTokenService, WorkerTaskManagerImpl, build_agent_factory,
+    AcpSessionSyncService, ActiveLeaseRegistry, AgentFactoryDeps, AgentRegistry, IWorkerTaskManager,
+    RuntimeTokenService, SkillManager, WorkerTaskManagerImpl, build_agent_factory,
 };
 use aionui_auth::{CookieConfig, JwtService, QrTokenStore, RsmAuthConfig, RsmOidcStateStore, resolve_jwt_secret};
 use aionui_common::OnConversationDelete;
@@ -191,7 +191,7 @@ impl AppServices {
         let project_service = ProjectService::new(project_store, work_dir.join("conversations"));
 
         // Skill paths need app resource dir (for builtin rules) + data dir
-        // (for user skills + materialized views). AcpSkillManager uses these
+        // (for user skills + materialized views). SkillManager uses these
         // for first-message skill index/body loading.
         let app_resource_dir = std::env::current_exe()
             .ok()
@@ -235,7 +235,7 @@ impl AppServices {
         ));
 
         let factory = build_agent_factory(AgentFactoryDeps {
-            skill_manager: AcpSkillManager::new_with_repo(skill_paths.clone(), skill_repo.clone()),
+            skill_manager: SkillManager::new_with_repo(skill_paths.clone(), skill_repo.clone()),
             provider_repo,
             encryption_key,
             agent_registry: agent_registry.clone(),

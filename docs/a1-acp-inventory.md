@@ -520,3 +520,34 @@ ACP wire/SDK 术语以及后续 clean-cut slices。
 
 未纳入本切片：`AgentInstance::Acp`、`AgentError::Acp`（已在 Slice 2 改为 `Runtime`）、
 `AcpSendFailure::Acp` 及 wire/SDK、DB、兼容帧、`AcpSkillManager` 命名。
+
+---
+
+## 14. V3 A1 clean-cut Slice 5 提交 1 进度（2026-08-15）
+
+状态：已实现；`aionui-ai-agent` 验证通过，组合 app clippy 受 slice 外既有旧接口引用阻塞。
+
+- capability 类型已中立化：`AcpSkillManager -> SkillManager`，crate root re-export、
+  `AgentFactoryDeps.skill_manager`、`PromptCtx`、first-message injector、`RuntimeAgentManager`、
+  app composition 及 unit/integration fixtures 已同步；未提供旧名 alias。
+- 发送错误类型已中立化：`AcpSendFailure -> ProtocolSendFailure`、
+  `AcpSendFailure::Acp -> ProtocolSendFailure::Protocol`、
+  `is_acp_session_not_found -> is_protocol_session_not_found`、
+  `acp_error_public_message -> protocol_error_public_message`，关联注释与测试名已同步。
+- 未改 dispatcher 命名、`AgentInstance` variant、`AgentType::Acp`、idle policy、`IAgentTask`、
+  ACP wire/SDK、serde、数据库或控制流。未新增日志：本次为纯符号重命名，既有测试与错误映射信号足够。
+
+验证：
+
+- `GOCACHE=/tmp/aionui-gocache /Users/zhanglong/.cargo/bin/cargo test -p aionui-ai-agent`
+  通过（exit 0；932 个单元测试通过，集成测试无失败，12 个既有测试 ignored；既有 npm cache
+  权限警告未影响结果）。
+- `/Users/zhanglong/.cargo/bin/cargo clippy -p aionui-ai-agent -- -D warnings` 通过（exit 0）。
+- `/Users/zhanglong/.cargo/bin/cargo fmt --all -- --check` 仅报告本 slice 外、未修改的
+  `src/agent_task.rs` 与 `src/manager/mod.rs` 既有格式差异；本次涉及文件无格式差异。
+- `/Users/zhanglong/.cargo/bin/cargo clippy -p aionui-ai-agent -p aionui-app -- -D warnings`
+  在未修改的 `aionui-conversation` 处失败（exit 101）：该 crate 仍引用先前 slice 已移除的
+  `AcpError`、`AgentSendError`、`AcpSessionBuildContext` 与旧 session/error variants，共 16 个编译错误。
+- `git diff --check` 通过；`crates/` 内已无本提交四组旧标识符。
+
+未纳入本提交：Slice 5 提交 2 的 dispatcher 改名及后续 clean-cut 工作。

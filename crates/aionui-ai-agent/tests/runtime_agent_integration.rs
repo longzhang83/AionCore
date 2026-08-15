@@ -86,7 +86,7 @@ async fn make_mock_agent(
         tmp_skills.path(),
         tmp_skills.path(),
     ));
-    let skill_manager = aionui_ai_agent::AcpSkillManager::new(skill_paths);
+    let skill_manager = aionui_ai_agent::SkillManager::new(skill_paths);
 
     let db = init_database_memory().await.unwrap();
     let repo = Arc::new(SqliteAgentMetadataRepository::new(db.pool().clone()));
