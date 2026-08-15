@@ -1,4 +1,4 @@
-use aionui_ai_agent::{AcpError, AgentError};
+use aionui_ai_agent::{AgentError, RuntimeError};
 use aionui_db::DbError;
 
 /// Application-level error contract for the conversation domain.
@@ -81,7 +81,7 @@ pub enum ConversationError {
     OpenClawGatewayUnreachable { detail: String },
 
     #[error("ACP error")]
-    Acp(#[from] AcpError),
+    Acp(#[from] RuntimeError),
 }
 
 impl ConversationError {
@@ -174,7 +174,7 @@ impl From<AgentError> for ConversationError {
                 reason,
             },
             AgentError::WorkspacePathRuntimeUnavailable(path) => Self::WorkspacePathRuntimeUnavailable { path },
-            AgentError::Acp(err) => Self::Acp(err),
+            AgentError::Runtime(err) => Self::Acp(err),
             _ => Self::Internal {
                 reason: error.to_string(),
             },
@@ -206,7 +206,7 @@ mod tests {
 
     fn assert_error<E: std::error::Error + Send + Sync + 'static>() {}
 
-    fn assert_from_acp<T: From<AcpError>>() {}
+    fn assert_from_acp<T: From<RuntimeError>>() {}
 
     fn assert_from_agent<T: From<AgentError>>() {}
 

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::config::{AppConfig, IdentityMode, derive_encryption_key};
 use aionui_ai_agent::{
-    AcpSessionSyncService, ActiveLeaseRegistry, AgentFactoryDeps, AgentRegistry, IWorkerTaskManager,
+    ActiveLeaseRegistry, AgentFactoryDeps, AgentRegistry, IWorkerTaskManager, RuntimeSessionSyncService,
     RuntimeTokenService, SkillManager, WorkerTaskManagerImpl, build_agent_factory,
 };
 use aionui_auth::{CookieConfig, JwtService, QrTokenStore, RsmAuthConfig, RsmOidcStateStore, resolve_jwt_secret};
@@ -48,7 +48,7 @@ pub struct AppServices {
     pub task_manager_delete_hook: Option<Arc<dyn OnConversationDelete>>,
     pub agent_registry: Arc<AgentRegistry>,
     pub conversation_repo: Arc<dyn IConversationRepository>,
-    pub acp_session_sync: Arc<AcpSessionSyncService>,
+    pub acp_session_sync: Arc<RuntimeSessionSyncService>,
     /// Raw JWT secret string, used to derive encryption keys.
     pub jwt_secret_raw: String,
     pub data_dir: PathBuf,
@@ -177,7 +177,7 @@ impl AppServices {
 
         let acp_session_repo: Arc<dyn IAcpSessionRepository> =
             Arc::new(SqliteAcpSessionRepository::new(database.pool().clone()));
-        let acp_agent_service = AcpSessionSyncService::new(acp_session_repo.clone());
+        let acp_agent_service = RuntimeSessionSyncService::new(acp_session_repo.clone());
 
         let conversation_repo: Arc<dyn IConversationRepository> =
             Arc::new(SqliteConversationRepository::new(database.pool().clone()));

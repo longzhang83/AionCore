@@ -294,7 +294,7 @@ impl IAgentTask for ToolCallAgent {
         self.event_tx.subscribe()
     }
 
-    async fn send_message(&self, _data: SendMessageData) -> Result<(), aionui_ai_agent::AgentSendError> {
+    async fn send_message(&self, _data: SendMessageData) -> Result<(), aionui_ai_agent::RuntimeSendError> {
         let _ = self.event_tx.send(AgentStreamEvent::ToolCall(ToolCallEventData {
             call_id: "".into(),
             name: "Glob".into(),

@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use aionui_ai_agent::session_context::{
-    AcpSessionBuildContext, AgentSessionContext, AgentSessionKind, AionrsSessionBuildContext,
-    AntigravitySessionBuildContext, ConversationContext, WorkspaceContext,
+    AgentSessionContext, AgentSessionKind, AionrsSessionBuildContext, AntigravitySessionBuildContext,
+    ConversationContext, RuntimeSessionBuildContext, WorkspaceContext,
 };
 use aionui_ai_agent::shared_kernel::{ConfigKey, ConfigValue, ModeId, ModelId, PersistedSessionState};
 use aionui_ai_agent::types::BuildTaskOptions;
@@ -198,7 +198,7 @@ impl<'a> SessionContextBuilder<'a> {
             AgentType::Acp => self
                 .build_acp_context(row, extra, team)
                 .await
-                .map(|context| AgentSessionKind::Acp(Box::new(context))),
+                .map(|context| AgentSessionKind::Runtime(Box::new(context))),
             AgentType::Aionrs => Ok(AgentSessionKind::Aionrs(Box::new(build_aionrs_context(
                 row, extra, team, seed,
             )))),
@@ -232,7 +232,7 @@ impl<'a> SessionContextBuilder<'a> {
         row: &ConversationRow,
         extra: serde_json::Value,
         team: Option<TeamSessionBinding>,
-    ) -> Result<AcpSessionBuildContext, ConversationError> {
+    ) -> Result<RuntimeSessionBuildContext, ConversationError> {
         let mut config: RuntimeBuildConfig =
             serde_json::from_value(extra.clone()).map_err(|e| ConversationError::BadRequest {
                 reason: format!("Invalid ACP build options: {e}"),
@@ -267,7 +267,7 @@ impl<'a> SessionContextBuilder<'a> {
             .load_acp_session_snapshot(&row.user_id, &row.id, &config, session_id.as_deref())
             .await?;
 
-        Ok(AcpSessionBuildContext {
+        Ok(RuntimeSessionBuildContext {
             config,
             team,
             belongs_to_team,
@@ -399,7 +399,7 @@ impl<'a> SessionContextBuilder<'a> {
         options: &mut BuildTaskOptions,
     ) -> Result<(), ConversationError> {
         let user_id = options.context.conversation.user_id.clone();
-        let AgentSessionKind::Acp(ctx) = &mut options.context.kind else {
+        let AgentSessionKind::Runtime(ctx) = &mut options.context.kind else {
             return Ok(());
         };
         let session_row = self
@@ -876,9 +876,9 @@ mod tests {
             .unwrap();
     }
 
-    fn acp_context(context: AgentSessionContext) -> AcpSessionBuildContext {
+    fn acp_context(context: AgentSessionContext) -> RuntimeSessionBuildContext {
         match context.kind {
-            AgentSessionKind::Acp(acp) => *acp,
+            AgentSessionKind::Runtime(acp) => *acp,
             other => panic!("expected ACP context, got {other:?}"),
         }
     }

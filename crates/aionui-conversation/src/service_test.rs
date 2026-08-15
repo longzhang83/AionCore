@@ -14,7 +14,7 @@ use aionui_ai_agent::types::{
     CONVERSATION_RUNTIME_CONTEXT_VERSION, SendMessageData,
 };
 use aionui_ai_agent::{
-    AcpError, AgentAvailabilityFeedbackPort, AgentError, AgentSendError, AgentSessionKind, IWorkerTaskManager,
+    AgentAvailabilityFeedbackPort, AgentError, AgentSessionKind, IWorkerTaskManager, RuntimeError, RuntimeSendError,
     RuntimeTokenService,
 };
 
@@ -3106,7 +3106,7 @@ impl IAgentTask for MockAgent {
     fn subscribe(&self) -> broadcast::Receiver<AgentStreamEvent> {
         self.event_tx.subscribe()
     }
-    async fn send_message(&self, _data: SendMessageData) -> Result<(), AgentSendError> {
+    async fn send_message(&self, _data: SendMessageData) -> Result<(), RuntimeSendError> {
         // Emit finish event so the relay task completes
         let _ = self.event_tx.send(AgentStreamEvent::RunComplete(
             aionui_ai_agent::protocol::events::FinishEventData::default(),
@@ -3277,7 +3277,7 @@ impl IAgentTask for BlockingCancelAgent {
         self.event_tx.subscribe()
     }
 
-    async fn send_message(&self, _data: SendMessageData) -> Result<(), AgentSendError> {
+    async fn send_message(&self, _data: SendMessageData) -> Result<(), RuntimeSendError> {
         self.send_started.notify_waiters();
         self.finish_notify.notified().await;
         let _ = self
@@ -3748,7 +3748,7 @@ struct ScriptedAgent {
     event_tx: broadcast::Sender<AgentStreamEvent>,
     scripts: Mutex<VecDeque<Vec<AgentStreamEvent>>>,
     sent_contents: Mutex<Vec<String>>,
-    send_error: Option<AgentSendError>,
+    send_error: Option<RuntimeSendError>,
 }
 
 impl ScriptedAgent {
@@ -3775,7 +3775,7 @@ impl ScriptedAgent {
         self
     }
 
-    fn with_send_error(mut self, error: AgentSendError) -> Self {
+    fn with_send_error(mut self, error: RuntimeSendError) -> Self {
         self.send_error = Some(error);
         self
     }
@@ -3811,7 +3811,7 @@ impl IAgentTask for ScriptedAgent {
         self.event_tx.subscribe()
     }
 
-    async fn send_message(&self, data: SendMessageData) -> Result<(), AgentSendError> {
+    async fn send_message(&self, data: SendMessageData) -> Result<(), RuntimeSendError> {
         self.sent_contents.lock().unwrap().push(data.content);
         let script = self
             .scripts
@@ -4372,8 +4372,9 @@ async fn set_config_option_evicts_task_when_acp_protocol_is_not_connected() {
     let task_mgr = Arc::new(MockTaskManager::new());
     let (svc, _broadcaster, _repo) = make_service_with_mock_task_manager(task_mgr.clone());
     let conv = svc.create("user_1", make_create_req()).await.unwrap();
-    let agent =
-        Arc::new(MockAgent::new(&conv.id).with_set_config_option_error(AgentError::Acp(AcpError::NotConnected)));
+    let agent = Arc::new(
+        MockAgent::new(&conv.id).with_set_config_option_error(AgentError::Runtime(RuntimeError::NotConnected)),
+    );
     task_mgr.insert_agent(&conv.id, AgentInstance::Mock(agent));
 
     let err = svc
@@ -4389,7 +4390,7 @@ async fn set_config_option_evicts_task_when_acp_protocol_is_not_connected() {
         .expect_err("set_config_option must surface ACP NotConnected");
 
     assert!(
-        matches!(err, ConversationError::Acp(AcpError::NotConnected)),
+        matches!(err, ConversationError::Acp(RuntimeError::NotConnected)),
         "expected ACP NotConnected, got {err:?}"
     );
     assert_eq!(
@@ -5291,7 +5292,7 @@ async fn latest_conversation_error_message_prefers_error_detail() {
 async fn send_message_persists_openclaw_gateway_unreachable_tip_when_turn_build_fails() {
     let (svc, broadcaster, repo, _default_task_mgr) = make_service();
     let task_mgr: Arc<dyn IWorkerTaskManager> = Arc::new(AgentErrorFailingBuildTaskManager::new(AgentError::from(
-        AcpError::StartupCrash {
+        RuntimeError::StartupCrash {
             exit_code: Some(1),
             signal: None,
             stderr: "ACP bridge failed: connect ECONNREFUSED 127.0.0.1:18789".into(),
@@ -5709,7 +5710,7 @@ async fn send_message_does_not_inject_send_error_when_runtime_terminal_exists() 
                 Some(AgentErrorCode::UnknownUpstreamError),
             ))]],
         )
-        .with_send_error(AgentSendError::from_agent_error(AgentError::bad_gateway(
+        .with_send_error(RuntimeSendError::from_agent_error(AgentError::bad_gateway(
             "fallback should not render",
         ))),
     );
@@ -5748,7 +5749,7 @@ async fn send_message_injects_send_error_when_runtime_terminal_missing() {
     let scripted_agent = Arc::new(
         ScriptedAgent::new(&conv.id, vec![vec![]])
             .with_status(None)
-            .with_send_error(AgentSendError::from_agent_error(AgentError::bad_gateway(
+            .with_send_error(RuntimeSendError::from_agent_error(AgentError::bad_gateway(
                 "provider returned 401 invalid api key",
             ))),
     );
@@ -5801,7 +5802,7 @@ async fn send_message_records_agent_availability_feedback_on_send_failure() {
     let scripted_agent = Arc::new(
         ScriptedAgent::new(&conv.id, vec![vec![]])
             .with_status(None)
-            .with_send_error(AgentSendError::from_agent_error(AgentError::bad_gateway(
+            .with_send_error(RuntimeSendError::from_agent_error(AgentError::bad_gateway(
                 "provider returned 401 invalid api key",
             ))),
     );
@@ -5881,7 +5882,7 @@ async fn send_message_recovers_when_finished_task_has_no_runtime_terminal() {
     let scripted_agent = Arc::new(
         ScriptedAgent::new(&conv.id, vec![vec![]])
             .with_status(Some(ConversationStatus::Finished))
-            .with_send_error(AgentSendError::from_agent_error(AgentError::bad_gateway(
+            .with_send_error(RuntimeSendError::from_agent_error(AgentError::bad_gateway(
                 "acp protocol not connected",
             ))),
     );
@@ -6002,7 +6003,7 @@ async fn auto_replay_rebuild_keeps_existing_acp_session_id_in_build_options() {
     assert_eq!(options.len(), 2);
     for options in options {
         match options.context.kind {
-            AgentSessionKind::Acp(ctx) => {
+            AgentSessionKind::Runtime(ctx) => {
                 assert_eq!(ctx.session_id.as_deref(), Some("sess-existing"));
             }
             AgentSessionKind::Aionrs(_) | AgentSessionKind::Antigravity(_) => {
@@ -6561,7 +6562,7 @@ async fn warmup_rejects_legacy_workspace_with_runtime_error_code() {
 async fn warmup_returns_openclaw_gateway_unreachable_when_startup_stderr_matches() {
     let (svc, _broadcaster, _repo, _default_task_mgr) = make_service();
     let task_mgr: Arc<dyn IWorkerTaskManager> = Arc::new(AgentErrorFailingBuildTaskManager::new(AgentError::from(
-        AcpError::StartupCrash {
+        RuntimeError::StartupCrash {
             exit_code: Some(1),
             signal: None,
             stderr: "ACP bridge failed: connect ECONNREFUSED 127.0.0.1:18789".into(),
@@ -6589,7 +6590,7 @@ async fn warmup_returns_openclaw_gateway_unreachable_when_startup_stderr_matches
 async fn warmup_keeps_generic_error_for_non_openclaw_gateway_signature() {
     let (svc, _broadcaster, _repo, _default_task_mgr) = make_service();
     let task_mgr: Arc<dyn IWorkerTaskManager> = Arc::new(AgentErrorFailingBuildTaskManager::new(AgentError::from(
-        AcpError::StartupCrash {
+        RuntimeError::StartupCrash {
             exit_code: Some(1),
             signal: None,
             stderr: "ACP bridge failed: connect ECONNREFUSED 127.0.0.1:18789".into(),
@@ -7370,7 +7371,7 @@ async fn assistant_backed_acp_build_options_include_snapshot_rule_as_preset_cont
     let options = svc.build_task_options(&row).await.unwrap();
 
     match options.context.kind {
-        AgentSessionKind::Acp(ctx) => {
+        AgentSessionKind::Runtime(ctx) => {
             assert_eq!(ctx.config.preset_context.as_deref(), Some("assistant rule body"));
         }
         AgentSessionKind::Aionrs(_) | AgentSessionKind::Antigravity(_) => {
@@ -7414,7 +7415,7 @@ async fn assistant_backed_aionrs_build_options_include_snapshot_rule_as_preset_r
     let options = svc.build_task_options(&row).await.unwrap();
 
     match options.context.kind {
-        AgentSessionKind::Acp(_) | AgentSessionKind::Antigravity(_) => {
+        AgentSessionKind::Runtime(_) | AgentSessionKind::Antigravity(_) => {
             panic!("test conversation should build Aionrs options")
         }
         AgentSessionKind::Aionrs(ctx) => {
@@ -8243,7 +8244,7 @@ async fn seed_aionrs_conversation_with_snapshot(
 fn aionrs_session_mode(options: &BuildTaskOptions) -> Option<String> {
     match &options.context.kind {
         AgentSessionKind::Aionrs(ctx) => ctx.config.session_mode.clone(),
-        AgentSessionKind::Acp(_) | AgentSessionKind::Antigravity(_) => panic!("expected Aionrs build options"),
+        AgentSessionKind::Runtime(_) | AgentSessionKind::Antigravity(_) => panic!("expected Aionrs build options"),
     }
 }
 

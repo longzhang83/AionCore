@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use aionui_ai_agent::types::{BuildTaskOptions, SendMessageData};
 use aionui_ai_agent::{
-    AgentError, AgentInstance, AgentSendError, AgentSessionKind, IWorkerTaskManager, RequiredFullAutoApplication,
+    AgentError, AgentInstance, AgentSessionKind, IWorkerTaskManager, RequiredFullAutoApplication, RuntimeSendError,
 };
 use aionui_common::{AgentType, ConversationStatus, ErrorChain, now_ms};
 use aionui_db::models::ConversationRow;
@@ -22,7 +22,7 @@ use aionui_api_types::AgentErrorCode;
 
 fn acp_backend_from_build_options(options: &BuildTaskOptions) -> Option<&str> {
     match &options.context.kind {
-        AgentSessionKind::Acp(ctx) => ctx.config.backend.as_deref(),
+        AgentSessionKind::Runtime(ctx) => ctx.config.backend.as_deref(),
         AgentSessionKind::Antigravity(ctx) => ctx.config.backend.as_deref(),
         AgentSessionKind::Aionrs(_) => None,
     }
@@ -113,7 +113,7 @@ impl ConversationTurnOrchestrator {
             Ok(agent) => agent,
             Err(err) => {
                 let top_level_code = agent_error_top_level_code(&err);
-                let send_error = AgentSendError::from_agent_error_ref_for_backend(&err, backend.as_deref());
+                let send_error = RuntimeSendError::from_agent_error_ref_for_backend(&err, backend.as_deref());
                 let top_level_code = if send_error.is_openclaw_gateway_unreachable() {
                     "USER_AGENT_OPENCLAW_GATEWAY_UNREACHABLE"
                 } else {
@@ -174,7 +174,7 @@ impl ConversationTurnOrchestrator {
         {
             let top_level_code = err.error_code();
             let failure_message = err.to_string();
-            let send_error = AgentSendError::from_agent_error(err.to_agent_error());
+            let send_error = RuntimeSendError::from_agent_error(err.to_agent_error());
             error!(
                 conversation_id = %input.conv_id,
                 turn_id = %input.turn_id,
@@ -309,7 +309,7 @@ impl ConversationTurnOrchestrator {
                     Err(err) => {
                         let top_level_code = agent_error_top_level_code(&err);
                         let failure_message = err.to_string();
-                        let send_error = AgentSendError::from_agent_error(err);
+                        let send_error = RuntimeSendError::from_agent_error(err);
                         error!(
                             conversation_id = %input.conv_id,
                             turn_id = %input.turn_id,
@@ -555,7 +555,7 @@ impl ConversationTurnOrchestrator {
                     if attempt_result.outcome.attempt.terminal_error_deferred
                         && let Some(data) = attempt_result.outcome.attempt.terminal_error.clone()
                     {
-                        let send_error = AgentSendError::from_stream_error_data(data);
+                        let send_error = RuntimeSendError::from_stream_error_data(data);
                         self.service
                             .persist_and_broadcast_send_failure_tip(
                                 &input.user_id,
@@ -627,7 +627,7 @@ impl ConversationTurnOrchestrator {
 
 fn availability_agent_id(options: &BuildTaskOptions) -> Option<String> {
     match &options.context.kind {
-        AgentSessionKind::Acp(context) => context
+        AgentSessionKind::Runtime(context) => context
             .config
             .agent_id
             .as_deref()
@@ -765,7 +765,7 @@ async fn apply_required_runtime_mode(
     Ok(RequiredFullAutoApplication::Applied { effective })
 }
 
-fn send_error_display_message(error: &AgentSendError) -> String {
+fn send_error_display_message(error: &RuntimeSendError) -> String {
     error
         .stream_error()
         .detail

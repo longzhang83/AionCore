@@ -6,7 +6,7 @@ use std::sync::Arc;
 use aionui_ai_agent::session_context::{AgentSessionContext, AgentSessionKind};
 use aionui_ai_agent::types::BuildTaskOptions;
 use aionui_ai_agent::{
-    ActiveLeaseRegistry, AgentAvailabilityFeedbackPort, AgentError, AgentInstance, AgentSendError, IWorkerTaskManager,
+    ActiveLeaseRegistry, AgentAvailabilityFeedbackPort, AgentError, AgentInstance, IWorkerTaskManager, RuntimeSendError,
     RuntimeTokenScope, RuntimeTokenService, TEAM_RUNTIME_TOKEN_SESSION_GENERATION,
 };
 
@@ -3389,7 +3389,7 @@ impl ConversationService {
                     "Failed to build task options for message send"
                 );
                 let top_level_code = err.error_code();
-                let send_error = AgentSendError::from_agent_error(err.to_agent_error());
+                let send_error = RuntimeSendError::from_agent_error(err.to_agent_error());
                 self.persist_and_broadcast_send_failure_tip(
                     user_id,
                     conversation_id,
@@ -3504,7 +3504,7 @@ impl ConversationService {
             Ok(opts) => opts,
             Err(err) => {
                 let top_level_code = err.error_code();
-                let send_error = AgentSendError::from_agent_error(err.to_agent_error());
+                let send_error = RuntimeSendError::from_agent_error(err.to_agent_error());
                 self.persist_and_broadcast_send_failure_tip(
                     &request.user_id,
                     &request.conversation_id,
@@ -3583,7 +3583,7 @@ impl ConversationService {
         user_id: &str,
         conversation_id: &str,
         turn_id: &str,
-        err: &AgentSendError,
+        err: &RuntimeSendError,
         top_level_code: Option<&'static str>,
     ) {
         let Some(row) = self
@@ -3898,7 +3898,7 @@ impl ConversationService {
         let agent = match task_manager.get_or_build_task(conversation_id, build_opts).await {
             Ok(agent) => agent,
             Err(err) => {
-                let send_error = AgentSendError::from_agent_error_ref_for_backend(&err, backend.as_deref());
+                let send_error = RuntimeSendError::from_agent_error_ref_for_backend(&err, backend.as_deref());
                 if send_error.is_openclaw_gateway_unreachable() {
                     warn!(
                         conversation_id = %conversation_id,
@@ -3930,7 +3930,7 @@ impl ConversationService {
     }
 }
 
-fn send_error_display_message(error: &AgentSendError) -> String {
+fn send_error_display_message(error: &RuntimeSendError) -> String {
     error
         .stream_error()
         .detail
@@ -3982,7 +3982,7 @@ pub(crate) fn agent_error_top_level_code(error: &AgentError) -> &'static str {
         AgentError::Forbidden(_) => "FORBIDDEN",
         AgentError::NotFound(_) => "NOT_FOUND",
         AgentError::Conflict(_) => "CONFLICT",
-        AgentError::BadGateway(_) | AgentError::Acp(_) => "BAD_GATEWAY",
+        AgentError::BadGateway(_) | AgentError::Runtime(_) => "BAD_GATEWAY",
         AgentError::Timeout(_) => "TIMEOUT",
         AgentError::RateLimited => "RATE_LIMITED",
         AgentError::ConversationArchived(_) => "CONVERSATION_ARCHIVED",
@@ -4527,7 +4527,7 @@ fn is_dated_auto_workspace_relative_path(relative: &Path) -> bool {
 
 fn context_backend_value(context: &AgentSessionContext) -> Option<serde_json::Value> {
     match &context.kind {
-        AgentSessionKind::Acp(acp) => acp
+        AgentSessionKind::Runtime(acp) => acp
             .config
             .backend
             .as_ref()
@@ -4539,7 +4539,7 @@ fn context_backend_value(context: &AgentSessionContext) -> Option<serde_json::Va
 
 fn build_options_backend(options: &BuildTaskOptions) -> Option<&str> {
     match &options.context.kind {
-        AgentSessionKind::Acp(ctx) => ctx.config.backend.as_deref(),
+        AgentSessionKind::Runtime(ctx) => ctx.config.backend.as_deref(),
         AgentSessionKind::Antigravity(ctx) => ctx.config.backend.as_deref(),
         AgentSessionKind::Aionrs(_) => None,
     }

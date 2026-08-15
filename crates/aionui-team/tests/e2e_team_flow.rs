@@ -416,10 +416,10 @@ impl IAgentTask for RecordingAgent {
     fn subscribe(&self) -> broadcast::Receiver<AgentStreamEvent> {
         self.event_tx.subscribe()
     }
-    async fn send_message(&self, data: SendMessageData) -> Result<(), aionui_ai_agent::AgentSendError> {
+    async fn send_message(&self, data: SendMessageData) -> Result<(), aionui_ai_agent::RuntimeSendError> {
         self.sent.lock().unwrap().push(data);
         match &self.fail_with {
-            Some(msg) => Err(aionui_ai_agent::AgentSendError::from_agent_error(AgentError::internal(
+            Some(msg) => Err(aionui_ai_agent::RuntimeSendError::from_agent_error(AgentError::internal(
                 msg.clone(),
             ))),
             None => Ok(()),

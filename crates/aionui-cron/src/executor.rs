@@ -2737,7 +2737,7 @@ mod tests {
             self.event_tx.subscribe()
         }
 
-        async fn send_message(&self, data: SendMessageData) -> Result<(), aionui_ai_agent::AgentSendError> {
+        async fn send_message(&self, data: SendMessageData) -> Result<(), aionui_ai_agent::RuntimeSendError> {
             self.send_calls.fetch_add(1, Ordering::Relaxed);
             self.sent_messages.write().await.push(data);
             if let Some(content) = self.response_text.as_ref() {

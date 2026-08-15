@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use aionui_ai_agent::session_context::{
-    AcpSessionBuildContext, AgentSessionContext, AgentSessionKind, ConversationContext, WorkspaceContext,
+    AgentSessionContext, AgentSessionKind, ConversationContext, RuntimeSessionBuildContext, WorkspaceContext,
 };
 use aionui_ai_agent::task_manager::AgentFactory;
 use aionui_ai_agent::types::BuildTaskOptions;
@@ -599,7 +599,7 @@ impl TeamConversationProvisioningPort for FakeConversationPorts {
             skills: config.skills.clone(),
             runtime_env: Vec::new(),
             team: team.clone(),
-            kind: AgentSessionKind::Acp(Box::new(AcpSessionBuildContext {
+            kind: AgentSessionKind::Runtime(Box::new(RuntimeSessionBuildContext {
                 config,
                 team: team.clone(),
                 belongs_to_team: team.is_some(),
@@ -1249,7 +1249,7 @@ mod mock_agent {
         fn subscribe(&self) -> broadcast::Receiver<AgentStreamEvent> {
             self.event_tx.subscribe()
         }
-        async fn send_message(&self, _data: SendMessageData) -> Result<(), aionui_ai_agent::AgentSendError> {
+        async fn send_message(&self, _data: SendMessageData) -> Result<(), aionui_ai_agent::RuntimeSendError> {
             Ok(())
         }
         async fn cancel(&self) -> Result<(), AgentError> {
@@ -1414,7 +1414,7 @@ fn test_acp_build_options(conversation_id: String, workspace: String) -> BuildTa
         skills: Vec::new(),
         runtime_env: Vec::new(),
         team: None,
-        kind: AgentSessionKind::Acp(Box::new(AcpSessionBuildContext {
+        kind: AgentSessionKind::Runtime(Box::new(RuntimeSessionBuildContext {
             config: RuntimeBuildConfig::default(),
             team: None,
             belongs_to_team: false,
@@ -6129,7 +6129,7 @@ async fn d9_ensure_session_persists_team_mcp_stdio_config() {
                 .and_then(|team| team.mcp.as_ref())
                 .is_some_and(|mcp| mcp.stdio.port > 0 && !mcp.stdio.slot_id.is_empty());
             let compat_has_cfg = match &context.kind {
-                AgentSessionKind::Acp(acp) => {
+                AgentSessionKind::Runtime(acp) => {
                     assert!(acp.belongs_to_team);
                     assert!(acp.team.is_some(), "ACP build context must carry typed team binding");
                     acp.config

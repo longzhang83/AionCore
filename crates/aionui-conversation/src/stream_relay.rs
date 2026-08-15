@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use aionui_ai_agent::protocol::events::{ErrorEventData, TipType, TipsEventData};
-use aionui_ai_agent::{AgentSendError, AgentStreamEvent, protocol::events::ThinkingEventData};
+use aionui_ai_agent::{AgentStreamEvent, RuntimeSendError, protocol::events::ThinkingEventData};
 
 use crate::response_middleware::{ISkillLoadService, MessageMiddleware, MiddlewareResult};
 use crate::skill_resolver::{LoadedAgentSkill, SkillResolver};
@@ -267,7 +267,7 @@ impl StreamRelay {
     pub async fn consume_with_send_error(
         self,
         rx: broadcast::Receiver<AgentStreamEvent>,
-        send_error_rx: oneshot::Receiver<AgentSendError>,
+        send_error_rx: oneshot::Receiver<RuntimeSendError>,
     ) -> RelayOutcome {
         self.consume_inner(rx, Some(send_error_rx)).await
     }
@@ -275,7 +275,7 @@ impl StreamRelay {
     async fn consume_inner(
         self,
         mut rx: broadcast::Receiver<AgentStreamEvent>,
-        mut send_error_rx: Option<oneshot::Receiver<AgentSendError>>,
+        mut send_error_rx: Option<oneshot::Receiver<RuntimeSendError>>,
     ) -> RelayOutcome {
         let started_at = now_ms();
         info!(
@@ -295,7 +295,7 @@ impl StreamRelay {
         let mut first_agent_event_logged = false;
         let mut first_visible_output_logged = false;
         let mut send_error_done = send_error_rx.is_none();
-        let mut pending_send_error: Option<AgentSendError> = None;
+        let mut pending_send_error: Option<RuntimeSendError> = None;
         let mut attempt = TurnAttemptSummary::default();
 
         loop {
@@ -2037,7 +2037,7 @@ mod tests {
         let rx = tx.subscribe();
         let (send_error_tx, send_error_rx) = tokio::sync::oneshot::channel();
         send_error_tx
-            .send(AgentSendError::from_agent_error(AgentError::bad_gateway(
+            .send(RuntimeSendError::from_agent_error(AgentError::bad_gateway(
                 "provider returned 401 invalid api key",
             )))
             .unwrap();
@@ -2098,7 +2098,7 @@ mod tests {
 
         let rx = tx.subscribe();
         let send_error =
-            AgentSendError::from_agent_error(AgentError::bad_gateway("provider returned 401 invalid api key"));
+            RuntimeSendError::from_agent_error(AgentError::bad_gateway("provider returned 401 invalid api key"));
         tx.send(AgentStreamEvent::RunError(ErrorEventData::legacy(
             "stream already emitted",
             None,
@@ -2140,7 +2140,7 @@ mod tests {
         let rx = tx.subscribe();
         let (send_error_tx, send_error_rx) = tokio::sync::oneshot::channel();
         send_error_tx
-            .send(AgentSendError::from_agent_error(AgentError::bad_gateway(
+            .send(RuntimeSendError::from_agent_error(AgentError::bad_gateway(
                 "provider returned 401 invalid api key",
             )))
             .unwrap();

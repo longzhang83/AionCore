@@ -551,3 +551,34 @@ ACP wire/SDK 术语以及后续 clean-cut slices。
 - `git diff --check` 通过；`crates/` 内已无本提交四组旧标识符。
 
 未纳入本提交：Slice 5 提交 2 的 dispatcher 改名及后续 clean-cut 工作。
+
+---
+
+## 15. V3 A1 clean-cut 跨 crate 消费方闭环（2026-08-15）
+
+状态：已实现并完成 workspace check；指定消费 crate 测试通过，全 workspace test 受禁改 crate 内旧测试引用阻断。
+
+- `aionui-conversation`、`aionui-team`、`aionui-app`、`aionui-channel`、`aionui-cron` 的生产代码与
+  测试消费点已迁移到 `RuntimeError`、`RuntimeSendError`、`RuntimeSessionBuildContext`、
+  `RuntimeSessionSyncService`、`AgentError::Runtime`、`AgentSessionKind::Runtime`。
+- 本轮只迁移消费方，没有修改 `aionui-ai-agent`。`aionui-conversation/src/service.rs` 中既有
+  `AgentInstance::Session` / `AgentInstance::Acp` 分支按提交边界保留：当前位于 608、609、3668 行，
+  留给 Slice 5 提交 2 处理。
+- 未新增日志：本次是编译期符号与模块路径迁移，编译器、测试和既有运行时错误信号足够定位问题。
+
+验证：
+
+- `GOCACHE=/tmp/aionui-gocache /Users/zhanglong/.cargo/bin/cargo check --workspace` 通过（exit 0）。
+- `GOCACHE=/tmp/aionui-gocache /Users/zhanglong/.cargo/bin/cargo test -p aionui-conversation -p aionui-team -p aionui-app`
+  通过（exit 0；包含三个 crate 的 unit、integration 与 doc tests，既有 ignored 测试保持 ignored）。
+- `git diff --check` 通过。
+- `GOCACHE=/tmp/aionui-gocache /Users/zhanglong/.cargo/bin/cargo test --workspace` 在编译
+  `crates/aionui-ai-agent/tests/agent_types_integration.rs` 时失败（exit 101）：155、182 行仍使用
+  `AgentSessionKind::Acp`，182 行仍使用 `AcpSessionBuildContext`。该文件属于本轮明确禁止修改的
+  `aionui-ai-agent`，因此未越界修复。
+- `/Users/zhanglong/.cargo/bin/cargo fmt --all -- --check` 仅报告禁改的 `aionui-ai-agent/src/agent_task.rs`
+  与 `aionui-ai-agent/src/manager/mod.rs` 既有格式差异；本轮修改文件已按报告修正且
+  `git diff --check` 通过。
+
+未纳入本提交：`AgentInstance` dispatcher variant 改名，以及 `aionui-ai-agent` crate 内部旧 integration
+test 消费点迁移。

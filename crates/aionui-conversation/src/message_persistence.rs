@@ -1,4 +1,4 @@
-use aionui_ai_agent::AgentSendError;
+use aionui_ai_agent::RuntimeSendError;
 use aionui_common::{ErrorChain, now_ms};
 use aionui_db::models::MessageRow;
 use tracing::warn;
@@ -11,7 +11,7 @@ impl ConversationService {
         &self,
         user_id: &str,
         conversation_id: &str,
-        err: &AgentSendError,
+        err: &RuntimeSendError,
         top_level_code: Option<&'static str>,
     ) -> Option<MessageRow> {
         if !self

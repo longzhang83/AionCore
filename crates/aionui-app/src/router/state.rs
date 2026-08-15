@@ -996,7 +996,7 @@ mod tests {
     use crate::AppConfig;
     use aionui_ai_agent::types::{AIONUI_BASE_URL_ENV, AIONUI_HELPER_BIN_ENV, BuildTaskOptions, SendMessageData};
     use aionui_ai_agent::{
-        AgentError, AgentInstance, AgentSendError, AgentStreamEvent, IAgentTask, IMockAgent, IWorkerTaskManager,
+        AgentError, AgentInstance, AgentStreamEvent, IAgentTask, IMockAgent, IWorkerTaskManager, RuntimeSendError,
         WorkerTaskManagerImpl,
     };
     use aionui_api_types::{CreateConversationRequest, SendMessageRequest};
@@ -1041,7 +1041,7 @@ mod tests {
             tx.subscribe()
         }
 
-        async fn send_message(&self, _data: SendMessageData) -> Result<(), AgentSendError> {
+        async fn send_message(&self, _data: SendMessageData) -> Result<(), RuntimeSendError> {
             Ok(())
         }
 

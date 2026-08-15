@@ -2283,7 +2283,7 @@ mod tests {
 
     use aionui_ai_agent::types::{BuildTaskOptions, SendMessageData};
     use aionui_ai_agent::{
-        ActiveLeaseRegistry, AgentError, AgentInstance, AgentSendError, AgentStreamEvent, IAgentTask, IMockAgent,
+        ActiveLeaseRegistry, AgentError, AgentInstance, AgentStreamEvent, IAgentTask, IMockAgent, RuntimeSendError,
         IWorkerTaskManager, IdleCleanupCoordinator,
     };
     use aionui_api_types::{AddAgentRequest, ConfigOptionConfirmation, SetConfigOptionResponse};
@@ -2384,7 +2384,7 @@ mod tests {
             self.event_tx.subscribe()
         }
 
-        async fn send_message(&self, _data: SendMessageData) -> Result<(), AgentSendError> {
+        async fn send_message(&self, _data: SendMessageData) -> Result<(), RuntimeSendError> {
             Ok(())
         }
 

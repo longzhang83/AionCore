@@ -9,7 +9,7 @@
 
 use std::path::Component;
 
-use aionui_ai_agent::{AcpError, AgentError};
+use aionui_ai_agent::{AgentError, RuntimeError};
 use aionui_api_types::{
     ConfigOptionConfirmation, GetConfigOptionsResponse, SetConfigOptionRequest, SetConfigOptionResponse,
     SideQuestionRequest, SideQuestionResponse, SlashCommandItem, WorkspaceBrowseQuery, WorkspaceEntry,
@@ -58,7 +58,7 @@ impl ConversationService {
         let agent = self.task(conversation_id)?;
         let response = match agent.set_config_option(option_id, &req.value).await {
             Ok(response) => response,
-            Err(err @ AgentError::Acp(AcpError::NotConnected)) => {
+            Err(err @ AgentError::Runtime(RuntimeError::NotConnected)) => {
                 warn!(
                     conversation_id,
                     option_id,
