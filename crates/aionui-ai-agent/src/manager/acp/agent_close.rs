@@ -8,7 +8,7 @@
 //!
 //! Security note: `peek_stderr_tail` returns raw subprocess stderr that
 //! may carry secrets. The only safe consumer is
-//! [`stderr_error_extractor::extract_error_message`], which filters
+//! [`runtime_error_extractor::extract_error_message`], which filters
 //! through an allowlist before any string reaches the
 //! [`CloseReason::ProcessExited::redacted_summary`] field. Raw stderr
 //! must NEVER be Display'd into HTTP responses or WebSocket events; it
@@ -75,7 +75,7 @@ impl AcpAgentManager {
         // Read the last STDERR_PEEK_LINES lines of the child's stderr (cheap;
         // ring buffer is bounded to 8 KiB ≈ a few hundred lines max).
         let tail = self.process.peek_stderr_tail(STDERR_PEEK_LINES).await;
-        super::stderr_error_extractor::extract_error_message(&tail)
+        super::runtime_error_extractor::extract_error_message(&tail)
     }
 
     /// Construct a [`CloseReason`] for a `send_message` failure. Captures
@@ -89,7 +89,7 @@ impl AcpAgentManager {
     ///    directly from the `CliAgentProcess`. Even if the SDK rolled the
     ///    failure up as a generic `AgentInternal`, the exit metadata is
     ///    the actionable detail. The stderr tail is run through the
-    ///    redaction allowlist (see [`stderr_error_extractor`]) so only
+    ///    redaction allowlist (see [`runtime_error_extractor`]) so only
     ///    user-safe substrings reach the toast — raw stderr never leaves
     ///    `peek_stderr_tail`.
     /// 2. **Process still alive**: fall back to the existing
@@ -104,7 +104,7 @@ impl AcpAgentManager {
             // Redaction: extractor returns `None` unless the line matches the
             // allowlist. Empty `redacted_summary` is fine —
             // `CloseReason::user_facing_message` omits the trailing colon then.
-            let redacted_summary = super::stderr_error_extractor::extract_error_message(&tail).unwrap_or_default();
+            let redacted_summary = super::runtime_error_extractor::extract_error_message(&tail).unwrap_or_default();
             log_acp_process_exit(
                 &self.params.conversation_id,
                 self.agent_id(),
@@ -237,7 +237,7 @@ mod tests {
             let (exit_code, signal) = exit_status_parts(Some(status));
             let tail = proc.peek_stderr_tail(super::STDERR_PEEK_LINES).await;
             let redacted_summary =
-                crate::manager::acp::stderr_error_extractor::extract_error_message(&tail).unwrap_or_default();
+                crate::manager::acp::runtime_error_extractor::extract_error_message(&tail).unwrap_or_default();
             return CloseReason::ProcessExited {
                 exit_code,
                 signal,
@@ -251,7 +251,7 @@ mod tests {
         let is_default_internal = display.starts_with(SDK_DEFAULT_BAD_GATEWAY_PREFIX) && display.ends_with(')');
         if is_default_internal {
             let tail = proc.peek_stderr_tail(super::STDERR_PEEK_LINES).await;
-            if let Some(extracted) = crate::manager::acp::stderr_error_extractor::extract_error_message(&tail) {
+            if let Some(extracted) = crate::manager::acp::runtime_error_extractor::extract_error_message(&tail) {
                 return CloseReason::Failed { display: extracted };
             }
         }

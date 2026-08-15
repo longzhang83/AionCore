@@ -10,7 +10,7 @@ use super::{ConfigKey, ConfigValue, ModeId, ModelId};
 /// the agent supports (mode list, model list, config schema) come from
 /// the CLI's session response after initialization.
 ///
-/// Shared between the factory (seeds `AcpSessionParams`), the aggregate
+/// Shared between the factory (seeds `RuntimeSessionParams`), the aggregate
 /// root (`AcpSession::preload_persisted`), and the persistence consumer
 /// (`AcpSessionSyncService::load_snapshot_state`), so it lives in
 /// `shared_kernel` rather than any of those layers.

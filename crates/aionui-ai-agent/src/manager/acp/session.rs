@@ -8,12 +8,12 @@ use agent_client_protocol::schema::v1::{
 };
 
 use super::agent_event_tracker::AcpSessionEvent;
-use super::agent_reconcile::ReconcileAction;
-use super::config_option_catalog::{
+use super::agent_reconciler::ReconcileAction;
+use super::runtime_config_catalog::{
     derive_models_from_config_options, derive_modes_from_config_options, merge_config_options,
 };
-use super::config_options::ConfigSnapshot;
-use super::legacy_session_model::LegacySessionModelState;
+use super::runtime_config::ConfigSnapshot;
+use super::legacy_runtime_model::LegacySessionModelState;
 use crate::protocol::error::CloseReason;
 use crate::shared_kernel::{ConfigKey, ConfigValue, ModeId, ModelId, PersistedSessionState, SessionId};
 

@@ -518,7 +518,7 @@ impl AgentInstance {
 /// [`AgentInstance::get_model`]. Mirrors the helper formerly living in
 /// `services/agent.rs`; do not duplicate — if the shape of
 /// `ModelInfoPayload` changes, update it here.
-fn map_sdk_model_to_payload(m: crate::manager::acp::legacy_session_model::LegacySessionModelState) -> ModelInfoPayload {
+fn map_sdk_model_to_payload(m: crate::manager::acp::legacy_runtime_model::LegacySessionModelState) -> ModelInfoPayload {
     let available: Vec<ModelInfoEntry> = m
         .available_models
         .iter()

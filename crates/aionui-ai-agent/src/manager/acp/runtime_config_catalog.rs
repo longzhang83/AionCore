@@ -6,7 +6,7 @@ use aionui_api_types::{AgentHandshake, ModelInfoEntry, ModelInfoPayload};
 use aionui_common::normalize_keys_to_snake_case;
 use serde_json::{Map, Value};
 
-use super::legacy_session_model::{LegacyModelEntry, LegacySessionModelState};
+use super::legacy_runtime_model::{LegacyModelEntry, LegacySessionModelState};
 
 pub(crate) fn derive_modes_from_config_options(options: &[SessionConfigOption]) -> Option<SessionModeState> {
     let select = find_select(options, &["mode", "modes"], &SessionConfigOptionCategory::Mode)?;

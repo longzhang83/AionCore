@@ -4,7 +4,7 @@ use crate::capability::cli_process::CliAgentProcess;
 use crate::capability::prompt_pipeline::PromptPipeline;
 use crate::capability::skill_manager::AcpSkillManager;
 use crate::error::AgentError;
-use crate::factory::acp_assembler::AcpSessionParams;
+use crate::factory::runtime_assembler::RuntimeSessionParams;
 use crate::manager::acp::{AcpSession, AcpSessionEvent, PermissionRouter, SessionNewPreludeHook};
 use crate::manager::process_registry::{register_session_process, unregister_agent_process};
 use crate::protocol::acp::{AcpProtocol, PermissionRequest};
@@ -76,12 +76,12 @@ fn build_acp_final_input_dump_value(
     })
 }
 
-use super::config_option_catalog::{extract_models_from_value, extract_modes_from_value};
-use super::config_options::{ConfigSetPath, ConfigSetPathError, ConfigSnapshot, resolve_set_path};
-use super::legacy_session_model::LegacySessionModelState;
-use super::mode_normalize::normalize_requested_mode;
-use super::mode_normalize::normalize_requested_mode_for_available_values;
-use super::mode_normalize::{RequiredFullAutoMode, resolve_required_full_auto_mode};
+use super::runtime_config_catalog::{extract_models_from_value, extract_modes_from_value};
+use super::runtime_config::{ConfigSetPath, ConfigSetPathError, ConfigSnapshot, resolve_set_path};
+use super::legacy_runtime_model::LegacySessionModelState;
+use super::runtime_mode::normalize_requested_mode;
+use super::runtime_mode::normalize_requested_mode_for_available_values;
+use super::runtime_mode::{RequiredFullAutoMode, resolve_required_full_auto_mode};
 
 /// Grace period before force-killing an ACP process (ms).
 const ACP_KILL_GRACE_MS: u64 = 500;
@@ -147,7 +147,7 @@ impl AcpStartupConnectError {
 }
 
 async fn spawn_and_connect_acp(
-    params: &AcpSessionParams,
+    params: &RuntimeSessionParams,
     runtime: &AgentRuntime,
 ) -> Result<AcpStartupConnection, AgentError> {
     let mut corrupt_npx_cache_repair = CorruptNpxCacheRepair::default();
@@ -205,7 +205,7 @@ fn register_spawned_process(
 }
 
 async fn spawn_and_connect_acp_once(
-    params: &AcpSessionParams,
+    params: &RuntimeSessionParams,
     runtime: &AgentRuntime,
 ) -> Result<AcpStartupConnection, AcpStartupConnectError> {
     let process = Arc::new(
@@ -286,7 +286,7 @@ async fn spawn_and_connect_acp_once(
     })
 }
 
-fn initial_mode_from_params(params: &AcpSessionParams) -> Option<ModeId> {
+fn initial_mode_from_params(params: &RuntimeSessionParams) -> Option<ModeId> {
     // Prefer the last-persisted mode; for brand-new conversations
     // fall back to `RuntimeBuildConfig::session_mode` so the first turn
     // still honours the caller's choice.
@@ -338,7 +338,7 @@ fn has_persisted_config_for_category(
 
 fn seed_startup_config_preferences(
     session: &mut AcpSession,
-    params: &AcpSessionParams,
+    params: &RuntimeSessionParams,
     initial_config: &HashMap<ConfigKey, ConfigValue>,
 ) {
     if let Some(mode) = params
@@ -511,7 +511,7 @@ pub enum RequiredFullAutoApplication {
 
 pub struct AcpAgentManager {
     /// Pre-computed, immutable session parameters assembled by the factory.
-    pub(super) params: Arc<AcpSessionParams>,
+    pub(super) params: Arc<RuntimeSessionParams>,
 
     /// Session aggregate root — owns desired/observed/advertised state.
     /// Single in-memory source of truth for session lifecycle, modes,
@@ -566,7 +566,7 @@ impl AcpAgentManager {
     /// session-driven fields flow through the `CatalogForwarder` the
     /// factory spawns after construction.
     pub async fn build(
-        params: Arc<AcpSessionParams>,
+        params: Arc<RuntimeSessionParams>,
         skill_manager: Arc<AcpSkillManager>,
         catalog_tx: &CatalogSender,
     ) -> Result<
@@ -583,7 +583,7 @@ impl AcpAgentManager {
     }
 
     async fn new(
-        params: Arc<AcpSessionParams>,
+        params: Arc<RuntimeSessionParams>,
         skill_manager: Arc<AcpSkillManager>,
     ) -> Result<
         (
@@ -1684,7 +1684,7 @@ mod tests {
     };
     use crate::agent_runtime::AgentRuntime;
     use crate::error::AgentError;
-    use crate::manager::acp::config_options::ConfigSnapshot;
+    use crate::manager::acp::runtime_config::ConfigSnapshot;
     use crate::manager::acp::{AcpAgentManager, AcpSession};
     use crate::protocol::error::{AcpError, CloseReason};
     use crate::shared_kernel::{ConfigKey, ConfigValue, ModeId, SessionId as DomainSessionId};
@@ -2086,7 +2086,7 @@ mod tests {
         }
         // Mirror the production STDERR_PEEK_LINES (32). If you change one, change both.
         let tail = proc.peek_stderr_tail(32).await;
-        super::super::stderr_error_extractor::extract_error_message(&tail)
+        super::super::runtime_error_extractor::extract_error_message(&tail)
     }
 
     #[tokio::test]

@@ -55,7 +55,7 @@ pub(crate) fn emit_hook_warning(ctx: &PromptCtx<'_>, hook: &'static str, message
 #[cfg(test)]
 mod tests {
     //! Full-path hook tests live in tests/prompt_pipeline_integration.rs
-    //! where a real AcpSession + AcpSessionParams + AgentRuntime triple
+    //! where a real AcpSession + RuntimeSessionParams + AgentRuntime triple
     //! is already wired for assertion. This module keeps unit-level
     //! property checks around the helpers that don't need ctx.
     use super::*;

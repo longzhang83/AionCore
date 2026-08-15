@@ -3,7 +3,7 @@ use std::sync::Arc;
 use aionui_api_types::AgentHandshake;
 use aionui_db::{SqliteAgentMetadataRepository, init_database_memory};
 
-use crate::manager::acp::config_option_catalog::extract_config_options_from_value;
+use crate::manager::acp::runtime_config_catalog::extract_config_options_from_value;
 
 use super::{AgentRegistry, SYSTEM_DEFAULT_USER_ID};
 

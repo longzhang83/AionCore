@@ -3,7 +3,7 @@
 //! `#[path = "session_tests.rs"] mod tests;` from `session.rs`, so
 //! `super::*` resolves to the `session` module's private scope.
 
-use super::super::legacy_session_model::LegacyModelEntry;
+use super::super::legacy_runtime_model::LegacyModelEntry;
 use agent_client_protocol::schema::v1::{SessionConfigOptionCategory, SessionConfigSelectOption, SessionMode};
 
 use super::*;
@@ -253,7 +253,7 @@ fn apply_observed_mode_syncs_advertised_current_without_losing_available() {
 
 #[test]
 fn apply_observed_model_syncs_advertised_current_without_losing_available() {
-    use super::super::legacy_session_model::LegacyModelEntry;
+    use super::super::legacy_runtime_model::LegacyModelEntry;
     let mut session = make_session();
     session.apply_advertised_models(LegacySessionModelState::new(
         "claude-sonnet-4",
@@ -311,7 +311,7 @@ fn confirm_mode_aligns_desired_and_current() {
 
 #[test]
 fn confirm_model_aligns_desired_and_current() {
-    use super::super::legacy_session_model::LegacyModelEntry;
+    use super::super::legacy_runtime_model::LegacyModelEntry;
     let mut session = AcpSession::new(None, None, HashMap::new());
     session.apply_advertised_models(LegacySessionModelState::new(
         "claude-sonnet-4",
@@ -360,7 +360,7 @@ fn confirm_mode_preserves_available_mode_catalog() {
 
 #[test]
 fn confirm_model_preserves_available_model_catalog() {
-    use super::super::legacy_session_model::LegacyModelEntry;
+    use super::super::legacy_runtime_model::LegacyModelEntry;
     let mut session = AcpSession::new(None, None, HashMap::new());
     session.apply_advertised_models(LegacySessionModelState::new(
         "claude-sonnet-4",
@@ -533,7 +533,7 @@ fn set_desired_model_no_op_when_unchanged() {
 
 #[test]
 fn set_desired_model_validates_against_advertised() {
-    use super::super::legacy_session_model::LegacyModelEntry;
+    use super::super::legacy_runtime_model::LegacyModelEntry;
     let mut session = make_session();
     session.apply_advertised_models(LegacySessionModelState::new(
         "claude-sonnet-4",
@@ -548,7 +548,7 @@ fn set_desired_model_validates_against_advertised() {
 
 #[test]
 fn can_select_model_reports_unavailable_advertised_model() {
-    use super::super::legacy_session_model::LegacyModelEntry;
+    use super::super::legacy_runtime_model::LegacyModelEntry;
     let mut session = make_session();
     session.apply_advertised_models(LegacySessionModelState::new(
         "claude-sonnet-4",
@@ -609,7 +609,7 @@ fn new_with_initial_model_sets_desired_model() {
 
 #[test]
 fn clear_invalid_desired_model_drops_stale_initial_model() {
-    use super::super::legacy_session_model::LegacyModelEntry;
+    use super::super::legacy_runtime_model::LegacyModelEntry;
 
     let mut session = AcpSession::new(None, Some(ModelId::new("deepseek-v4-pro")), HashMap::new());
     session.apply_advertised_models(LegacySessionModelState::new(

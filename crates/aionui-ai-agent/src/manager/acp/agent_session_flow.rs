@@ -1,6 +1,6 @@
 use crate::error::AgentError;
 use crate::manager::acp::AcpAgentManager;
-use crate::manager::acp::mode_normalize::agent_metadata_uses_meta_resume;
+use crate::manager::acp::runtime_mode::agent_metadata_uses_meta_resume;
 use crate::protocol::error::AcpError;
 use crate::protocol::events::{
     AgentStreamEvent, AvailableCommandsEventData, ErrorEventData, SessionAssignedEventData, StartEventData, TipType,
@@ -20,7 +20,7 @@ use tokio::sync::broadcast::error::TryRecvError;
 use super::agent::sdk_to_snake_value;
 use super::agent_close::STDERR_PEEK_LINES;
 use super::error_mapping::{AcpSendFailure, is_acp_session_not_found, is_missing_resumed_session};
-use super::legacy_session_model::LegacySessionModelState;
+use super::legacy_runtime_model::LegacySessionModelState;
 use tracing::warn;
 
 #[derive(Debug)]
@@ -473,7 +473,7 @@ impl AcpAgentManager {
 
     async fn empty_turn_terminal_error(&self) -> Option<ErrorEventData> {
         let tail = self.process.peek_stderr_tail(STDERR_PEEK_LINES).await;
-        let detail = super::stderr_error_extractor::extract_error_message(&tail)?;
+        let detail = super::runtime_error_extractor::extract_error_message(&tail)?;
         Some(classify_empty_turn_stderr_error(&detail))
     }
 }
@@ -1527,7 +1527,7 @@ mod tests {
                       [warn] CLI process stderr stderr=\"💡 xiaomi reported that billing, credits, or account entitlement is exhausted for mimo-v2.5-pro.\"\n\
                       [warn] CLI process stderr stderr=\"💡 Add credits or update billing with that provider, then retry.\"\n\
                       [warn] CLI process stderr stderr=\"2026-06-05 03:27:44 [ERROR] agent.conversation_loop: Non-retryable client error: Error code: 402 - {'error': {'code': '402', 'message': 'Insufficient account balance', 'type': 'insufficient_balance'}}\"";
-        let detail = super::super::stderr_error_extractor::extract_error_message(stderr)
+        let detail = super::super::runtime_error_extractor::extract_error_message(stderr)
             .expect("sample tail must surface a billing hint");
         let error = super::classify_empty_turn_stderr_error(&detail);
 

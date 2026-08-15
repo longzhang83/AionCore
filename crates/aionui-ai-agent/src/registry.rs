@@ -30,7 +30,7 @@ use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, info, warn};
 
 use crate::error::AgentError;
-use crate::manager::acp::config_option_catalog::{
+use crate::manager::acp::runtime_config_catalog::{
     enrich_handshake_with_config_option_catalog, merge_config_option_values,
 };
 

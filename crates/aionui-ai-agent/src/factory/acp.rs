@@ -3,8 +3,8 @@ use std::sync::Arc;
 use crate::agent_task::AgentInstance;
 use crate::error::AgentError;
 use crate::factory::AgentFactoryDeps;
-use crate::factory::acp_assembler::{WorkspaceInfo, assemble_acp_params};
-use crate::factory::acp_launch_policy::{AcpLaunchPolicyInput, apply_acp_launch_policy};
+use crate::factory::runtime_assembler::{WorkspaceInfo, assemble_acp_params};
+use crate::factory::runtime_launch_policy::{RuntimeLaunchPolicyInput, apply_acp_launch_policy};
 use crate::factory::context::FactoryContext;
 use crate::manager::acp::{AcpAgentManager, CatalogForwarder};
 use crate::registry::AgentRegistry;
@@ -158,7 +158,7 @@ pub(super) async fn build(
     .await?;
     apply_acp_launch_policy(
         &mut command_spec,
-        AcpLaunchPolicyInput {
+        RuntimeLaunchPolicyInput {
             metadata: &meta,
             config: &config,
             session_snapshot: build_context.session_snapshot.as_ref(),

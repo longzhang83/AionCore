@@ -7,7 +7,7 @@
 
 use crate::agent_runtime::AgentRuntime;
 use crate::capability::skill_manager::AcpSkillManager;
-use crate::factory::acp_assembler::AcpSessionParams;
+use crate::factory::runtime_assembler::RuntimeSessionParams;
 use crate::manager::acp::AcpSession;
 use std::sync::Arc;
 
@@ -15,7 +15,7 @@ use std::sync::Arc;
 /// so hooks can consume one-shot flags.
 pub struct PromptCtx<'a> {
     pub session: &'a mut AcpSession,
-    pub params: &'a AcpSessionParams,
+    pub params: &'a RuntimeSessionParams,
     pub skill_manager: &'a Arc<AcpSkillManager>,
     pub runtime: &'a AgentRuntime,
 }
@@ -58,7 +58,7 @@ mod tests {
 
     /// Zero-hook pipeline is an identity function — property-level
     /// check that does not require a constructed PromptCtx (which
-    /// would pull in full AcpSessionParams plumbing for no gain).
+    /// would pull in full RuntimeSessionParams plumbing for no gain).
     ///
     /// Multi-hook ordering + real ctx plumbing are exercised by the
     /// integration tests in `tests/prompt_pipeline_integration.rs`.

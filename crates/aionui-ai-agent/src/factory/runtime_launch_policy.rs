@@ -1,5 +1,5 @@
 use crate::cc_switch;
-use crate::manager::acp::mode_normalize::normalize_requested_mode;
+use crate::manager::acp::runtime_mode::normalize_requested_mode;
 use crate::shared_kernel::PersistedSessionState;
 use aionui_api_types::{AgentMetadata, RuntimeBuildConfig};
 use aionui_common::CommandSpec;
@@ -9,14 +9,14 @@ const CODEX_ENV_POLICY_INHERIT_ALL: &str = "shell_environment_policy.inherit=all
 const CODEX_ENV_POLICY_CLEAR_INCLUDE_ONLY: &str = "shell_environment_policy.include_only=[]";
 const CODEX_WINDOWS_UNELEVATED_SANDBOX: &str = "windows.sandbox=\"unelevated\"";
 
-pub(super) struct AcpLaunchPolicyInput<'a> {
+pub(super) struct RuntimeLaunchPolicyInput<'a> {
     pub metadata: &'a AgentMetadata,
     pub config: &'a RuntimeBuildConfig,
     pub session_snapshot: Option<&'a PersistedSessionState>,
     pub runtime_env: &'a [(String, String)],
 }
 
-pub(super) fn apply_acp_launch_policy(command_spec: &mut CommandSpec, input: AcpLaunchPolicyInput<'_>) {
+pub(super) fn apply_acp_launch_policy(command_spec: &mut CommandSpec, input: RuntimeLaunchPolicyInput<'_>) {
     apply_codex_runtime_config_args(
         command_spec,
         input.metadata,
@@ -162,7 +162,7 @@ mod tests {
 
         apply_acp_launch_policy(
             &mut command_spec,
-            AcpLaunchPolicyInput {
+            RuntimeLaunchPolicyInput {
                 metadata: &metadata,
                 config: &config,
                 session_snapshot: None,
@@ -208,7 +208,7 @@ mod tests {
 
         apply_acp_launch_policy(
             &mut command_spec,
-            AcpLaunchPolicyInput {
+            RuntimeLaunchPolicyInput {
                 metadata: &metadata,
                 config: &config,
                 session_snapshot: None,
@@ -246,7 +246,7 @@ mod tests {
 
         apply_acp_launch_policy(
             &mut command_spec,
-            AcpLaunchPolicyInput {
+            RuntimeLaunchPolicyInput {
                 metadata: &metadata,
                 config: &RuntimeBuildConfig::default(),
                 session_snapshot: Some(&snapshot),
@@ -281,7 +281,7 @@ mod tests {
 
         apply_acp_launch_policy(
             &mut command_spec,
-            AcpLaunchPolicyInput {
+            RuntimeLaunchPolicyInput {
                 metadata: &metadata,
                 config: &config,
                 session_snapshot: None,

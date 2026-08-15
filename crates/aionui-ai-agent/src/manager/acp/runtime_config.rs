@@ -4,7 +4,7 @@ use agent_client_protocol::schema::v1::{
 };
 use aionui_api_types::{RuntimeConfigOptionDto, RuntimeConfigSelectOptionDto};
 
-use super::legacy_session_model::LegacySessionModelState;
+use super::legacy_runtime_model::LegacySessionModelState;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ConfigSnapshot {
@@ -314,7 +314,7 @@ fn flatten_select_options(options: &SessionConfigSelectOptions) -> Vec<&SessionC
 
 #[cfg(test)]
 mod tests {
-    use super::super::legacy_session_model::{LegacyModelEntry, LegacySessionModelState};
+    use super::super::legacy_runtime_model::{LegacyModelEntry, LegacySessionModelState};
     use super::*;
     use agent_client_protocol::schema::v1::{
         SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOption, SessionMode, SessionModeState,

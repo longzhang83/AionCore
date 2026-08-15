@@ -6,7 +6,7 @@ use aionui_common::AgentKillReason;
 /// Captured at the close site (cancel / kill / send-message-error) so the
 /// next user-facing toast can render something better than "session closed"
 /// or "Bad gateway". `summary` is the redacted, user-safe message — stderr
-/// MUST be filtered through `stderr_error_extractor::extract_error_message`
+/// MUST be filtered through `runtime_error_extractor::extract_error_message`
 /// before reaching this type. Raw stderr is logged via `tracing` only and
 /// must never land here.
 ///

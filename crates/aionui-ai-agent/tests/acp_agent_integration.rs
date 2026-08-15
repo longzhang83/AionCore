@@ -20,7 +20,7 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use aionui_ai_agent::factory::acp_assembler::{WorkspaceInfo, assemble_acp_params};
+use aionui_ai_agent::factory::runtime_assembler::{WorkspaceInfo, assemble_acp_params};
 use aionui_ai_agent::manager::acp::AcpAgentManager;
 use aionui_ai_agent::registry::AgentRegistry;
 use aionui_ai_agent::{AgentInstance, AgentStreamEvent, IAgentTask};

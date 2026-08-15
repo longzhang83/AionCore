@@ -2,7 +2,7 @@ use crate::manager::acp::{AcpAgentManager, AcpSession};
 use crate::protocol::events::AgentStreamEvent;
 use agent_client_protocol::schema::v1::{SessionModeState, SessionNotification, UsageUpdate};
 
-use super::legacy_session_model::LegacySessionModelState;
+use super::legacy_runtime_model::LegacySessionModelState;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use crate::shared_kernel::{ConfigKey, ConfigValue, ModeId, ModelId, SessionId};
 
-use super::config_option_catalog::extract_config_options_from_value;
+use super::runtime_config_catalog::extract_config_options_from_value;
 
 /// Domain events emitted by the `AcpSession` aggregate.
 ///

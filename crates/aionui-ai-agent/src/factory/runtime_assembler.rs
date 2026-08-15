@@ -19,7 +19,7 @@ pub struct WorkspaceInfo {
 /// the decision logic (which MCP servers to inject, what preset context to
 /// compose) we keep the manager focused on execution + state.
 #[derive(Debug, Clone)]
-pub struct AcpSessionParams {
+pub struct RuntimeSessionParams {
     pub conversation_id: String,
     pub user_id: String,
     pub workspace: WorkspaceInfo,
@@ -36,7 +36,7 @@ pub struct AcpSessionParams {
     pub dump_prompts: bool,
 }
 
-impl AcpSessionParams {
+impl RuntimeSessionParams {
     /// Build a `NewSessionRequest` using the pre-computed MCP servers.
     pub fn new_session_request(&self) -> NewSessionRequest {
         let req = NewSessionRequest::new(&self.workspace.path);
@@ -69,11 +69,11 @@ pub async fn assemble_acp_params(
     session_snapshot: Option<PersistedSessionState>,
     data_dir: PathBuf,
     dump_prompts: bool,
-) -> AcpSessionParams {
+) -> RuntimeSessionParams {
     let mcp_servers = resolve_mcp_servers(&config, user_mcp_servers);
     let preset_context = compose_preset_context(config.preset_context.as_deref());
 
-    AcpSessionParams {
+    RuntimeSessionParams {
         conversation_id,
         user_id,
         workspace,

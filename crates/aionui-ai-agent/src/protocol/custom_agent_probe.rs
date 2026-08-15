@@ -239,9 +239,9 @@ async fn run_handshake(proc: &CliAgentProcess) -> ProbeOutcome {
             // models ride beside the response because the SDK dropped the field.
             let models = legacy_models
                 .as_ref()
-                .and_then(crate::manager::acp::legacy_session_model::LegacySessionModelState::from_state_value);
+                .and_then(crate::manager::acp::legacy_runtime_model::LegacySessionModelState::from_state_value);
             ProbeOutcome::Ok(
-                crate::manager::acp::catalog_forwarder::catalog_partial_from_session_new(
+                crate::manager::acp::runtime_catalog_forwarder::catalog_partial_from_session_new(
                     response.modes.as_ref(),
                     models.as_ref(),
                     response.config_options.as_deref(),

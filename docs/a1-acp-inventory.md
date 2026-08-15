@@ -396,3 +396,28 @@ Session/MCP/API/App/Team：
 
 未纳入本切片：API DTO 模块/文件级重命名（`api-types/src/acp.rs`）、DB `acp_session` 命名、旧 `AcpAgentManager`
 与 aionrs/antigravity 删除、wire 层 `"acp"` 字符串清理。
+
+---
+
+## 9. V3 A1 clean-cut Slice 1 进度（2026-08-15）
+
+状态：已实现并验证。
+
+- `manager/acp/` 的叶子模块已迁移到中性 Runtime / Agent / PromptHook / Approval 词汇：
+  `mode_normalize -> runtime_mode`、`config_options -> runtime_config`、
+  `config_option_catalog -> runtime_config_catalog`、`permission_router -> approval_router`、
+  `stderr_error_extractor -> runtime_error_extractor`、`hooks -> prompt_hook`、
+  `legacy_session_model -> legacy_runtime_model`、`catalog_forwarder -> runtime_catalog_forwarder`、
+  `agent_reconcile -> agent_reconciler`。
+- factory 叶子模块已迁移：`acp_assembler -> runtime_assembler`、
+  `acp_launch_policy -> runtime_launch_policy`。
+- 局部 DTO 已按既有映射迁移：`AcpSessionParams -> RuntimeSessionParams`、
+  `AcpLaunchPolicyInput -> RuntimeLaunchPolicyInput`；所有 crate 内导入和测试引用同步更新。
+- 这是纯重命名切片：未修改 wire/DB 值、serde 属性、函数逻辑、控制流或行为；现有日志足够，本切片未增加日志。
+
+验证：
+
+- `cargo check -p aionui-ai-agent` 通过（exit 0）。
+- `cargo test -p aionui-ai-agent --lib manager::` 通过（340 passed / 0 failed，exit 0）。
+
+未纳入本切片：clean-cut Slice 2–6 的任何变更。

@@ -109,7 +109,7 @@ fn catalog_partial_from_event(event: &AgentStreamEvent) -> Option<AgentHandshake
 /// notification, never in the `session/new` response.
 pub fn catalog_partial_from_session_new(
     modes: Option<&SessionModeState>,
-    models: Option<&super::legacy_session_model::LegacySessionModelState>,
+    models: Option<&super::legacy_runtime_model::LegacySessionModelState>,
     config_options: Option<&[SessionConfigOption]>,
 ) -> Option<AgentHandshake> {
     use aionui_api_types::{ModelInfoEntry, ModelInfoPayload};
@@ -195,7 +195,7 @@ mod tests {
     /// Feeds one state through both and compares.
     #[test]
     fn probe_projection_matches_event_projection() {
-        use crate::manager::acp::legacy_session_model::{LegacyModelEntry, LegacySessionModelState};
+        use crate::manager::acp::legacy_runtime_model::{LegacyModelEntry, LegacySessionModelState};
         use agent_client_protocol::schema::v1::{SessionMode, SessionModeState};
 
         let modes = SessionModeState::new("code", vec![SessionMode::new("code", "Code")]);

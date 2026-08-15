@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use aionui_ai_agent::capability::prompt_pipeline::{PromptCtx, PromptPipeline};
-use aionui_ai_agent::factory::acp_assembler::{AcpSessionParams, WorkspaceInfo, assemble_acp_params};
+use aionui_ai_agent::factory::runtime_assembler::{RuntimeSessionParams, WorkspaceInfo, assemble_acp_params};
 use aionui_ai_agent::manager::acp::{AcpSession, SessionNewPreludeHook};
 use aionui_ai_agent::registry::AgentRegistry;
 use aionui_ai_agent::shared_kernel::ModelId;
@@ -23,7 +23,7 @@ async fn fixture_params(
     backend: &str,
     preset_context: Option<&str>,
     is_custom_workspace: bool,
-) -> Arc<AcpSessionParams> {
+) -> Arc<RuntimeSessionParams> {
     let db = init_database_memory().await.unwrap();
     let repo = Arc::new(SqliteAgentMetadataRepository::new(db.pool().clone()));
     let registry = AgentRegistry::new(repo);

@@ -60,7 +60,7 @@ use agent_client_protocol::schema::v1::{
 /// Method name of the legacy model-selection RPC. The typed request/response
 /// pair was removed from the SDK (model selection moved to session config
 /// options), but old-camp agents still implement the method, so the frame is
-/// sent untyped. See `manager::acp::legacy_session_model` for the state DTOs.
+/// sent untyped. See `manager::acp::legacy_runtime_model` for the state DTOs.
 const LEGACY_SESSION_SET_MODEL_METHOD: &str = "session/set_model";
 
 /// Params frame for the legacy `session/set_model` request.
