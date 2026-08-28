@@ -54,3 +54,26 @@ async fn schedule_bff_is_authenticated_and_requires_csrf_for_writes() {
     assert_eq!(protected_write.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(body_json(protected_write).await["code"], "AUTH_CENTER_SESSION_REQUIRED");
 }
+
+#[tokio::test]
+async fn acp_catalog_and_workspace_read_bff_require_an_auth_center_bound_session() {
+    let (mut app, services) = build_app().await;
+    let (token, _) = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
+
+    for path in [
+        "/api/catalog/v1/agents?page_size=100",
+        "/api/catalog/v1/agents/agent-1/versions/version-1",
+        "/api/team-workspace/v1/workspaces",
+    ] {
+        let unauthenticated = app.clone().oneshot(get_request(path)).await.unwrap();
+        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED, "path: {path}");
+
+        let local_only_session = app.clone().oneshot(get_with_token(path, &token)).await.unwrap();
+        assert_eq!(local_only_session.status(), StatusCode::UNAUTHORIZED, "path: {path}");
+        assert_eq!(
+            body_json(local_only_session).await["code"],
+            "AUTH_CENTER_SESSION_REQUIRED",
+            "path: {path}"
+        );
+    }
+}

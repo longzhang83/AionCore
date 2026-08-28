@@ -231,6 +231,261 @@ async fn schedule_bff_exposes_only_the_frozen_path_and_method_allowlist() {
 }
 
 #[tokio::test]
+async fn acp_read_bff_forwards_only_frozen_catalog_and_workspace_get_routes() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/team-workspace/v1/workspaces"))
+        .and(wiremock_header("authorization", "Bearer upstream-access"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+            "workspace_id": "workspace-1",
+            "type": "team",
+            "organization_id": "org-1",
+            "status": "active",
+            "created_at": "2026-08-29T00:00:00Z",
+            "updated_at": "2026-08-29T00:00:00Z"
+        }])))
+        .mount(&upstream)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/catalog/v1/agents"))
+        .and(query_param("page_size", "100"))
+        .and(wiremock_header("authorization", "Bearer upstream-access"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items": [{
+                "agent_id": "agent-1",
+                "name": "Finance reviewer",
+                "latest_published_version_id": "version-1"
+            }],
+            "meta": {"page": 1, "page_size": 100, "total": 1}
+        })))
+        .mount(&upstream)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/catalog/v1/agents/agent-1/versions/version-1"))
+        .and(wiremock_header("authorization", "Bearer upstream-access"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "version_id": "version-1",
+            "agent_id": "agent-1",
+            "state": "published",
+            "manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        })))
+        .mount(&upstream)
+        .await;
+
+    let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+    let local_token = bind_upstream_token(&ctx, "upstream-access", 3600);
+
+    let workspaces = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/team-workspace/v1/workspaces",
+            &local_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(workspaces.status(), StatusCode::OK);
+    assert_eq!(json_body(workspaces).await["data"][0]["workspace_id"], "workspace-1");
+
+    let agents = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/catalog/v1/agents?page_size=100",
+            &local_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(agents.status(), StatusCode::OK);
+    assert_eq!(json_body(agents).await["data"]["items"][0]["agent_id"], "agent-1");
+
+    let version = app
+        .oneshot(request(
+            Method::GET,
+            "/api/catalog/v1/agents/agent-1/versions/version-1",
+            &local_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(version.status(), StatusCode::OK);
+    assert_eq!(json_body(version).await["data"]["version_id"], "version-1");
+    assert_eq!(upstream.received_requests().await.unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn acp_read_bff_rejects_unfrozen_queries_paths_and_methods_without_upstream_io() {
+    let upstream = MockServer::start().await;
+    let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+    let local_token = bind_upstream_token(&ctx, "upstream-access", 3600);
+
+    let unknown_query = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/catalog/v1/agents?include_secrets=true",
+            &local_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(unknown_query.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(unknown_query).await["code"], "CATALOG_BAD_REQUEST");
+
+    for query in [
+        "page_size=99",
+        "page_size=100&page_size=100",
+        "visibility=team",
+        "organization_id=org-1",
+        "owner_user_id=user-1",
+        "tag=finance",
+        "q=reviewer",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(request(
+                Method::GET,
+                &format!("/api/catalog/v1/agents?{query}"),
+                &local_token,
+                Body::empty(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "query: {query}");
+        assert_eq!(json_body(response).await["code"], "CATALOG_BAD_REQUEST");
+    }
+
+    let item_query = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/catalog/v1/agents/agent-1/versions/version-1?expand=secret",
+            &local_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(item_query.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(item_query).await["code"], "CATALOG_BAD_REQUEST");
+
+    let workspace_query = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/team-workspace/v1/workspaces?all_tenants=true",
+            &local_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(workspace_query.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(workspace_query).await["code"], "WORKSPACE_BAD_REQUEST");
+
+    let unsafe_id = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/catalog/v1/agents/agent%2Fadmin/versions/version-1",
+            &local_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert!(matches!(
+        unsafe_id.status(),
+        StatusCode::BAD_REQUEST | StatusCode::NOT_FOUND
+    ));
+
+    let write = app
+        .oneshot(request(
+            Method::POST,
+            "/api/catalog/v1/agents",
+            &local_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(write.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn acp_read_bff_maps_catalog_and_workspace_errors_without_leaking_upstream_messages() {
+    let cases = [
+        (
+            "/api/catalog/v1/agents",
+            403,
+            json!({"code": "catalog_forbidden", "message": "private catalog details"}),
+            "CATALOG_FORBIDDEN",
+        ),
+        (
+            "/api/team-workspace/v1/workspaces",
+            404,
+            json!({"code": "workspace_not_found", "message": "private tenant details"}),
+            "WORKSPACE_NOT_FOUND",
+        ),
+    ];
+
+    for (bff_path, upstream_status, upstream_body, expected_code) in cases {
+        let upstream = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(bff_path))
+            .respond_with(ResponseTemplate::new(upstream_status).set_body_json(upstream_body))
+            .mount(&upstream)
+            .await;
+        let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+        let local_token = bind_upstream_token(&ctx, "upstream-secret", 3600);
+        let response = app
+            .oneshot(request(Method::GET, bff_path, &local_token, Body::empty()))
+            .await
+            .unwrap();
+        let body = json_body(response).await;
+        assert_eq!(body["code"], expected_code);
+        let rendered = body.to_string();
+        assert!(!rendered.contains("private catalog details"));
+        assert!(!rendered.contains("private tenant details"));
+        assert!(!rendered.contains("upstream-secret"));
+    }
+}
+
+#[tokio::test]
+async fn acp_read_bff_upstream_unauthorized_does_not_destroy_the_local_token_bundle() {
+    for (path, upstream_body) in [
+        (
+            "/api/catalog/v1/agents?page_size=100",
+            json!({"code": "unauthorized", "message": "private audience details"}),
+        ),
+        (
+            "/api/team-workspace/v1/workspaces",
+            json!({"code": "device_unbound", "message": "private device details"}),
+        ),
+    ] {
+        let upstream = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(upstream_body))
+            .mount(&upstream)
+            .await;
+        let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+        let local_token = bind_upstream_token(&ctx, "upstream-access", 3600);
+        let vault_key = AuthCenterTokenVaultKey::from_token(&local_token, USER_ID);
+
+        let response = app
+            .oneshot(request(Method::GET, path, &local_token, Body::empty()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body = json_body(response).await;
+        assert!(matches!(
+            body["code"].as_str(),
+            Some("AUTH_CENTER_SESSION_REQUIRED" | "device_unbound")
+        ));
+        assert!(ctx.vault.get(&vault_key).is_some(), "path: {path}");
+    }
+}
+
+#[tokio::test]
 async fn schedule_bff_rejects_encoded_dot_segments_and_slashes_before_upstream_url_construction() {
     let upstream = MockServer::start().await;
     let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;

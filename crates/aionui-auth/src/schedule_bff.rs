@@ -1,4 +1,4 @@
-//! Same-origin Schedule BFF transport.
+//! Same-origin Agent Control Plane BFF transport.
 //!
 //! This module is intentionally a closed, route-level adapter rather than a
 //! general reverse proxy. Browser credentials authenticate the local AionCore
@@ -28,6 +28,9 @@ use crate::auth_center_tokens::AuthCenterTokenVaultKey;
 use crate::extract::extract_token_from_headers;
 use crate::middleware::CurrentUser;
 use crate::routes::AuthRouterState;
+
+mod route;
+use route::{AcpRoute, CatalogRoute, ErrorDomain, ScheduleAction, ScheduleRoute, WorkspaceRoute};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_REQUEST_BODY_BYTES: usize = 1024 * 1024;
@@ -163,12 +166,13 @@ impl ScheduleBffConfig {
         Self::from_values(Some(&base_url), timeout, rsm_auth_config, expected_audience.as_deref())
     }
 
-    fn upstream_url(&self, route: &ScheduleRoute, query: Option<&str>) -> Result<Url, ApiError> {
+    fn upstream_url(&self, route: &AcpRoute, query: Option<&str>) -> Result<Url, ApiError> {
+        let domain = route.error_domain();
         let base_url = self.base_url.as_ref().ok_or_else(|| {
             ApiError::coded(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "SCHEDULE_UPSTREAM_NOT_CONFIGURED",
-                "Scheduled tasks are not configured.",
+                domain.upstream_not_configured_code(),
+                domain.not_configured_message(),
                 None,
             )
         })?;
@@ -176,31 +180,14 @@ impl ScheduleBffConfig {
         let mut segments = url.path_segments_mut().map_err(|_| {
             ApiError::coded(
                 StatusCode::BAD_GATEWAY,
-                "SCHEDULE_UPSTREAM_UNAVAILABLE",
-                "Scheduled tasks are temporarily unavailable.",
+                domain.upstream_unavailable_code(),
+                domain.unavailable_message(),
                 None,
             )
         })?;
         segments.pop_if_empty();
-        segments.extend(["api", "schedule", "v1", "schedules"]);
-        match route {
-            ScheduleRoute::Collection => {}
-            ScheduleRoute::Schedule { schedule_id } => {
-                segments.push(schedule_id);
-            }
-            ScheduleRoute::Action { schedule_id, action } => {
-                segments.push(schedule_id);
-                segments.push(action.as_segment());
-            }
-            ScheduleRoute::Runs { schedule_id } => {
-                segments.push(schedule_id);
-                segments.push("runs");
-            }
-            ScheduleRoute::Run { schedule_id, run_id } => {
-                segments.push(schedule_id);
-                segments.push("runs");
-                segments.push(run_id);
-            }
+        for segment in route.upstream_segments() {
+            segments.push(segment);
         }
         drop(segments);
         url.set_query(query);
@@ -208,55 +195,7 @@ impl ScheduleBffConfig {
     }
 }
 
-#[derive(Debug)]
-enum ScheduleAction {
-    Upgrade,
-    Pause,
-    Resume,
-    Retire,
-}
-
-impl ScheduleAction {
-    fn as_segment(&self) -> &'static str {
-        match self {
-            Self::Upgrade => "upgrade",
-            Self::Pause => "pause",
-            Self::Resume => "resume",
-            Self::Retire => "retire",
-        }
-    }
-}
-
-#[derive(Debug)]
-enum ScheduleRoute {
-    Collection,
-    Schedule {
-        schedule_id: String,
-    },
-    Action {
-        schedule_id: String,
-        action: ScheduleAction,
-    },
-    Runs {
-        schedule_id: String,
-    },
-    Run {
-        schedule_id: String,
-        run_id: String,
-    },
-}
-
-impl ScheduleRoute {
-    fn permits(&self, method: &Method) -> bool {
-        match self {
-            Self::Collection => matches!(*method, Method::GET | Method::POST),
-            Self::Schedule { .. } | Self::Runs { .. } | Self::Run { .. } => *method == Method::GET,
-            Self::Action { .. } => *method == Method::POST,
-        }
-    }
-}
-
-/// The only Schedule paths that AionCore will forward.
+/// The only Agent Control Plane paths that AionCore will forward.
 pub(crate) fn schedule_bff_routes() -> Router<AuthRouterState> {
     Router::new()
         .route(
@@ -270,6 +209,57 @@ pub(crate) fn schedule_bff_routes() -> Router<AuthRouterState> {
         .route("/api/schedule/v1/schedules/{schedule_id}/retire", post(proxy_retire))
         .route("/api/schedule/v1/schedules/{schedule_id}/runs", get(proxy_runs))
         .route("/api/schedule/v1/schedules/{schedule_id}/runs/{run_id}", get(proxy_run))
+        .route("/api/catalog/v1/agents", get(proxy_catalog_agents))
+        .route(
+            "/api/catalog/v1/agents/{agent_id}/versions/{version_id}",
+            get(proxy_catalog_agent_version),
+        )
+        .route("/api/team-workspace/v1/workspaces", get(proxy_workspaces))
+}
+
+async fn proxy_catalog_agents(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    request: Request,
+) -> Response {
+    proxy_response(state, current_user, AcpRoute::Catalog(CatalogRoute::Agents), request).await
+}
+
+async fn proxy_catalog_agent_version(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    Path((agent_id, version_id)): Path<(String, String)>,
+    request: Request,
+) -> Response {
+    let agent_id = match validate_id(agent_id, "agent_id", ErrorDomain::Catalog) {
+        Ok(id) => id,
+        Err(error) => return error.into_response(),
+    };
+    let version_id = match validate_id(version_id, "version_id", ErrorDomain::Catalog) {
+        Ok(id) => id,
+        Err(error) => return error.into_response(),
+    };
+    proxy_response(
+        state,
+        current_user,
+        AcpRoute::Catalog(CatalogRoute::AgentVersion { agent_id, version_id }),
+        request,
+    )
+    .await
+}
+
+async fn proxy_workspaces(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    request: Request,
+) -> Response {
+    proxy_response(
+        state,
+        current_user,
+        AcpRoute::Workspace(WorkspaceRoute::Workspaces),
+        request,
+    )
+    .await
 }
 
 async fn proxy_collection(
@@ -277,7 +267,13 @@ async fn proxy_collection(
     Extension(current_user): Extension<CurrentUser>,
     request: Request,
 ) -> Response {
-    proxy_response(state, current_user, ScheduleRoute::Collection, request).await
+    proxy_response(
+        state,
+        current_user,
+        AcpRoute::Schedule(ScheduleRoute::Collection),
+        request,
+    )
+    .await
 }
 
 async fn proxy_schedule_item(
@@ -289,12 +285,12 @@ async fn proxy_schedule_item(
     proxy_response(
         state,
         current_user,
-        ScheduleRoute::Schedule {
-            schedule_id: match validate_id(schedule_id, "schedule_id") {
+        AcpRoute::Schedule(ScheduleRoute::Schedule {
+            schedule_id: match validate_id(schedule_id, "schedule_id", ErrorDomain::Schedule) {
                 Ok(id) => id,
                 Err(error) => return error.into_response(),
             },
-        },
+        }),
         request,
     )
     .await
@@ -343,14 +339,14 @@ async fn proxy_action(
     action: ScheduleAction,
     request: Request,
 ) -> Response {
-    let schedule_id = match validate_id(schedule_id, "schedule_id") {
+    let schedule_id = match validate_id(schedule_id, "schedule_id", ErrorDomain::Schedule) {
         Ok(id) => id,
         Err(error) => return error.into_response(),
     };
     proxy_response(
         state,
         current_user,
-        ScheduleRoute::Action { schedule_id, action },
+        AcpRoute::Schedule(ScheduleRoute::Action { schedule_id, action }),
         request,
     )
     .await
@@ -362,11 +358,17 @@ async fn proxy_runs(
     Path(schedule_id): Path<String>,
     request: Request,
 ) -> Response {
-    let schedule_id = match validate_id(schedule_id, "schedule_id") {
+    let schedule_id = match validate_id(schedule_id, "schedule_id", ErrorDomain::Schedule) {
         Ok(id) => id,
         Err(error) => return error.into_response(),
     };
-    proxy_response(state, current_user, ScheduleRoute::Runs { schedule_id }, request).await
+    proxy_response(
+        state,
+        current_user,
+        AcpRoute::Schedule(ScheduleRoute::Runs { schedule_id }),
+        request,
+    )
+    .await
 }
 
 async fn proxy_run(
@@ -375,36 +377,44 @@ async fn proxy_run(
     Path((schedule_id, run_id)): Path<(String, String)>,
     request: Request,
 ) -> Response {
-    let schedule_id = match validate_id(schedule_id, "schedule_id") {
+    let schedule_id = match validate_id(schedule_id, "schedule_id", ErrorDomain::Schedule) {
         Ok(id) => id,
         Err(error) => return error.into_response(),
     };
-    let run_id = match validate_id(run_id, "run_id") {
+    let run_id = match validate_id(run_id, "run_id", ErrorDomain::Schedule) {
         Ok(id) => id,
         Err(error) => return error.into_response(),
     };
-    proxy_response(state, current_user, ScheduleRoute::Run { schedule_id, run_id }, request).await
+    proxy_response(
+        state,
+        current_user,
+        AcpRoute::Schedule(ScheduleRoute::Run { schedule_id, run_id }),
+        request,
+    )
+    .await
 }
 
 async fn proxy_response(
     state: AuthRouterState,
     current_user: CurrentUser,
-    route: ScheduleRoute,
+    route: AcpRoute,
     request: Request,
 ) -> Response {
-    match proxy_schedule_inner(state, current_user, route, request).await {
+    match proxy_acp_inner(state, current_user, route, request).await {
         Ok(response) => response,
         Err(error) => error.into_response(),
     }
 }
 
-async fn proxy_schedule_inner(
+async fn proxy_acp_inner(
     state: AuthRouterState,
     current_user: CurrentUser,
-    route: ScheduleRoute,
+    route: AcpRoute,
     request: Request,
 ) -> Result<Response, ApiError> {
     let query = request.uri().query().map(str::to_owned);
+    route.validate_query(query.as_deref())?;
+    let error_domain = route.error_domain();
     let (parts, body) = request.into_parts();
     let method = parts.method;
     let headers = parts.headers;
@@ -418,38 +428,36 @@ async fn proxy_schedule_inner(
     }
     let body = to_bytes(body, MAX_REQUEST_BODY_BYTES)
         .await
-        .map_err(|_| ApiError::PayloadTooLarge("Schedule request body is too large".to_owned()))?;
+        .map_err(|_| ApiError::PayloadTooLarge("Agent Control Plane request body is too large".to_owned()))?;
     if method == Method::GET && !body.is_empty() {
-        return Err(ApiError::BadRequest(
-            "GET schedule requests must not include a body".to_owned(),
-        ));
+        return Err(ApiError::BadRequest("GET requests must not include a body".to_owned()));
     }
     if !body.is_empty() && !is_json_content_type(&headers) {
         return Err(ApiError::UnsupportedMediaType(
-            "Schedule request bodies must use application/json".to_owned(),
+            "Agent Control Plane request bodies must use application/json".to_owned(),
         ));
     }
 
-    let local_token = extract_token_from_headers(&headers).ok_or_else(auth_center_session_required)?;
+    let local_token = extract_token_from_headers(&headers).ok_or_else(|| auth_center_session_required(error_domain))?;
     let payload = state
         .jwt_service
         .verify(&local_token)
-        .map_err(|_| auth_center_session_required())?;
+        .map_err(|_| auth_center_session_required(error_domain))?;
     if !payload.auth_center_bound || payload.user_id != current_user.id {
-        return Err(auth_center_session_required());
+        return Err(auth_center_session_required(error_domain));
     }
 
     let vault_key = AuthCenterTokenVaultKey::from_token(&local_token, &current_user.id);
     let bundle = state
         .auth_center_token_vault
         .get(&vault_key)
-        .ok_or_else(auth_center_session_required)?;
+        .ok_or_else(|| auth_center_session_required(error_domain))?;
     if bundle
         .expires_at_ms
         .is_some_and(|expires_at| expires_at <= chrono::Utc::now().timestamp_millis())
     {
         state.auth_center_token_vault.clear(&vault_key);
-        return Err(auth_center_session_required());
+        return Err(auth_center_session_required(error_domain));
     }
 
     let upstream_url = state.schedule_bff_config.upstream_url(&route, query.as_deref())?;
@@ -497,33 +505,34 @@ async fn proxy_schedule_inner(
     .map_err(|_| {
         ApiError::coded(
             StatusCode::GATEWAY_TIMEOUT,
-            "SCHEDULE_UPSTREAM_TIMEOUT",
-            "Scheduled tasks did not respond in time.",
+            error_domain.upstream_timeout_code(),
+            error_domain.timeout_message(),
             None,
         )
     })?
     .map_err(|error| match error {
         UpstreamReadError::Request(error) => {
-            tracing::warn!(error = %error.without_url(), "schedule upstream request failed");
+            tracing::warn!(
+                domain = error_domain.prefix(),
+                error = %error.without_url(),
+                "Agent Control Plane upstream request failed"
+            );
             ApiError::coded(
                 StatusCode::BAD_GATEWAY,
-                "SCHEDULE_UPSTREAM_UNAVAILABLE",
-                "Scheduled tasks are temporarily unavailable.",
+                error_domain.upstream_unavailable_code(),
+                error_domain.unavailable_message(),
                 None,
             )
         }
-        UpstreamReadError::TooLarge => upstream_invalid_response(),
+        UpstreamReadError::TooLarge => upstream_invalid_response(error_domain),
     })?;
 
     let (status, response_headers, response_body) = upstream;
-    if status == StatusCode::UNAUTHORIZED {
-        state.auth_center_token_vault.clear(&vault_key);
-    }
     if !status.is_success() {
-        return Err(map_upstream_error(status, &response_body));
+        return Err(map_upstream_error(error_domain, status, &response_body));
     }
 
-    let data: Value = serde_json::from_slice(&response_body).map_err(|_| upstream_invalid_response())?;
+    let data: Value = serde_json::from_slice(&response_body).map_err(|_| upstream_invalid_response(error_domain))?;
     let mut response = (status, Json(ApiResponse::ok(data))).into_response();
     copy_safe_response_header(&response_headers, response.headers_mut(), &REQUEST_ID);
     copy_safe_response_header(&response_headers, response.headers_mut(), &IDEMPOTENT_REPLAY);
@@ -535,16 +544,16 @@ enum UpstreamReadError {
     TooLarge,
 }
 
-fn upstream_invalid_response() -> ApiError {
+fn upstream_invalid_response(domain: ErrorDomain) -> ApiError {
     ApiError::coded(
         StatusCode::BAD_GATEWAY,
-        "SCHEDULE_UPSTREAM_INVALID_RESPONSE",
-        "Scheduled tasks returned an invalid response.",
+        domain.upstream_invalid_response_code(),
+        domain.invalid_response_message(),
         None,
     )
 }
 
-fn validate_id(value: String, field: &'static str) -> Result<String, ApiError> {
+fn validate_id(value: String, field: &'static str, domain: ErrorDomain) -> Result<String, ApiError> {
     let valid = !value.is_empty()
         && value.len() <= 255
         && value
@@ -555,7 +564,7 @@ fn validate_id(value: String, field: &'static str) -> Result<String, ApiError> {
     }
     Err(ApiError::coded(
         StatusCode::BAD_REQUEST,
-        "SCHEDULE_INVALID_ID",
+        domain.invalid_id_code(),
         format!("{field} is invalid."),
         None,
     ))
@@ -579,11 +588,11 @@ fn copy_safe_response_header(source: &HeaderMap, destination: &mut HeaderMap, na
     }
 }
 
-fn auth_center_session_required() -> ApiError {
+fn auth_center_session_required(domain: ErrorDomain) -> ApiError {
     ApiError::coded(
         StatusCode::UNAUTHORIZED,
         "AUTH_CENTER_SESSION_REQUIRED",
-        "Sign in again to use scheduled tasks.",
+        domain.session_required_message(),
         None,
     )
 }
@@ -593,7 +602,7 @@ struct UpstreamErrorEnvelope {
     code: Option<String>,
 }
 
-fn map_upstream_error(status: StatusCode, body: &[u8]) -> ApiError {
+fn map_upstream_error(domain: ErrorDomain, status: StatusCode, body: &[u8]) -> ApiError {
     let upstream_code = serde_json::from_slice::<UpstreamErrorEnvelope>(body)
         .ok()
         .and_then(|envelope| envelope.code);
@@ -601,10 +610,11 @@ fn map_upstream_error(status: StatusCode, body: &[u8]) -> ApiError {
         StatusCode::UNAUTHORIZED if upstream_code.as_deref() == Some("device_unbound") => ApiError::coded(
             StatusCode::UNAUTHORIZED,
             "device_unbound",
-            "Bind this device before using scheduled tasks.",
+            "Bind this device before using Agent Platform features.",
             None,
         ),
-        StatusCode::UNAUTHORIZED => auth_center_session_required(),
+        StatusCode::UNAUTHORIZED => auth_center_session_required(domain),
+        _ if !matches!(domain, ErrorDomain::Schedule) => map_read_upstream_error(domain, status),
         StatusCode::FORBIDDEN => ApiError::coded(
             StatusCode::FORBIDDEN,
             "SCHEDULE_FORBIDDEN",
@@ -648,6 +658,61 @@ fn map_upstream_error(status: StatusCode, body: &[u8]) -> ApiError {
             None,
         ),
     }
+}
+
+fn map_read_upstream_error(domain: ErrorDomain, status: StatusCode) -> ApiError {
+    let (code, message) = match (domain, status) {
+        (ErrorDomain::Catalog, StatusCode::BAD_REQUEST) => {
+            ("CATALOG_BAD_REQUEST", "The Agent catalog request is invalid.")
+        }
+        (ErrorDomain::Catalog, StatusCode::FORBIDDEN) => (
+            "CATALOG_FORBIDDEN",
+            "You do not have permission to browse this Agent catalog scope.",
+        ),
+        (ErrorDomain::Catalog, StatusCode::NOT_FOUND) => (
+            "CATALOG_NOT_FOUND",
+            "The requested Agent catalog resource was not found.",
+        ),
+        (ErrorDomain::Catalog, StatusCode::GONE) => (
+            "CATALOG_VERSION_REVOKED",
+            "The published Agent version has been revoked.",
+        ),
+        (ErrorDomain::Workspace, StatusCode::BAD_REQUEST) => {
+            ("WORKSPACE_BAD_REQUEST", "The team workspace request is invalid.")
+        }
+        (ErrorDomain::Workspace, StatusCode::FORBIDDEN) => (
+            "WORKSPACE_FORBIDDEN",
+            "You do not have permission to browse these team workspaces.",
+        ),
+        (ErrorDomain::Workspace, StatusCode::NOT_FOUND) => {
+            ("WORKSPACE_NOT_FOUND", "The requested team workspace was not found.")
+        }
+        (_, StatusCode::TOO_MANY_REQUESTS) => (
+            match domain {
+                ErrorDomain::Catalog => "CATALOG_RATE_LIMITED",
+                ErrorDomain::Workspace => "WORKSPACE_RATE_LIMITED",
+                ErrorDomain::Schedule => unreachable!(),
+            },
+            "Too many Agent Platform requests. Try again later.",
+        ),
+        (_, status) if status.is_client_error() => (
+            match domain {
+                ErrorDomain::Catalog => "CATALOG_UPSTREAM_REJECTED",
+                ErrorDomain::Workspace => "WORKSPACE_UPSTREAM_REJECTED",
+                ErrorDomain::Schedule => unreachable!(),
+            },
+            "The Agent Platform request could not be completed.",
+        ),
+        _ => {
+            return ApiError::coded(
+                StatusCode::BAD_GATEWAY,
+                domain.upstream_unavailable_code(),
+                domain.unavailable_message(),
+                None,
+            );
+        }
+    };
+    ApiError::coded(status, code, message, None)
 }
 
 #[cfg(test)]
@@ -847,7 +912,10 @@ mod tests {
                 let config = ScheduleBffConfig::from_env(&crate::RsmAuthConfig::from_env()).unwrap();
                 assert_eq!(config.timeout, Duration::from_millis(2500));
                 assert_eq!(
-                    config.upstream_url(&ScheduleRoute::Collection, None).unwrap().as_str(),
+                    config
+                        .upstream_url(&AcpRoute::Schedule(ScheduleRoute::Collection), None)
+                        .unwrap()
+                        .as_str(),
                     "https://acp.example/internal/api/schedule/v1/schedules"
                 );
             },
@@ -896,7 +964,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             config
-                .upstream_url(&ScheduleRoute::Collection, Some("page=2"))
+                .upstream_url(&AcpRoute::Schedule(ScheduleRoute::Collection), Some("page=2"))
                 .unwrap()
                 .as_str(),
             "https://acp.example/internal/api/schedule/v1/schedules?page=2"
@@ -906,11 +974,14 @@ mod tests {
     #[test]
     fn path_ids_accept_only_single_safe_segments() {
         for valid in ["schedule-1", "schedule_1", "01JABCDEF123"] {
-            assert_eq!(validate_id(valid.to_owned(), "schedule_id").unwrap(), valid);
+            assert_eq!(
+                validate_id(valid.to_owned(), "schedule_id", ErrorDomain::Schedule).unwrap(),
+                valid
+            );
         }
         for invalid in ["", ".", "..", "schedule/other", "schedule%2Fother", "含中文"] {
             assert!(
-                validate_id(invalid.to_owned(), "schedule_id").is_err(),
+                validate_id(invalid.to_owned(), "schedule_id", ErrorDomain::Schedule).is_err(),
                 "accepted {invalid:?}"
             );
         }
