@@ -147,6 +147,11 @@ pub struct CronJobResponse {
 #[serde(deny_unknown_fields)]
 pub struct CreateCronJobRequest {
     pub name: String,
+    /// Initial scheduler state. Existing clients that omit the field keep the
+    /// historical enabled-by-default behavior; governed schedule creation can
+    /// explicitly stage a disabled local executor before control-plane bind.
+    #[serde(default = "default_cron_job_enabled")]
+    pub enabled: bool,
     #[serde(default)]
     pub description: Option<String>,
     pub schedule: CronScheduleDto,
@@ -164,6 +169,10 @@ pub struct CreateCronJobRequest {
     pub queue_enabled: bool,
     #[serde(default)]
     pub agent_config: Option<CronAgentConfigWriteDto>,
+}
+
+const fn default_cron_job_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -713,6 +722,7 @@ mod tests {
         assert_eq!(req.message.as_deref(), Some("Do the thing"));
         assert_eq!(req.conversation_id, "conv_1");
         assert_eq!(req.created_by, "user");
+        assert!(req.enabled);
         assert_eq!(req.execution_mode.as_deref(), Some("new_conversation"));
         assert!(req.agent_config.is_some());
     }
@@ -731,6 +741,22 @@ mod tests {
         assert!(req.prompt.is_none());
         assert!(req.execution_mode.is_none());
         assert!(req.agent_config.is_none());
+        assert!(req.enabled);
+    }
+
+    #[test]
+    fn create_request_accepts_explicitly_disabled_initial_state() {
+        let raw = json!({
+            "name": "Governed staged executor",
+            "enabled": false,
+            "schedule": {"kind": "every", "every_ms": 60000},
+            "conversation_id": "conv_1",
+            "created_by": "user"
+        });
+
+        let req: CreateCronJobRequest = serde_json::from_value(raw).unwrap();
+
+        assert!(!req.enabled);
     }
 
     #[test]

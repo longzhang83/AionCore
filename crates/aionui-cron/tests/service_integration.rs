@@ -1119,6 +1119,7 @@ async fn setup_with_assistant_repos() -> (
 fn make_create_req(name: &str, schedule: CronScheduleDto) -> CreateCronJobRequest {
     CreateCronJobRequest {
         name: name.into(),
+        enabled: true,
         description: Some("test description".into()),
         schedule,
         prompt: None,
@@ -1311,6 +1312,24 @@ async fn cj1_create_cron_job() {
     let events = bc.take_events();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].name, "cron.job-created");
+}
+
+#[tokio::test]
+async fn create_job_can_stage_a_disabled_executor_without_a_timer() {
+    let (svc, cron_repo, bc) = setup().await;
+    let mut req = make_create_req("Governed staged executor", every_60s());
+    req.enabled = false;
+
+    let job = svc.add_job("u1", req).await.unwrap();
+
+    assert!(!job.enabled);
+    assert_eq!(job.next_run_at, None);
+    let row = cron_repo.get_by_id_system(&job.id).await.unwrap().unwrap();
+    assert!(!row.enabled);
+    assert_eq!(row.next_run_at, None);
+    let events = bc.take_events();
+    assert_eq!(events.len(), 1);
+    assert!(!events[0].data["enabled"].as_bool().unwrap());
 }
 
 #[tokio::test]
@@ -1667,7 +1686,7 @@ async fn cj7b_add_job_binds_existing_conversation_to_job() {
 
 #[tokio::test]
 async fn cj8_update_job() {
-    let (svc, _, bc) = setup().await;
+    let (svc, cron_repo, bc) = setup().await;
     let created = svc
         .add_job("u1", make_create_req("Original", every_60s()))
         .await
@@ -1691,11 +1710,47 @@ async fn cj8_update_job() {
     assert_eq!(updated.name, "Updated Name");
     assert_eq!(updated.description.as_deref(), Some("Updated description"));
     assert!(!updated.enabled);
+    assert_eq!(updated.next_run_at, None);
     assert!(updated.updated_at >= created.created_at);
+
+    let row = cron_repo.get_by_id_system(&created.id).await.unwrap().unwrap();
+    assert!(!row.enabled);
+    assert_eq!(row.next_run_at, None);
 
     let events = bc.take_events();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].name, "cron.job-updated");
+}
+
+#[tokio::test]
+async fn enabling_staged_job_restores_next_run() {
+    let (svc, cron_repo, _) = setup().await;
+    let mut create_req = make_create_req("Staged", every_60s());
+    create_req.enabled = false;
+    let created = svc.add_job("u1", create_req).await.unwrap();
+    assert!(!created.enabled);
+    assert_eq!(created.next_run_at, None);
+
+    let req = UpdateCronJobRequest {
+        name: None,
+        description: None,
+        enabled: Some(true),
+        schedule: None,
+        message: None,
+        execution_mode: None,
+        agent_config: None,
+        conversation_title: None,
+        max_retries: None,
+        queue_enabled: None,
+    };
+
+    let updated = svc.update_job("u1", &created.id, req).await.unwrap();
+    assert!(updated.enabled);
+    assert!(updated.next_run_at.is_some());
+
+    let row = cron_repo.get_by_id_system(&created.id).await.unwrap().unwrap();
+    assert!(row.enabled);
+    assert!(row.next_run_at.is_some());
 }
 
 #[tokio::test]

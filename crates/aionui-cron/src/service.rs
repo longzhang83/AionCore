@@ -117,6 +117,7 @@ impl CronService {
             self.build_agent_config_from_conversation(&row).await;
         let create_req = CreateCronJobRequest {
             name: req.name,
+            enabled: true,
             description: None,
             schedule: schedule_dto,
             prompt: None,
@@ -291,13 +292,13 @@ impl CronService {
         };
 
         let now = now_ms();
-        let next_run_at = compute_next_run(&schedule, now);
+        let next_run_at = req.enabled.then(|| compute_next_run(&schedule, now)).flatten();
 
         let job = CronJob {
             id: generate_prefixed_id("cron"),
             user_id: user_id.to_owned(),
             name: req.name,
-            enabled: true,
+            enabled: req.enabled,
             schedule,
             message,
             execution_mode,
@@ -409,7 +410,11 @@ impl CronService {
         }
 
         if req.schedule.is_some() || req.enabled.is_some() {
-            job.next_run_at = compute_next_run(&job.schedule, now_ms());
+            job.next_run_at = if job.enabled {
+                compute_next_run(&job.schedule, now_ms())
+            } else {
+                None
+            };
         }
         if clear_conversation_binding
             && self
@@ -2764,8 +2769,10 @@ mod tests {
     }
 
     #[test]
-    fn build_update_params_enabled_change_triggers_next_run() {
-        let job = sample_job();
+    fn build_update_params_disable_persists_cleared_next_run() {
+        let mut job = sample_job();
+        job.enabled = false;
+        job.next_run_at = None;
         let req = UpdateCronJobRequest {
             name: None,
             description: None,
@@ -2780,7 +2787,7 @@ mod tests {
         };
         let params = build_update_params(&job, &req);
         assert_eq!(params.enabled, Some(false));
-        assert!(params.next_run_at.is_some());
+        assert_eq!(params.next_run_at, Some(None));
     }
 
     #[test]
