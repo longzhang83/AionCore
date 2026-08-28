@@ -290,7 +290,8 @@ impl AppServices {
             project_service: project_service.clone(),
         });
 
-        let schedule_bff_config = ScheduleBffConfig::from_env()
+        let rsm_auth_config = RsmAuthConfig::from_env();
+        let schedule_bff_config = ScheduleBffConfig::from_env(&rsm_auth_config)
             .map_err(|error| anyhow::anyhow!("Failed to configure Schedule BFF: {error}"))?;
 
         Ok(Self {
@@ -301,7 +302,7 @@ impl AppServices {
             iam_repo,
             cookie_config: Arc::new(CookieConfig::from_env()),
             qr_token_store: Arc::new(QrTokenStore::new()),
-            rsm_auth_config: Arc::new(RsmAuthConfig::from_env()),
+            rsm_auth_config: Arc::new(rsm_auth_config),
             rsm_oidc_state_store: Arc::new(RsmOidcStateStore::new()),
             auth_center_token_vault: Arc::new(InMemoryAuthCenterTokenVault::new()),
             schedule_bff_config: Arc::new(schedule_bff_config),

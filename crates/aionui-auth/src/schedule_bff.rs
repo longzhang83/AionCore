@@ -23,6 +23,7 @@ use serde_json::Value;
 use aionui_api_types::ApiResponse;
 use aionui_common::ApiError;
 
+use crate::auth_center_client::RsmAuthConfig;
 use crate::auth_center_tokens::AuthCenterTokenVaultKey;
 use crate::extract::extract_token_from_headers;
 use crate::middleware::CurrentUser;
@@ -37,9 +38,10 @@ const IDEMPOTENT_REPLAY: HeaderName = HeaderName::from_static("idempotent-replay
 
 /// Fail-closed Schedule BFF configuration.
 ///
-/// A missing base URL leaves the transport disabled. A present but invalid URL
-/// is a startup configuration error; it is never silently replaced with a
-/// default upstream.
+/// A missing base URL leaves the transport disabled. When enabled, the Auth
+/// Center OIDC client ID must match the audience enforced by the Agent Control
+/// Plane, so a deployment mismatch fails at startup instead of on the first
+/// proxied request. Invalid values are never replaced with defaults.
 #[derive(Debug, Clone)]
 pub struct ScheduleBffConfig {
     base_url: Option<Url>,
@@ -56,6 +58,12 @@ pub enum ScheduleBffConfigError {
     InvalidBaseUrlComponents,
     #[error("Schedule BFF timeout must be a positive integer number of milliseconds")]
     InvalidTimeout,
+    #[error("Schedule BFF requires a ready Auth Center OIDC configuration")]
+    AuthCenterOidcRequired,
+    #[error("RSM_AGENT_CONTROL_PLANE_AUTH_AUDIENCE is required when Schedule BFF is enabled")]
+    MissingAuthAudience,
+    #[error("Schedule BFF OAuth client ID must match the Agent Control Plane auth audience")]
+    AudienceClientMismatch,
 }
 
 impl ScheduleBffConfig {
@@ -66,7 +74,7 @@ impl ScheduleBffConfig {
         }
     }
 
-    pub fn new(base_url: impl AsRef<str>, timeout: Duration) -> Result<Self, ScheduleBffConfigError> {
+    fn new_transport(base_url: impl AsRef<str>, timeout: Duration) -> Result<Self, ScheduleBffConfigError> {
         if timeout.is_zero() {
             return Err(ScheduleBffConfigError::InvalidTimeout);
         }
@@ -91,14 +99,51 @@ impl ScheduleBffConfig {
         })
     }
 
-    pub fn from_env() -> Result<Self, ScheduleBffConfigError> {
+    /// Builds an enabled transport from programmatic configuration while
+    /// enforcing the same OIDC client/audience contract as [`Self::from_env`].
+    pub fn new_with_identity_contract(
+        base_url: impl AsRef<str>,
+        timeout: Duration,
+        rsm_auth_config: &RsmAuthConfig,
+        expected_audience: Option<&str>,
+    ) -> Result<Self, ScheduleBffConfigError> {
+        if !rsm_auth_config.is_oidc_ready() {
+            return Err(ScheduleBffConfigError::AuthCenterOidcRequired);
+        }
+        let expected_audience = expected_audience
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or(ScheduleBffConfigError::MissingAuthAudience)?;
+        let client_id = rsm_auth_config
+            .client_id
+            .as_deref()
+            .ok_or(ScheduleBffConfigError::AuthCenterOidcRequired)?;
+        if expected_audience != client_id {
+            return Err(ScheduleBffConfigError::AudienceClientMismatch);
+        }
+        Self::new_transport(base_url, timeout)
+    }
+
+    fn from_values(
+        base_url: Option<&str>,
+        timeout: Duration,
+        rsm_auth_config: &RsmAuthConfig,
+        expected_audience: Option<&str>,
+    ) -> Result<Self, ScheduleBffConfigError> {
+        let Some(base_url) = base_url else {
+            return Ok(Self::disabled());
+        };
+        Self::new_with_identity_contract(base_url, timeout, rsm_auth_config, expected_audience)
+    }
+
+    pub fn from_env(rsm_auth_config: &RsmAuthConfig) -> Result<Self, ScheduleBffConfigError> {
         let base_url = ["RSM_AGENT_CONTROL_PLANE_BASE_URL", "AGENT_CONTROL_PLANE_BASE_URL"]
             .into_iter()
             .find_map(|name| std::env::var(name).ok())
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
         let Some(base_url) = base_url else {
-            return Ok(Self::disabled());
+            return Self::from_values(None, DEFAULT_TIMEOUT, rsm_auth_config, None);
         };
         let timeout = match std::env::var("RSM_SCHEDULE_BFF_TIMEOUT_MS") {
             Ok(value) => {
@@ -112,7 +157,10 @@ impl ScheduleBffConfig {
             }
             Err(_) => DEFAULT_TIMEOUT,
         };
-        Self::new(base_url, timeout)
+        // Auth Center access tokens use the OAuth client ID as `aud`; ACP
+        // verifies this exact configured audience before device/scope gates.
+        let expected_audience = std::env::var("RSM_AGENT_CONTROL_PLANE_AUTH_AUDIENCE").ok();
+        Self::from_values(Some(&base_url), timeout, rsm_auth_config, expected_audience.as_deref())
     }
 
     fn upstream_url(&self, route: &ScheduleRoute, query: Option<&str>) -> Result<Url, ApiError> {
@@ -604,27 +652,248 @@ fn map_upstream_error(status: StatusCode, body: &[u8]) -> ApiError {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Mutex, OnceLock};
+
     use super::*;
+
+    static ENV_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+    const SCHEDULE_ENV_KEYS: [&str; 10] = [
+        "RSM_AGENT_CONTROL_PLANE_BASE_URL",
+        "AGENT_CONTROL_PLANE_BASE_URL",
+        "RSM_AGENT_CONTROL_PLANE_AUTH_AUDIENCE",
+        "RSM_SCHEDULE_BFF_TIMEOUT_MS",
+        "RSM_AUTH_ENABLED",
+        "AUTH_CENTER_ENABLED",
+        "RSM_AUTH_ISSUER",
+        "AUTH_CENTER_ISSUER",
+        "RSM_AUTH_CLIENT_ID",
+        "AUTH_CENTER_CLIENT_ID",
+    ];
+
+    struct EnvRestore(Vec<(&'static str, Option<String>)>);
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            for name in SCHEDULE_ENV_KEYS {
+                remove_env(name);
+            }
+            for (name, value) in &self.0 {
+                if let Some(value) = value {
+                    set_env(name, value);
+                }
+            }
+        }
+    }
+
+    fn remove_env(name: &str) {
+        // SAFETY: tests call this only while holding ENV_MUTEX, serializing
+        // process-global environment mutations in this module.
+        unsafe { std::env::remove_var(name) };
+    }
+
+    fn set_env(name: &str, value: &str) {
+        // SAFETY: tests call this only while holding ENV_MUTEX, serializing
+        // process-global environment mutations in this module.
+        unsafe { std::env::set_var(name, value) };
+    }
+
+    fn rsm_auth_config(enabled: bool, client_id: Option<&str>) -> crate::RsmAuthConfig {
+        crate::RsmAuthConfig {
+            enabled,
+            issuer: enabled.then(|| "https://auth.example".to_owned()),
+            client_id: client_id.map(str::to_owned),
+            client_secret: None,
+            redirect_uri: None,
+            additional_scopes: Vec::new(),
+            app_code: "agent".to_owned(),
+            internal_base_url: None,
+            internal_token: None,
+        }
+    }
+
+    fn with_schedule_env<R>(values: &[(&str, &str)], test: impl FnOnce() -> R) -> R {
+        let _guard = ENV_MUTEX.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let previous = SCHEDULE_ENV_KEYS
+            .iter()
+            .map(|name| (*name, std::env::var(name).ok()))
+            .collect::<Vec<_>>();
+
+        for name in SCHEDULE_ENV_KEYS {
+            remove_env(name);
+        }
+        for (name, value) in values {
+            set_env(name, value);
+        }
+        let _restore = EnvRestore(previous);
+
+        test()
+    }
+
+    #[test]
+    fn governed_config_requires_ready_oidc_and_matching_audience() {
+        let timeout = Duration::from_secs(1);
+
+        assert!(matches!(
+            ScheduleBffConfig::new_with_identity_contract(
+                "https://acp.example",
+                timeout,
+                &rsm_auth_config(false, Some("agent-control-plane")),
+                Some("agent-control-plane"),
+            ),
+            Err(ScheduleBffConfigError::AuthCenterOidcRequired)
+        ));
+        assert!(matches!(
+            ScheduleBffConfig::new_with_identity_contract(
+                "https://acp.example",
+                timeout,
+                &rsm_auth_config(true, None),
+                Some("agent-control-plane"),
+            ),
+            Err(ScheduleBffConfigError::AuthCenterOidcRequired)
+        ));
+        assert!(matches!(
+            ScheduleBffConfig::new_with_identity_contract(
+                "https://acp.example",
+                timeout,
+                &rsm_auth_config(true, Some("agent-control-plane")),
+                None,
+            ),
+            Err(ScheduleBffConfigError::MissingAuthAudience)
+        ));
+        assert!(matches!(
+            ScheduleBffConfig::new_with_identity_contract(
+                "https://acp.example",
+                timeout,
+                &rsm_auth_config(true, Some("agent-control-plane")),
+                Some("   "),
+            ),
+            Err(ScheduleBffConfigError::MissingAuthAudience)
+        ));
+        assert!(matches!(
+            ScheduleBffConfig::new_with_identity_contract(
+                "https://acp.example",
+                timeout,
+                &rsm_auth_config(true, Some("agent-control-plane")),
+                Some("rsm-agent-platform-webui"),
+            ),
+            Err(ScheduleBffConfigError::AudienceClientMismatch)
+        ));
+        assert!(
+            ScheduleBffConfig::new_with_identity_contract(
+                "https://acp.example",
+                timeout,
+                &rsm_auth_config(true, Some("agent-control-plane")),
+                Some(" agent-control-plane "),
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn disabled_config_does_not_require_oidc_or_audience() {
+        let config =
+            ScheduleBffConfig::from_values(None, Duration::from_secs(1), &rsm_auth_config(false, None), None).unwrap();
+        assert!(config.base_url.is_none());
+    }
+
+    #[test]
+    fn env_config_enforces_oidc_and_audience_only_when_enabled() {
+        with_schedule_env(&[], || {
+            let config = ScheduleBffConfig::from_env(&crate::RsmAuthConfig::from_env()).unwrap();
+            assert!(config.base_url.is_none());
+        });
+
+        with_schedule_env(
+            &[
+                ("RSM_AGENT_CONTROL_PLANE_BASE_URL", "https://acp.example"),
+                ("RSM_AUTH_ENABLED", "true"),
+                ("RSM_AUTH_ISSUER", "https://auth.example"),
+                ("RSM_AUTH_CLIENT_ID", "agent-control-plane"),
+            ],
+            || {
+                assert!(matches!(
+                    ScheduleBffConfig::from_env(&crate::RsmAuthConfig::from_env()),
+                    Err(ScheduleBffConfigError::MissingAuthAudience)
+                ));
+            },
+        );
+
+        with_schedule_env(
+            &[
+                ("RSM_AGENT_CONTROL_PLANE_BASE_URL", "https://acp.example"),
+                ("RSM_AGENT_CONTROL_PLANE_AUTH_AUDIENCE", " rsm-agent-platform-webui "),
+                ("RSM_AUTH_ENABLED", "true"),
+                ("RSM_AUTH_ISSUER", "https://auth.example"),
+                ("RSM_AUTH_CLIENT_ID", "agent-control-plane"),
+            ],
+            || {
+                assert!(matches!(
+                    ScheduleBffConfig::from_env(&crate::RsmAuthConfig::from_env()),
+                    Err(ScheduleBffConfigError::AudienceClientMismatch)
+                ));
+            },
+        );
+
+        with_schedule_env(
+            &[
+                ("RSM_AGENT_CONTROL_PLANE_BASE_URL", " https://acp.example/internal "),
+                ("RSM_AGENT_CONTROL_PLANE_AUTH_AUDIENCE", " agent-control-plane "),
+                ("RSM_AUTH_ENABLED", "true"),
+                ("RSM_AUTH_ISSUER", "https://auth.example"),
+                ("RSM_AUTH_CLIENT_ID", " agent-control-plane "),
+                ("RSM_SCHEDULE_BFF_TIMEOUT_MS", "2500"),
+            ],
+            || {
+                let config = ScheduleBffConfig::from_env(&crate::RsmAuthConfig::from_env()).unwrap();
+                assert_eq!(config.timeout, Duration::from_millis(2500));
+                assert_eq!(
+                    config.upstream_url(&ScheduleRoute::Collection, None).unwrap().as_str(),
+                    "https://acp.example/internal/api/schedule/v1/schedules"
+                );
+            },
+        );
+    }
 
     #[test]
     fn config_rejects_non_http_and_query_bearing_base_urls() {
         assert!(matches!(
-            ScheduleBffConfig::new("file:///tmp/acp", Duration::from_secs(1)),
+            ScheduleBffConfig::new_with_identity_contract(
+                "file:///tmp/acp",
+                Duration::from_secs(1),
+                &rsm_auth_config(true, Some("agent-control-plane")),
+                Some("agent-control-plane"),
+            ),
             Err(ScheduleBffConfigError::InvalidScheme)
         ));
         assert!(matches!(
-            ScheduleBffConfig::new("https://acp.example/?secret=value", Duration::from_secs(1)),
+            ScheduleBffConfig::new_with_identity_contract(
+                "https://acp.example/?secret=value",
+                Duration::from_secs(1),
+                &rsm_auth_config(true, Some("agent-control-plane")),
+                Some("agent-control-plane"),
+            ),
             Err(ScheduleBffConfigError::InvalidBaseUrlComponents)
         ));
         assert!(matches!(
-            ScheduleBffConfig::new("https://user:pass@acp.example", Duration::from_secs(1)),
+            ScheduleBffConfig::new_with_identity_contract(
+                "https://user:pass@acp.example",
+                Duration::from_secs(1),
+                &rsm_auth_config(true, Some("agent-control-plane")),
+                Some("agent-control-plane"),
+            ),
             Err(ScheduleBffConfigError::InvalidBaseUrlComponents)
         ));
     }
 
     #[test]
     fn upstream_url_preserves_configured_path_prefix_and_request_query() {
-        let config = ScheduleBffConfig::new("https://acp.example/internal", Duration::from_secs(1)).unwrap();
+        let config = ScheduleBffConfig::new_with_identity_contract(
+            "https://acp.example/internal",
+            Duration::from_secs(1),
+            &rsm_auth_config(true, Some("agent-control-plane")),
+            Some("agent-control-plane"),
+        )
+        .unwrap();
         assert_eq!(
             config
                 .upstream_url(&ScheduleRoute::Collection, Some("page=2"))

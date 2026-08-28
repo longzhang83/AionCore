@@ -113,7 +113,7 @@ impl RsmAuthConfig {
         })
     }
 
-    fn is_oidc_ready(&self) -> bool {
+    pub(crate) fn is_oidc_ready(&self) -> bool {
         self.enabled
             && self.issuer.as_deref().is_some_and(|v| !v.is_empty())
             && self.client_id.as_deref().is_some_and(|v| !v.is_empty())

@@ -31,7 +31,24 @@ async fn test_app(upstream: &MockServer, timeout: Duration) -> (Router, TestCont
     let iam_repo = Arc::new(SqliteIamRepository::new(db.pool().clone())) as Arc<dyn IIamRepository>;
     let jwt_service = Arc::new(JwtService::new("schedule_bff_test_secret".to_owned()));
     let vault = Arc::new(InMemoryAuthCenterTokenVault::new());
-    let schedule_bff_config = ScheduleBffConfig::new(upstream.uri(), timeout).unwrap();
+    let rsm_auth_config = RsmAuthConfig {
+        enabled: true,
+        issuer: Some("https://auth.example".to_owned()),
+        client_id: Some("agent-control-plane".to_owned()),
+        client_secret: None,
+        redirect_uri: None,
+        additional_scopes: Vec::new(),
+        app_code: "agent".to_owned(),
+        internal_base_url: None,
+        internal_token: None,
+    };
+    let schedule_bff_config = ScheduleBffConfig::new_with_identity_contract(
+        upstream.uri(),
+        timeout,
+        &rsm_auth_config,
+        Some("agent-control-plane"),
+    )
+    .unwrap();
     let state = AuthRouterState {
         jwt_service: jwt_service.clone(),
         user_repo,
@@ -45,17 +62,7 @@ async fn test_app(upstream: &MockServer, timeout: Duration) -> (Router, TestCont
         identity_mode: AuthIdentityMode::UserSession,
         bootstrap_secret: None,
         session_revoked_hook: None,
-        rsm_auth_config: Arc::new(RsmAuthConfig {
-            enabled: false,
-            issuer: None,
-            client_id: None,
-            client_secret: None,
-            redirect_uri: None,
-            additional_scopes: Vec::new(),
-            app_code: "agent".to_owned(),
-            internal_base_url: None,
-            internal_token: None,
-        }),
+        rsm_auth_config: Arc::new(rsm_auth_config),
         rsm_oidc_state_store: Arc::new(RsmOidcStateStore::new()),
         auth_center_token_vault: vault.clone(),
         schedule_bff_config: Arc::new(schedule_bff_config),
