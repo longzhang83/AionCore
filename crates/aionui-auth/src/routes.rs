@@ -46,6 +46,7 @@ use crate::qr_token::QrTokenStore;
 use crate::rate_limit::{
     RateLimiter, api_rate_limit_middleware, auth_rate_limit_middleware, authenticated_action_rate_limit_middleware,
 };
+use crate::schedule_bff::{ScheduleBffConfig, schedule_bff_routes};
 use crate::service::{AuthProvisionService, ProvisionError};
 use crate::validation::{validate_password, validate_username};
 use crate::{CookieConfig, JwtService};
@@ -214,6 +215,7 @@ pub struct AuthRouterState {
     /// JWT fingerprint and owning user. Populated on successful OIDC
     /// callback, rotated with the local JWT, and drained on logout/revoke.
     pub auth_center_token_vault: Arc<dyn IAuthCenterTokenVault>,
+    pub schedule_bff_config: Arc<ScheduleBffConfig>,
     pub http_client: reqwest::Client,
     pub local: bool,
     pub aionpro_mode: bool,
@@ -477,6 +479,7 @@ pub fn auth_routes(state: AuthRouterState) -> Router {
     // Authenticated routes: api limiter -> auth -> action limiter
     // route_layer order: last added = outermost (first to process)
     let authenticated = Router::new()
+        .merge(schedule_bff_routes())
         .route("/logout", post(logout_handler))
         .route("/api/auth/user", get(user_handler))
         .route("/api/auth/change-password", post(change_password_handler))

@@ -10,7 +10,7 @@ use aionui_ai_agent::{
 };
 use aionui_auth::{
     CookieConfig, IAuthCenterTokenVault, InMemoryAuthCenterTokenVault, JwtService, QrTokenStore, RsmAuthConfig,
-    RsmOidcStateStore, resolve_jwt_secret,
+    RsmOidcStateStore, ScheduleBffConfig, resolve_jwt_secret,
 };
 use aionui_common::OnConversationDelete;
 use aionui_conversation::{ConversationService, runtime_state::ConversationRuntimeStateService};
@@ -38,6 +38,7 @@ pub struct AppServices {
     /// replaceable via the [`IAuthCenterTokenVault`] trait when durable
     /// storage is available.
     pub auth_center_token_vault: Arc<dyn IAuthCenterTokenVault>,
+    pub schedule_bff_config: Arc<ScheduleBffConfig>,
     pub http_client: reqwest::Client,
     pub ws_manager: Arc<WebSocketManager>,
     pub event_bus: Arc<BroadcastEventBus>,
@@ -289,6 +290,9 @@ impl AppServices {
             project_service: project_service.clone(),
         });
 
+        let schedule_bff_config = ScheduleBffConfig::from_env()
+            .map_err(|error| anyhow::anyhow!("Failed to configure Schedule BFF: {error}"))?;
+
         Ok(Self {
             database,
             jwt_service: Arc::new(JwtService::new(secret.clone())),
@@ -300,6 +304,7 @@ impl AppServices {
             rsm_auth_config: Arc::new(RsmAuthConfig::from_env()),
             rsm_oidc_state_store: Arc::new(RsmOidcStateStore::new()),
             auth_center_token_vault: Arc::new(InMemoryAuthCenterTokenVault::new()),
+            schedule_bff_config: Arc::new(schedule_bff_config),
             http_client: reqwest::Client::new(),
             ws_manager: Arc::new(WebSocketManager::new()),
             event_bus,

@@ -13,6 +13,7 @@ mod password;
 pub mod qr_token;
 mod rate_limit;
 mod routes;
+mod schedule_bff;
 mod security;
 mod service;
 mod validation;
@@ -77,5 +78,7 @@ pub use auth_center_tokens::{
 
 // Routes
 pub use routes::{AuthRouterState, SessionRevokedHook, auth_routes};
+
+pub use schedule_bff::{ScheduleBffConfig, ScheduleBffConfigError};
 
 pub use service::{AuthProvisionService, ProvisionError, SystemDefaultFilesystemAdopter};

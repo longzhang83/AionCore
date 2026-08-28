@@ -18,7 +18,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use aionui_auth::{
     AuthCenterTokenResponse, AuthCenterTokenVaultKey, AuthIdentityMode, AuthRouterState, CookieConfig,
     IAuthCenterTokenVault, InMemoryAuthCenterTokenVault, JwtService, QrTokenStore, RsmAuthConfig, RsmOidcStateStore,
-    SessionRevokedHook, auth_routes, bundle_from_token_response, hash_password,
+    ScheduleBffConfig, SessionRevokedHook, auth_routes, bundle_from_token_response, hash_password,
 };
 use aionui_db::{
     IIamRepository, IUserRepository, SqliteIamRepository, SqliteUserRepository, UpsertExternalUserParams, UserStatus,
@@ -99,6 +99,7 @@ async fn test_app_with_options_and_config(
         rsm_auth_config: Arc::new(rsm_auth_config),
         rsm_oidc_state_store: Arc::new(RsmOidcStateStore::new()),
         auth_center_token_vault: auth_center_token_vault.clone(),
+        schedule_bff_config: Arc::new(ScheduleBffConfig::disabled()),
         http_client: reqwest::Client::new(),
         local,
         aionpro_mode,

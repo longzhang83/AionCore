@@ -1,0 +1,406 @@
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use axum::Router;
+use axum::body::Body;
+use axum::http::{Method, Request, StatusCode, header};
+use http_body_util::BodyExt;
+use serde_json::{Value, json};
+use tower::ServiceExt;
+use wiremock::matchers::{header as wiremock_header, method, path, query_param};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+use aionui_auth::{
+    AuthCenterTokenResponse, AuthCenterTokenVaultKey, AuthIdentityMode, AuthRouterState, CookieConfig,
+    IAuthCenterTokenVault, InMemoryAuthCenterTokenVault, JwtService, QrTokenStore, RsmAuthConfig, RsmOidcStateStore,
+    ScheduleBffConfig, auth_routes, bundle_from_token_response,
+};
+use aionui_db::{IIamRepository, IUserRepository, SqliteIamRepository, SqliteUserRepository, init_database_memory};
+
+const USER_ID: &str = "system_default_user";
+
+struct TestContext {
+    jwt_service: Arc<JwtService>,
+    vault: Arc<InMemoryAuthCenterTokenVault>,
+    _db: aionui_db::Database,
+}
+
+async fn test_app(upstream: &MockServer, timeout: Duration) -> (Router, TestContext) {
+    let db = init_database_memory().await.unwrap();
+    let user_repo = Arc::new(SqliteUserRepository::new(db.pool().clone())) as Arc<dyn IUserRepository>;
+    let iam_repo = Arc::new(SqliteIamRepository::new(db.pool().clone())) as Arc<dyn IIamRepository>;
+    let jwt_service = Arc::new(JwtService::new("schedule_bff_test_secret".to_owned()));
+    let vault = Arc::new(InMemoryAuthCenterTokenVault::new());
+    let schedule_bff_config = ScheduleBffConfig::new(upstream.uri(), timeout).unwrap();
+    let state = AuthRouterState {
+        jwt_service: jwt_service.clone(),
+        user_repo,
+        fs_adopter: None,
+        iam_repo,
+        cookie_config: Arc::new(CookieConfig {
+            secure: false,
+            same_site: "Lax",
+        }),
+        qr_token_store: Arc::new(QrTokenStore::new()),
+        identity_mode: AuthIdentityMode::UserSession,
+        bootstrap_secret: None,
+        session_revoked_hook: None,
+        rsm_auth_config: Arc::new(RsmAuthConfig {
+            enabled: false,
+            issuer: None,
+            client_id: None,
+            client_secret: None,
+            redirect_uri: None,
+            app_code: "agent".to_owned(),
+            internal_base_url: None,
+            internal_token: None,
+        }),
+        rsm_oidc_state_store: Arc::new(RsmOidcStateStore::new()),
+        auth_center_token_vault: vault.clone(),
+        schedule_bff_config: Arc::new(schedule_bff_config),
+        http_client: reqwest::Client::new(),
+        local: false,
+        aionpro_mode: false,
+    };
+    (
+        auth_routes(state),
+        TestContext {
+            jwt_service,
+            vault,
+            _db: db,
+        },
+    )
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64
+}
+
+fn bind_upstream_token(ctx: &TestContext, upstream_token: &str, expires_in: i64) -> String {
+    let local_token = ctx.jwt_service.sign_auth_center_bound(USER_ID, "admin", 0).unwrap();
+    let bundle = bundle_from_token_response(
+        AuthCenterTokenResponse {
+            access_token: upstream_token.to_owned(),
+            refresh_token: Some("refresh-must-stay-server-side".to_owned()),
+            id_token: Some("id-token-must-stay-server-side".to_owned()),
+            token_type: Some("Bearer".to_owned()),
+            scope: Some("schedule:read schedule:write".to_owned()),
+            expires_in: Some(expires_in),
+        },
+        now_ms(),
+    );
+    ctx.vault
+        .store(AuthCenterTokenVaultKey::from_token(&local_token, USER_ID), bundle);
+    local_token
+}
+
+fn request(method: Method, uri: &str, local_token: &str, body: Body) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::AUTHORIZATION, format!("Bearer {local_token}"))
+        .body(body)
+        .unwrap()
+}
+
+async fn json_body(response: axum::response::Response) -> Value {
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+#[tokio::test]
+async fn schedule_bff_preserves_query_json_and_contract_headers_but_strips_browser_credentials() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/schedule/v1/schedules"))
+        .and(query_param("workspace_id", "workspace-1"))
+        .and(wiremock_header("authorization", "Bearer upstream-access"))
+        .and(wiremock_header("idempotency-key", "idem-1"))
+        .and(wiremock_header("x-request-id", "request-1"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({"schedule_id": "schedule-1"})))
+        .mount(&upstream)
+        .await;
+    let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+    let local_token = bind_upstream_token(&ctx, "upstream-access", 3600);
+
+    let body = json!({"workspace_id": "workspace-1", "title": "nightly"}).to_string();
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/schedule/v1/schedules?workspace_id=workspace-1")
+        .header(header::AUTHORIZATION, format!("Bearer {local_token}"))
+        .header(header::COOKIE, "aionui-session=browser-cookie")
+        .header("x-csrf-token", "browser-csrf")
+        .header(header::ORIGIN, "https://browser.example")
+        .header(header::REFERER, "https://browser.example/settings")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("idempotency-key", "idem-1")
+        .header("x-request-id", "request-1")
+        .body(Body::from(body.clone()))
+        .unwrap();
+    let response = app.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(
+        json_body(response).await,
+        json!({"success": true, "data": {"schedule_id": "schedule-1"}})
+    );
+
+    let received = upstream.received_requests().await.unwrap();
+    assert_eq!(received.len(), 1);
+    assert_eq!(String::from_utf8(received[0].body.clone()).unwrap(), body);
+    for stripped in ["cookie", "x-csrf-token", "origin", "referer"] {
+        assert!(
+            received[0].headers.get(stripped).is_none(),
+            "forwarded sensitive header: {stripped}"
+        );
+    }
+    let authorization = received[0].headers.get("authorization").unwrap().to_str().unwrap();
+    assert_eq!(authorization, "Bearer upstream-access");
+    assert!(!authorization.contains(&local_token));
+}
+
+#[tokio::test]
+async fn schedule_bff_keeps_concurrent_browser_sessions_token_isolated() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/schedule/v1/schedules"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items": []})))
+        .expect(2)
+        .mount(&upstream)
+        .await;
+    let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+    let local_a = bind_upstream_token(&ctx, "upstream-a", 3600);
+    let local_b = bind_upstream_token(&ctx, "upstream-b", 3600);
+
+    for token in [&local_a, &local_b] {
+        let response = app
+            .clone()
+            .oneshot(request(Method::GET, "/api/schedule/v1/schedules", token, Body::empty()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let mut authorizations = upstream
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|req| req.headers.get("authorization").unwrap().to_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    authorizations.sort();
+    assert_eq!(authorizations, ["Bearer upstream-a", "Bearer upstream-b"]);
+}
+
+#[tokio::test]
+async fn schedule_bff_exposes_only_the_frozen_path_and_method_allowlist() {
+    let upstream = MockServer::start().await;
+    let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+    let local_token = bind_upstream_token(&ctx, "upstream-access", 3600);
+
+    let unsupported_path = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/schedule/v1/admin/secrets",
+            &local_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(unsupported_path.status(), StatusCode::NOT_FOUND);
+
+    let unsupported_method = app
+        .oneshot(request(
+            Method::DELETE,
+            "/api/schedule/v1/schedules/schedule-1",
+            &local_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(unsupported_method.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn schedule_bff_rejects_encoded_dot_segments_and_slashes_before_upstream_url_construction() {
+    let upstream = MockServer::start().await;
+    let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+    let local_token = bind_upstream_token(&ctx, "upstream-access", 3600);
+
+    for uri in [
+        "/api/schedule/v1/schedules/%2e%2e",
+        "/api/schedule/v1/schedules/schedule%2Fadmin",
+        "/api/schedule/v1/schedules/schedule-1/runs/%2e%2e",
+        "/api/schedule/v1/schedules/schedule-1/runs/run%2Fsecret",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(request(Method::GET, uri, &local_token, Body::empty()))
+            .await
+            .unwrap();
+        assert!(
+            matches!(response.status(), StatusCode::BAD_REQUEST | StatusCode::NOT_FOUND),
+            "unexpected traversal response for {uri}: {}",
+            response.status()
+        );
+    }
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn schedule_bff_missing_or_expired_bundle_fails_closed_without_upstream_request() {
+    let upstream = MockServer::start().await;
+    let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+    let missing = ctx.jwt_service.sign_auth_center_bound(USER_ID, "admin", 0).unwrap();
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/schedule/v1/schedules",
+            &missing,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(json_body(response).await["code"], "AUTH_CENTER_SESSION_REQUIRED");
+
+    let expired = bind_upstream_token(&ctx, "expired-upstream", -1);
+    let expired_key = AuthCenterTokenVaultKey::from_token(&expired, USER_ID);
+    let response = app
+        .oneshot(request(
+            Method::GET,
+            "/api/schedule/v1/schedules",
+            &expired,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(json_body(response).await["code"], "AUTH_CENTER_SESSION_REQUIRED");
+    assert!(ctx.vault.get(&expired_key).is_none());
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn schedule_bff_maps_upstream_identity_permission_conflict_and_server_errors_safely() {
+    let cases = [
+        (
+            401,
+            json!({"code": "device_unbound", "message": "Bind this device", "request_id": "rid-1"}),
+            401,
+            "device_unbound",
+        ),
+        (
+            401,
+            json!({"debug": "raw-token upstream-secret"}),
+            401,
+            "AUTH_CENTER_SESSION_REQUIRED",
+        ),
+        (
+            403,
+            json!({"code": "schedule_forbidden", "message": "private tenant details"}),
+            403,
+            "SCHEDULE_FORBIDDEN",
+        ),
+        (
+            409,
+            json!({"code": "schedule_local_job_conflict", "message": "private conflict details"}),
+            409,
+            "SCHEDULE_CONFLICT",
+        ),
+        (
+            500,
+            json!({"error": "database DSN and upstream-secret"}),
+            502,
+            "SCHEDULE_UPSTREAM_UNAVAILABLE",
+        ),
+    ];
+
+    for (upstream_status, upstream_body, expected_status, expected_code) in cases {
+        let upstream = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/schedule/v1/schedules"))
+            .respond_with(ResponseTemplate::new(upstream_status).set_body_json(upstream_body))
+            .mount(&upstream)
+            .await;
+        let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+        let local_token = bind_upstream_token(&ctx, "upstream-secret", 3600);
+        let response = app
+            .oneshot(request(
+                Method::GET,
+                "/api/schedule/v1/schedules",
+                &local_token,
+                Body::empty(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), expected_status);
+        let body = json_body(response).await;
+        assert_eq!(body["success"], false);
+        assert_eq!(body["code"], expected_code);
+        let rendered = body.to_string();
+        assert!(!rendered.contains("upstream-secret"));
+        assert!(!rendered.contains("private tenant details"));
+        assert!(!rendered.contains("private conflict details"));
+        assert!(!rendered.contains("database DSN"));
+    }
+}
+
+#[tokio::test]
+async fn schedule_bff_timeout_returns_stable_gateway_timeout_without_leaking_details() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/schedule/v1/schedules"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_millis(200))
+                .set_body_json(json!({"items": []})),
+        )
+        .mount(&upstream)
+        .await;
+    let (app, ctx) = test_app(&upstream, Duration::from_millis(20)).await;
+    let local_token = bind_upstream_token(&ctx, "upstream-access", 3600);
+
+    let response = app
+        .oneshot(request(
+            Method::GET,
+            "/api/schedule/v1/schedules",
+            &local_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+    let body = json_body(response).await;
+    assert_eq!(body["code"], "SCHEDULE_UPSTREAM_TIMEOUT");
+    assert!(!body.to_string().contains("upstream-access"));
+}
+
+#[tokio::test]
+async fn schedule_bff_rejects_oversized_upstream_response_before_exposing_or_parsing_it() {
+    let upstream = MockServer::start().await;
+    let oversized = vec![b'x'; 2 * 1024 * 1024 + 1];
+    Mock::given(method("GET"))
+        .and(path("/api/schedule/v1/schedules"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(oversized))
+        .mount(&upstream)
+        .await;
+    let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+    let local_token = bind_upstream_token(&ctx, "upstream-access", 3600);
+
+    let response = app
+        .oneshot(request(
+            Method::GET,
+            "/api/schedule/v1/schedules",
+            &local_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let body = json_body(response).await;
+    assert_eq!(body["code"], "SCHEDULE_UPSTREAM_INVALID_RESPONSE");
+    assert!(!body.to_string().contains("upstream-access"));
+}
