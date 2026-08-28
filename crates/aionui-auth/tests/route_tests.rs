@@ -124,6 +124,7 @@ fn directory_config(base_url: String) -> RsmAuthConfig {
         client_id: None,
         client_secret: None,
         redirect_uri: None,
+        additional_scopes: Vec::new(),
         app_code: "agent".to_owned(),
         internal_base_url: Some(base_url),
         internal_token: Some("internal-secret".to_owned()),

@@ -51,6 +51,7 @@ async fn test_app(upstream: &MockServer, timeout: Duration) -> (Router, TestCont
             client_id: None,
             client_secret: None,
             redirect_uri: None,
+            additional_scopes: Vec::new(),
             app_code: "agent".to_owned(),
             internal_base_url: None,
             internal_token: None,

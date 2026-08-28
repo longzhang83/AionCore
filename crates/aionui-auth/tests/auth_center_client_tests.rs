@@ -1,8 +1,10 @@
+use axum::http::HeaderMap;
+use reqwest::Url;
 use serde_json::json;
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use aionui_auth::{AuthCenterProtocolClient, RsmAuthConfig};
+use aionui_auth::{AuthCenterProtocolClient, RsmAuthConfig, RsmOidcLoginQuery, RsmOidcStateStore};
 
 fn directory_config(base_url: String) -> RsmAuthConfig {
     RsmAuthConfig {
@@ -11,10 +13,67 @@ fn directory_config(base_url: String) -> RsmAuthConfig {
         client_id: None,
         client_secret: None,
         redirect_uri: None,
+        additional_scopes: Vec::new(),
         app_code: "agent".to_owned(),
         internal_base_url: Some(base_url),
         internal_token: Some("internal-secret".to_owned()),
     }
+}
+
+#[tokio::test]
+async fn oidc_login_appends_configured_scopes_without_dropping_identity_scopes() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/.well-known/openid-configuration"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issuer": mock_server.uri(),
+            "authorization_endpoint": format!("{}/oauth/authorize", mock_server.uri()),
+            "token_endpoint": format!("{}/oauth/token", mock_server.uri()),
+            "userinfo_endpoint": format!("{}/oauth/userinfo", mock_server.uri()),
+            "jwks_uri": format!("{}/.well-known/jwks.json", mock_server.uri())
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let config = RsmAuthConfig {
+        enabled: true,
+        issuer: Some(mock_server.uri()),
+        client_id: Some("agent-control-plane".to_owned()),
+        client_secret: Some("server-side-secret".to_owned()),
+        redirect_uri: Some("http://localhost:25808/api/auth/oidc/callback".to_owned()),
+        additional_scopes: vec![
+            "offline_access".to_owned(),
+            "schedule:schedules:read".to_owned(),
+            "schedule:schedules:write".to_owned(),
+            "schedule:runs:read".to_owned(),
+            "openid".to_owned(),
+        ],
+        app_code: "agent".to_owned(),
+        internal_base_url: None,
+        internal_token: None,
+    };
+
+    let redirect = AuthCenterProtocolClient::new(reqwest::Client::new())
+        .build_login_redirect(
+            &config,
+            &RsmOidcStateStore::new(),
+            &HeaderMap::new(),
+            RsmOidcLoginQuery { return_to: None },
+        )
+        .await
+        .unwrap();
+    let redirect = Url::parse(&redirect).unwrap();
+    let scope = redirect
+        .query_pairs()
+        .find(|(key, _)| key == "scope")
+        .unwrap()
+        .1
+        .into_owned();
+
+    assert_eq!(
+        scope,
+        "openid profile email offline_access schedule:schedules:read schedule:schedules:write schedule:runs:read"
+    );
 }
 
 #[tokio::test]

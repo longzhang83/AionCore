@@ -13,6 +13,7 @@ use crate::auth_center_tokens::{AuthCenterTokenResponse, AuthCenterUserTokenBund
 use crate::error::AuthCenterError;
 
 const DEFAULT_APP_CODE: &str = "agent";
+const BASE_OIDC_SCOPES: [&str; 3] = ["openid", "profile", "email"];
 pub const AUTH_CENTER_PROVIDER: &str = "rsm-auth-center";
 const STATE_TTL_MS: i64 = 10 * 60 * 1000;
 
@@ -23,6 +24,8 @@ pub struct RsmAuthConfig {
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
     pub redirect_uri: Option<String>,
+    /// Additional scopes appended to the fixed OIDC identity scopes.
+    pub additional_scopes: Vec<String>,
     pub app_code: String,
     pub internal_base_url: Option<String>,
     pub internal_token: Option<String>,
@@ -36,6 +39,9 @@ impl RsmAuthConfig {
             client_id: env_non_empty_any(&["RSM_AUTH_CLIENT_ID", "AUTH_CENTER_CLIENT_ID"]),
             client_secret: env_non_empty_any(&["RSM_AUTH_CLIENT_SECRET", "AUTH_CENTER_CLIENT_SECRET"]),
             redirect_uri: env_non_empty_any(&["RSM_AUTH_REDIRECT_URI", "AUTH_CENTER_REDIRECT_URI"]),
+            additional_scopes: env_non_empty_any(&["RSM_AUTH_ADDITIONAL_SCOPES", "AUTH_CENTER_ADDITIONAL_SCOPES"])
+                .map(|value| normalize_additional_scopes(&value))
+                .unwrap_or_default(),
             app_code: env_non_empty_any(&["RSM_AUTH_APP_CODE", "AUTH_CENTER_APP_CODE"])
                 .unwrap_or_else(|| DEFAULT_APP_CODE.to_owned()),
             internal_base_url: env_non_empty_any(&["AUTH_CENTER_INTERNAL_BASE_URL", "RSM_AUTH_INTERNAL_BASE_URL"]),
@@ -74,6 +80,7 @@ impl RsmAuthConfig {
             client_id,
             client_secret,
             redirect_uri: self.redirect_uri.as_deref(),
+            additional_scopes: &self.additional_scopes,
             app_code: &self.app_code,
         })
     }
@@ -118,6 +125,7 @@ struct ReadyOidcConfig<'a> {
     client_id: &'a str,
     client_secret: &'a str,
     redirect_uri: Option<&'a str>,
+    additional_scopes: &'a [String],
     app_code: &'a str,
 }
 
@@ -296,6 +304,7 @@ impl AuthCenterProtocolClient {
         };
         let (state, code_verifier, nonce) = store.create(return_to, redirect_uri.clone());
         let code_challenge = pkce_challenge(&code_verifier);
+        let scopes = authorization_scopes(ready.additional_scopes);
 
         let mut url = Url::parse(&discovery.authorization_endpoint)
             .map_err(|e| AuthCenterError::BadGateway(format!("Invalid authorization endpoint: {e}")))?;
@@ -303,7 +312,7 @@ impl AuthCenterProtocolClient {
             .append_pair("response_type", "code")
             .append_pair("client_id", ready.client_id)
             .append_pair("redirect_uri", &redirect_uri)
-            .append_pair("scope", "openid profile email")
+            .append_pair("scope", &scopes)
             .append_pair("state", &state)
             .append_pair("nonce", &nonce)
             .append_pair("code_challenge", &code_challenge)
@@ -755,6 +764,23 @@ fn validate_discovered_issuer(discovery: &OidcDiscovery, expected: &str) -> Resu
         return Err(AuthCenterError::Unauthorized("RSM Auth Center issuer mismatch".into()));
     }
     Ok(())
+}
+
+fn normalize_additional_scopes(value: &str) -> Vec<String> {
+    value.split_whitespace().map(str::to_owned).collect()
+}
+
+fn authorization_scopes(additional_scopes: &[String]) -> String {
+    let mut scopes = BASE_OIDC_SCOPES
+        .iter()
+        .map(|scope| (*scope).to_owned())
+        .collect::<Vec<_>>();
+    for scope in additional_scopes {
+        if !scopes.contains(scope) {
+            scopes.push(scope.clone());
+        }
+    }
+    scopes.join(" ")
 }
 
 fn callback_url(headers: &HeaderMap) -> Result<String, AuthCenterError> {
