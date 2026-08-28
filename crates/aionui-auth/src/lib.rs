@@ -2,6 +2,7 @@
 
 //! JWT authentication, password hashing, CSRF protection, rate limiting, and auth middleware.
 mod auth_center_client;
+mod auth_center_tokens;
 mod cookie;
 mod csrf;
 mod error;
@@ -65,6 +66,13 @@ pub use auth_center_client::{
     AUTH_CENTER_PROVIDER, AuthCenterLoginIdentity, AuthCenterProtocolClient, DirectoryDepartment, DirectoryUser,
     RsmAuthConfig, RsmOidcCallbackQuery, RsmOidcLoginQuery, RsmOidcStateStore, directory_status_to_local_status,
     sanitize_username, timestamp_rfc3339_to_ms,
+};
+
+// RSM Auth Center server-side token bundle + vault
+pub use auth_center_tokens::{
+    AuthCenterTokenFingerprint, AuthCenterTokenResponse, AuthCenterTokenSecret, AuthCenterTokenVaultKey,
+    AuthCenterUserTokenBundle, IAuthCenterTokenVault, InMemoryAuthCenterTokenVault, bundle_from_token_response,
+    compute_expires_at_ms, fingerprint_token,
 };
 
 // Routes

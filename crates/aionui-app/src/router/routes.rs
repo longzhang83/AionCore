@@ -200,6 +200,7 @@ pub fn create_router_with_all_state(services: &AppServices, states: ModuleStates
         bootstrap_secret: services.bootstrap_secret.clone(),
         rsm_auth_config: services.rsm_auth_config.clone(),
         rsm_oidc_state_store: services.rsm_oidc_state_store.clone(),
+        auth_center_token_vault: services.auth_center_token_vault.clone(),
         http_client: services.http_client.clone(),
         session_revoked_hook: {
             let ws_manager = services.ws_manager.clone();

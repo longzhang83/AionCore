@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 
 use aionui_api_types::AuthConfigResponse;
 
+use crate::auth_center_tokens::{AuthCenterTokenResponse, AuthCenterUserTokenBundle, bundle_from_token_response};
 use crate::error::AuthCenterError;
 
 const DEFAULT_APP_CODE: &str = "agent";
@@ -316,7 +317,7 @@ impl AuthCenterProtocolClient {
         config: &RsmAuthConfig,
         store: &RsmOidcStateStore,
         query: RsmOidcCallbackQuery,
-    ) -> Result<(String, AuthCenterLoginIdentity), AuthCenterError> {
+    ) -> Result<(String, AuthCenterLoginIdentity, AuthCenterUserTokenBundle), AuthCenterError> {
         if let Some(error) = query.error {
             let detail = query.error_description.unwrap_or(error);
             return Err(AuthCenterError::Unauthorized(format!(
@@ -381,7 +382,9 @@ impl AuthCenterProtocolClient {
             is_admin: userinfo_is_admin(&userinfo, ready.app_code),
         };
 
-        Ok((stored.return_to, identity))
+        let bundle = bundle_from_token_response(token, aionui_common::now_ms());
+
+        Ok((stored.return_to, identity, bundle))
     }
 
     pub async fn list_directory_users(
@@ -428,7 +431,7 @@ impl AuthCenterProtocolClient {
         config: &ReadyOidcConfig<'_>,
         code: &str,
         stored: &StoredLoginState,
-    ) -> Result<TokenResponse, AuthCenterError> {
+    ) -> Result<AuthCenterTokenResponse, AuthCenterError> {
         let form = TokenExchangeForm {
             grant_type: "authorization_code",
             code,
@@ -452,7 +455,7 @@ impl AuthCenterProtocolClient {
             )));
         }
 
-        resp.json::<TokenResponse>()
+        resp.json::<AuthCenterTokenResponse>()
             .await
             .map_err(|e| AuthCenterError::Unauthorized(format!("Invalid RSM Auth Center token response: {e}")))
     }
@@ -630,14 +633,6 @@ struct OidcDiscovery {
     userinfo_endpoint: String,
     jwks_uri: String,
     issuer: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TokenResponse {
-    access_token: String,
-    id_token: Option<String>,
-    #[allow(dead_code)]
-    token_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

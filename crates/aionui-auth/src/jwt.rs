@@ -37,6 +37,18 @@ pub struct TokenPayload {
     /// User session generation at token issuance time.
     #[serde(default)]
     pub session_generation: i64,
+    /// JWT ID (RFC 7519 §4.1.7). Cryptographically unique per signed
+    /// token so two callbacks in the same second still produce distinct
+    /// fingerprints downstream. `#[serde(default)]` keeps older tokens
+    /// issued before the rollout verifiable: their `jti` deserialises to
+    /// `None` and the rest of the claim set is unchanged.
+    #[serde(default)]
+    pub jti: Option<String>,
+    /// Whether this local session is backed by an Auth Center user-token
+    /// bundle in the server-side vault. Refresh must preserve this binding
+    /// and fail closed if the bundle can no longer be moved.
+    #[serde(default)]
+    pub auth_center_bound: bool,
 }
 
 /// JWT service for signing, verification, and token blacklisting.
@@ -72,6 +84,27 @@ impl JwtService {
         username: &str,
         session_generation: i64,
     ) -> Result<String, AuthError> {
+        self.sign_with_binding(user_id, username, session_generation, false)
+    }
+
+    /// Sign a local JWT whose downstream identity is backed by an Auth
+    /// Center user-token bundle in the server-side vault.
+    pub fn sign_auth_center_bound(
+        &self,
+        user_id: &str,
+        username: &str,
+        session_generation: i64,
+    ) -> Result<String, AuthError> {
+        self.sign_with_binding(user_id, username, session_generation, true)
+    }
+
+    fn sign_with_binding(
+        &self,
+        user_id: &str,
+        username: &str,
+        session_generation: i64,
+        auth_center_bound: bool,
+    ) -> Result<String, AuthError> {
         let now = now_secs()?;
         let exp = now + TOKEN_EXPIRY.as_secs();
 
@@ -83,6 +116,8 @@ impl JwtService {
             iss: JWT_ISSUER.to_owned(),
             aud: JWT_AUDIENCE.to_owned(),
             session_generation,
+            jti: Some(generate_jti()),
+            auth_center_bound,
         };
 
         let secret = self
@@ -199,6 +234,21 @@ pub fn generate_random_secret_string() -> String {
     base64::engine::general_purpose::STANDARD.encode(buf)
 }
 
+/// Generate a 128-bit cryptographically unique JWT ID, hex-encoded (32
+/// lowercase hex characters). Used as the `jti` claim on every sign so
+/// two callbacks in the same second still produce distinct tokens and
+/// therefore distinct vault fingerprints downstream.
+fn generate_jti() -> String {
+    let mut bytes = [0u8; 16];
+    // getrandom failure is fatal — same posture as the signing secret.
+    getrandom::getrandom(&mut bytes).expect("OS entropy source unavailable");
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
+}
+
 /// Current time in seconds since UNIX epoch.
 fn now_secs() -> Result<u64, AuthError> {
     SystemTime::now()
@@ -286,6 +336,8 @@ mod tests {
             iss: JWT_ISSUER.into(),
             aud: JWT_AUDIENCE.into(),
             session_generation: 0,
+            jti: None,
+            auth_center_bound: false,
         };
         let token = encode(
             &Header::default(),
@@ -368,6 +420,8 @@ mod tests {
             iss: JWT_ISSUER.into(),
             aud: JWT_AUDIENCE.into(),
             session_generation: 0,
+            jti: None,
+            auth_center_bound: false,
         };
         let token = encode(
             &Header::default(),
@@ -443,5 +497,108 @@ mod tests {
         let h = token_hash("test");
         assert_eq!(h.len(), 64);
         assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn sign_assigns_unique_jti_to_every_token() {
+        // The fingerprint of the local JWT is the only thing that
+        // separates two concurrent browser sessions in the Auth Center
+        // vault, and the fingerprint is just SHA-256(token bytes). If
+        // two immediate signs produce byte-identical tokens — because
+        // the JWT body is otherwise deterministic within the same
+        // second — they collide in the vault. The jti claim breaks that
+        // tie: every sign gets a fresh 128-bit random ID.
+        let service = test_service();
+        let token_a = service.sign("user_1", "admin").unwrap();
+        let token_b = service.sign("user_1", "admin").unwrap();
+        assert_ne!(
+            token_a, token_b,
+            "two immediate signs must not produce byte-identical JWTs"
+        );
+
+        let payload_a = service.verify(&token_a).expect("token A must verify");
+        let payload_b = service.verify(&token_b).expect("token B must verify");
+        let jti_a = payload_a.jti.clone().expect("newly signed token must carry a jti");
+        let jti_b = payload_b.jti.clone().expect("newly signed token must carry a jti");
+        assert_ne!(jti_a, jti_b, "two immediate signs must not collide on jti");
+        // 128 bits of entropy, hex-encoded → 32 lowercase hex chars.
+        assert_eq!(jti_a.len(), 32);
+        assert_eq!(jti_b.len(), 32);
+        assert!(jti_a.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(jti_b.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+    }
+
+    #[test]
+    fn sign_with_session_generation_also_assigns_unique_jti() {
+        let service = test_service();
+        let token_a = service.sign_with_session_generation("user_1", "admin", 5).unwrap();
+        let token_b = service.sign_with_session_generation("user_1", "admin", 5).unwrap();
+        assert_ne!(token_a, token_b);
+        let payload_a = service.verify(&token_a).unwrap();
+        let payload_b = service.verify(&token_b).unwrap();
+        assert_ne!(payload_a.jti, payload_b.jti);
+        assert!(payload_a.jti.is_some());
+        assert!(payload_b.jti.is_some());
+    }
+
+    #[test]
+    fn auth_center_bound_signing_marks_only_bound_sessions() {
+        let service = test_service();
+        let local = service.sign_with_session_generation("user_1", "admin", 3).unwrap();
+        let bound = service.sign_auth_center_bound("user_1", "admin", 3).unwrap();
+
+        assert!(!service.verify(&local).unwrap().auth_center_bound);
+        assert!(service.verify(&bound).unwrap().auth_center_bound);
+    }
+
+    #[test]
+    fn verify_accepts_legacy_token_without_jti_claim() {
+        // Tokens issued before the jti rollout are still in the wild.
+        // The `#[serde(default)]` on the jti field means they keep
+        // verifying and the rest of the claim set is unchanged.
+        let service = test_service();
+        let secret = service.secret.read().unwrap();
+        let now = now_secs().unwrap();
+        let claims = serde_json::json!({
+            "user_id": "user_1",
+            "username": "admin",
+            "iat": now.saturating_sub(60),
+            "exp": now + 3600,
+            "iss": JWT_ISSUER,
+            "aud": JWT_AUDIENCE,
+            "session_generation": 0,
+            // intentionally no `jti` field
+        });
+        let token = encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .unwrap();
+        drop(secret);
+        let payload = service
+            .verify(&token)
+            .expect("legacy token without jti must still verify");
+        assert_eq!(payload.user_id, "user_1");
+        assert_eq!(payload.username, "admin");
+        assert!(payload.jti.is_none(), "legacy token's jti is absent, not synthesised");
+        assert!(
+            !payload.auth_center_bound,
+            "legacy token is not silently treated as bound"
+        );
+    }
+
+    #[test]
+    fn generate_jti_is_unique_and_well_formed() {
+        let a = generate_jti();
+        let b = generate_jti();
+        let c = generate_jti();
+        assert_ne!(a, b);
+        assert_ne!(b, c);
+        assert_ne!(a, c);
+        for s in [&a, &b, &c] {
+            assert_eq!(s.len(), 32);
+            assert!(s.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        }
     }
 }

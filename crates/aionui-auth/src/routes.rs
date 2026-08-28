@@ -37,6 +37,7 @@ use crate::auth_center_client::{
     RsmOidcLoginQuery, RsmOidcStateStore, directory_status_to_local_status, directory_user_is_admin, sanitize_username,
     timestamp_rfc3339_to_ms,
 };
+use crate::auth_center_tokens::{AuthCenterTokenVaultKey, IAuthCenterTokenVault};
 use crate::error::{AuthCenterError, AuthError};
 use crate::extract::extract_token_from_headers;
 use crate::middleware::{AuthIdentityMode, AuthState, CurrentUser, auth_middleware};
@@ -209,6 +210,10 @@ pub struct AuthRouterState {
     pub session_revoked_hook: Option<Arc<SessionRevokedHook>>,
     pub rsm_auth_config: Arc<RsmAuthConfig>,
     pub rsm_oidc_state_store: Arc<RsmOidcStateStore>,
+    /// Server-side vault for Auth Center token bundles, keyed by the local
+    /// JWT fingerprint and owning user. Populated on successful OIDC
+    /// callback, rotated with the local JWT, and drained on logout/revoke.
+    pub auth_center_token_vault: Arc<dyn IAuthCenterTokenVault>,
     pub http_client: reqwest::Client,
     pub local: bool,
     pub aionpro_mode: bool,
@@ -604,6 +609,7 @@ async fn revoke_external_session_handler(
     if let Some(hook) = &state.session_revoked_hook {
         hook(&response.user_id);
     }
+    state.auth_center_token_vault.clear_all_for_user(&response.user_id);
     Ok(Json(ApiResponse::ok(response)))
 }
 
@@ -640,7 +646,7 @@ async fn oidc_callback_handler(
     Query(query): Query<RsmOidcCallbackQuery>,
 ) -> Result<Response, ApiError> {
     let client = AuthCenterProtocolClient::new(state.http_client.clone());
-    let (return_to, identity) = client
+    let (return_to, identity, token_bundle) = client
         .exchange_callback(&state.rsm_auth_config, &state.rsm_oidc_state_store, query)
         .await?;
     let departments_json = if identity.departments.is_empty() {
@@ -681,11 +687,30 @@ async fn oidc_callback_handler(
 
     let token = state
         .jwt_service
-        .sign(&user.id, user.username.as_deref().unwrap_or("external_user"))
+        .sign_auth_center_bound(
+            &user.id,
+            user.username.as_deref().unwrap_or("external_user"),
+            user.session_generation,
+        )
         .map_err(|e| ApiError::Internal(format!("Token signing error: {e}")))?;
     if let Err(e) = state.user_repo.update_last_login(&user.id).await {
         tracing::warn!("Failed to update last login for {}: {e}", user.id);
     }
+
+    // Persist the upstream Auth Center token bundle server-side, bound to
+    // the freshly signed local JWT. The fingerprint is the storage key so
+    // concurrent browser sessions for the same user do not collide. The
+    // bundle is never echoed to the browser — only the local JWT crosses
+    // the wire.
+    let vault_key = AuthCenterTokenVaultKey::from_token(&token, &user.id);
+    let prior = state.auth_center_token_vault.store(vault_key, token_bundle);
+    if prior.is_some() {
+        tracing::info!(
+            user_id = %user.id,
+            "rotated stored Auth Center token bundle for user"
+        );
+    }
+
     let cookie = state.cookie_config.build_session_cookie(&token);
     Ok(([(header::SET_COOKIE, cookie)], Redirect::temporary(&return_to)).into_response())
 }
@@ -777,6 +802,24 @@ async fn login_handler(
 
 async fn logout_handler(State(state): State<AuthRouterState>, headers: HeaderMap) -> Result<Response, ApiError> {
     if let Some(token) = extract_token_from_headers(&headers) {
+        // Decode the presented token so we can drop the matching Auth
+        // Center token bundle by the token's fingerprint. If the token is
+        // already blacklisted (e.g. the user logged out twice) verify
+        // returns TokenBlacklisted and we skip the clear — the prior
+        // logout already drained the bundle and the blacklist is the
+        // source of truth for an authenticated session. We must never log
+        // the token, the fingerprint, or any other secret material.
+        if let Ok(payload) = state.jwt_service.verify(&token) {
+            let cleared = state
+                .auth_center_token_vault
+                .clear(&AuthCenterTokenVaultKey::from_token(&token, &payload.user_id));
+            if cleared {
+                tracing::info!(
+                    user_id = %payload.user_id,
+                    "cleared stored Auth Center token bundle on logout"
+                );
+            }
+        }
         state.jwt_service.blacklist_token(&token);
     }
 
@@ -1065,14 +1108,40 @@ async fn refresh_handler(
         return Err(ApiError::Unauthorized("Invalid authentication session".into()));
     }
 
-    let new_token = state
-        .jwt_service
-        .sign_with_session_generation(
+    let new_token = if payload.auth_center_bound {
+        state.jwt_service.sign_auth_center_bound(
             &user.id,
             user.username.as_deref().unwrap_or("external_user"),
             user.session_generation,
         )
-        .map_err(|e| ApiError::Internal(format!("Token signing error: {e}")))?;
+    } else {
+        state.jwt_service.sign_with_session_generation(
+            &user.id,
+            user.username.as_deref().unwrap_or("external_user"),
+            user.session_generation,
+        )
+    }
+    .map_err(|e| ApiError::Internal(format!("Token signing error: {e}")))?;
+
+    // The local JWT is being rotated, so the bundle must follow. Move it
+    // from the presented token's fingerprint to the new token's fingerprint
+    // atomically so the session is not orphaned. We must never log the
+    // tokens, the fingerprints, or the bundle itself.
+    let moved = state.auth_center_token_vault.move_bundle(
+        &AuthCenterTokenVaultKey::from_token(&req.token, &user.id),
+        AuthCenterTokenVaultKey::from_token(&new_token, &user.id),
+    );
+    if payload.auth_center_bound && moved.is_none() {
+        state.jwt_service.blacklist_token(&req.token);
+        return Err(ApiError::Unauthorized("Authentication session must be renewed".into()));
+    }
+    if moved.is_none() {
+        tracing::debug!(
+            user_id = %user.id,
+            "refresh: no Auth Center token bundle to move (new login or first refresh)"
+        );
+    }
+    state.jwt_service.blacklist_token(&req.token);
 
     Ok(Json(RefreshResponse {
         success: true,

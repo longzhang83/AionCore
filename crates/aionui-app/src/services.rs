@@ -8,7 +8,10 @@ use aionui_ai_agent::{
     ActiveLeaseRegistry, AgentFactoryDeps, AgentRegistry, IWorkerTaskManager, RuntimeSessionSyncService,
     RuntimeTokenService, SkillManager, WorkerTaskManagerImpl, build_agent_factory,
 };
-use aionui_auth::{CookieConfig, JwtService, QrTokenStore, RsmAuthConfig, RsmOidcStateStore, resolve_jwt_secret};
+use aionui_auth::{
+    CookieConfig, IAuthCenterTokenVault, InMemoryAuthCenterTokenVault, JwtService, QrTokenStore, RsmAuthConfig,
+    RsmOidcStateStore, resolve_jwt_secret,
+};
 use aionui_common::OnConversationDelete;
 use aionui_conversation::{ConversationService, runtime_state::ConversationRuntimeStateService};
 use aionui_db::{
@@ -30,6 +33,11 @@ pub struct AppServices {
     pub qr_token_store: Arc<QrTokenStore>,
     pub rsm_auth_config: Arc<RsmAuthConfig>,
     pub rsm_oidc_state_store: Arc<RsmOidcStateStore>,
+    /// Server-side vault for Auth Center token bundles, keyed by
+    /// `(user_id, token_fingerprint)`. One process-wide shared instance;
+    /// replaceable via the [`IAuthCenterTokenVault`] trait when durable
+    /// storage is available.
+    pub auth_center_token_vault: Arc<dyn IAuthCenterTokenVault>,
     pub http_client: reqwest::Client,
     pub ws_manager: Arc<WebSocketManager>,
     pub event_bus: Arc<BroadcastEventBus>,
@@ -291,6 +299,7 @@ impl AppServices {
             qr_token_store: Arc::new(QrTokenStore::new()),
             rsm_auth_config: Arc::new(RsmAuthConfig::from_env()),
             rsm_oidc_state_store: Arc::new(RsmOidcStateStore::new()),
+            auth_center_token_vault: Arc::new(InMemoryAuthCenterTokenVault::new()),
             http_client: reqwest::Client::new(),
             ws_manager: Arc::new(WebSocketManager::new()),
             event_bus,

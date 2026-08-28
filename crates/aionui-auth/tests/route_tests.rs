@@ -16,8 +16,9 @@ use wiremock::matchers::{header as wiremock_header, method, path, query_param_co
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use aionui_auth::{
-    AuthIdentityMode, AuthRouterState, CookieConfig, JwtService, QrTokenStore, RsmAuthConfig, RsmOidcStateStore,
-    SessionRevokedHook, auth_routes, hash_password,
+    AuthCenterTokenResponse, AuthCenterTokenVaultKey, AuthIdentityMode, AuthRouterState, CookieConfig,
+    IAuthCenterTokenVault, InMemoryAuthCenterTokenVault, JwtService, QrTokenStore, RsmAuthConfig, RsmOidcStateStore,
+    SessionRevokedHook, auth_routes, bundle_from_token_response, hash_password,
 };
 use aionui_db::{
     IIamRepository, IUserRepository, SqliteIamRepository, SqliteUserRepository, UpsertExternalUserParams, UserStatus,
@@ -77,6 +78,7 @@ async fn test_app_with_options_and_config(
         same_site: "Lax",
     });
     let qr_token_store = Arc::new(QrTokenStore::new());
+    let auth_center_token_vault = Arc::new(InMemoryAuthCenterTokenVault::new());
 
     let state = AuthRouterState {
         jwt_service: jwt_service.clone(),
@@ -96,6 +98,7 @@ async fn test_app_with_options_and_config(
         session_revoked_hook,
         rsm_auth_config: Arc::new(rsm_auth_config),
         rsm_oidc_state_store: Arc::new(RsmOidcStateStore::new()),
+        auth_center_token_vault: auth_center_token_vault.clone(),
         http_client: reqwest::Client::new(),
         local,
         aionpro_mode,
@@ -107,6 +110,7 @@ async fn test_app_with_options_and_config(
         user_repo,
         iam_repo,
         qr_token_store,
+        auth_center_token_vault,
         _db: db,
     };
     (app, ctx)
@@ -131,6 +135,7 @@ struct TestContext {
     user_repo: Arc<dyn IUserRepository>,
     iam_repo: Arc<dyn IIamRepository>,
     qr_token_store: Arc<QrTokenStore>,
+    auth_center_token_vault: Arc<InMemoryAuthCenterTokenVault>,
     _db: aionui_db::Database,
 }
 
@@ -699,6 +704,86 @@ async fn t9_1_refresh_token_success() {
     // New token should be valid
     let new_token = json["token"].as_str().unwrap();
     assert!(ctx.jwt_service.verify(new_token).is_ok());
+    assert!(
+        ctx.jwt_service.verify(&token).is_err(),
+        "refresh rotates and invalidates the old token"
+    );
+}
+
+#[tokio::test]
+async fn refresh_preserves_auth_center_binding_and_moves_bundle() {
+    let (mut app, ctx) = test_app().await;
+    create_test_user(&ctx, "admin", "StrongP@ss1").await;
+    let (_, user_id) = login(&mut app, "admin", "StrongP@ss1").await;
+    let token = ctx.jwt_service.sign_auth_center_bound(&user_id, "admin", 0).unwrap();
+    let old_key = AuthCenterTokenVaultKey::from_token(&token, &user_id);
+    ctx.auth_center_token_vault.store(
+        old_key.clone(),
+        bundle_from_token_response(
+            AuthCenterTokenResponse {
+                access_token: "access-secret".into(),
+                refresh_token: Some("refresh-secret".into()),
+                id_token: None,
+                token_type: Some("Bearer".into()),
+                scope: Some("openid schedule:write".into()),
+                expires_in: Some(3600),
+            },
+            1_000,
+        ),
+    );
+
+    let body = format!(r#"{{"token":"{token}"}}"#);
+    let resp = app.oneshot(json_post("/api/auth/refresh", &body)).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    let new_token = json["token"].as_str().unwrap();
+    let payload = ctx.jwt_service.verify(new_token).unwrap();
+    assert!(payload.auth_center_bound);
+    assert!(ctx.auth_center_token_vault.get(&old_key).is_none());
+    assert!(
+        ctx.auth_center_token_vault
+            .get(&AuthCenterTokenVaultKey::from_token(new_token, &user_id))
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn concurrent_bound_refresh_issues_only_one_usable_session() {
+    let (mut app, ctx) = test_app().await;
+    create_test_user(&ctx, "admin", "StrongP@ss1").await;
+    let (_, user_id) = login(&mut app, "admin", "StrongP@ss1").await;
+    let token = ctx.jwt_service.sign_auth_center_bound(&user_id, "admin", 0).unwrap();
+    ctx.auth_center_token_vault.store(
+        AuthCenterTokenVaultKey::from_token(&token, &user_id),
+        bundle_from_token_response(
+            AuthCenterTokenResponse {
+                access_token: "access-secret".into(),
+                refresh_token: None,
+                id_token: None,
+                token_type: Some("Bearer".into()),
+                scope: Some("schedule:write".into()),
+                expires_in: Some(3600),
+            },
+            1_000,
+        ),
+    );
+
+    let body = format!(r#"{{"token":"{token}"}}"#);
+    let first = app.clone().oneshot(json_post("/api/auth/refresh", &body));
+    let second = app.oneshot(json_post("/api/auth/refresh", &body));
+    let (first, second) = tokio::join!(first, second);
+    let statuses = [first.unwrap().status(), second.unwrap().status()];
+
+    assert_eq!(statuses.iter().filter(|&&status| status == StatusCode::OK).count(), 1);
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|&&status| status == StatusCode::UNAUTHORIZED)
+            .count(),
+        1
+    );
+    assert_eq!(ctx.auth_center_token_vault.len(), 1);
 }
 
 #[tokio::test]
@@ -1017,7 +1102,7 @@ async fn external_session_exchange_rejects_unprovisioned_user() {
 async fn external_session_revoke_invalidates_existing_token() {
     let revoked_users = Arc::new(Mutex::new(Vec::new()));
     let hook_users = revoked_users.clone();
-    let (app, _ctx) = test_app_with_options_and_hook(
+    let (app, ctx) = test_app_with_options_and_hook(
         false,
         Some("bootstrap-secret"),
         false,
@@ -1052,6 +1137,22 @@ async fn external_session_revoke_invalidates_existing_token() {
     let session_json = body_json(session).await;
     assert_eq!(session_json["data"]["session_generation"], 0);
     assert!(session_json["data"].get("token").is_none());
+    let user_id = session_json["data"]["user"]["id"].as_str().unwrap();
+    ctx.auth_center_token_vault.store(
+        AuthCenterTokenVaultKey::from_token("another-bound-session", user_id),
+        bundle_from_token_response(
+            AuthCenterTokenResponse {
+                access_token: "access-secret".into(),
+                refresh_token: None,
+                id_token: None,
+                token_type: Some("Bearer".into()),
+                scope: Some("schedule:write".into()),
+                expires_in: Some(3600),
+            },
+            1_000,
+        ),
+    );
+    assert_eq!(ctx.auth_center_token_vault.len(), 1);
 
     let revoke = app
         .clone()
@@ -1069,6 +1170,7 @@ async fn external_session_revoke_invalidates_existing_token() {
         revoked_users.lock().unwrap().as_slice(),
         &[revoke_json["data"]["user_id"].as_str().unwrap().to_owned()]
     );
+    assert!(ctx.auth_center_token_vault.is_empty());
 
     let user_resp = app.oneshot(get_with_token("/api/auth/user", &token)).await.unwrap();
     assert_eq!(user_resp.status(), StatusCode::UNAUTHORIZED);
