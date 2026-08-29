@@ -233,15 +233,29 @@ async fn schedule_bff_exposes_only_the_frozen_path_and_method_allowlist() {
 #[tokio::test]
 async fn version_create_bff_forwards_exact_agent_and_skill_requests() {
     let upstream = MockServer::start().await;
-    for (asset_kind, asset_id, idempotency_key, request_id) in [
-        ("agents", "agent-1", "agent-create-1", "agent-request-1"),
-        ("skills", "skill-1", "skill-create-1", "skill-request-1"),
+    for (asset_kind, asset_id, idempotency_key, request_id, body) in [
+        (
+            "agents",
+            "agent-1",
+            "agent-create-1",
+            "agent-request-1",
+            json!({"manifest": {"summary": "Agent summary", "system_prompt": "Review"}}),
+        ),
+        (
+            "skills",
+            "skill-1",
+            "skill-create-1",
+            "skill-request-1",
+            json!({"manifest": {"summary": "Skill summary", "instructions": "Review"}}),
+        ),
     ] {
         Mock::given(method("POST"))
             .and(path(format!("/api/version/v1/{asset_kind}/{asset_id}/versions")))
             .and(wiremock_header("authorization", "Bearer upstream-access"))
+            .and(wiremock_header("content-type", "application/json"))
             .and(wiremock_header("idempotency-key", idempotency_key))
             .and(wiremock_header("x-request-id", request_id))
+            .and(wiremock::matchers::body_json(body))
             .respond_with(
                 ResponseTemplate::new(201)
                     .insert_header("idempotent-replay", "false")
@@ -254,17 +268,23 @@ async fn version_create_bff_forwards_exact_agent_and_skill_requests() {
     let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
     let local_token = bind_upstream_token(&ctx, "upstream-access", 3600);
 
-    for (asset_kind, asset_id, idempotency_key, request_id) in [
-        ("agents", "agent-1", "agent-create-1", "agent-request-1"),
-        ("skills", "skill-1", "skill-create-1", "skill-request-1"),
+    for (asset_kind, asset_id, idempotency_key, request_id, body) in [
+        (
+            "agents",
+            "agent-1",
+            "agent-create-1",
+            "agent-request-1",
+            json!({"manifest": {"summary": "Agent summary", "system_prompt": "Review"}}),
+        ),
+        (
+            "skills",
+            "skill-1",
+            "skill-create-1",
+            "skill-request-1",
+            json!({"manifest": {"summary": "Skill summary", "instructions": "Review"}}),
+        ),
     ] {
-        let body = json!({
-            "manifest": {
-                "summary": format!("{asset_kind} summary"),
-                "instructions": format!("{asset_kind} instructions")
-            }
-        })
-        .to_string();
+        let body = body.to_string();
         let response = app
             .clone()
             .oneshot(
@@ -276,6 +296,8 @@ async fn version_create_bff_forwards_exact_agent_and_skill_requests() {
                     .header(header::COOKIE, "aionui-session=browser-cookie")
                     .header("x-csrf-token", "browser-csrf")
                     .header(header::ORIGIN, "https://browser.example")
+                    .header(header::REFERER, "https://browser.example/settings")
+                    .header("x-not-allowed", "private-browser-value")
                     .header("idempotency-key", idempotency_key)
                     .header("x-request-id", request_id)
                     .body(Body::from(body.clone()))
@@ -306,7 +328,7 @@ async fn version_create_bff_forwards_exact_agent_and_skill_requests() {
             forwarded.headers.get("x-request-id").unwrap().to_str().unwrap(),
             request_id
         );
-        for stripped in ["cookie", "x-csrf-token", "origin", "referer"] {
+        for stripped in ["cookie", "x-csrf-token", "origin", "referer", "x-not-allowed"] {
             assert!(
                 forwarded.headers.get(stripped).is_none(),
                 "forwarded sensitive header: {stripped}"

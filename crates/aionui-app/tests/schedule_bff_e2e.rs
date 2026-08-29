@@ -34,18 +34,24 @@ async fn governed_publish_routes_proxy_exact_recovery_reads_and_writes() {
             .mount(&upstream)
             .await;
     }
-    for (path_value, version_id) in [
-        ("/api/version/v1/agents/agent-1/versions", "agent-version-created-1"),
-        ("/api/version/v1/skills/skill-1/versions", "skill-version-created-1"),
+    for (path_value, version_id, body) in [
+        (
+            "/api/version/v1/agents/agent-1/versions",
+            "agent-version-created-1",
+            json!({"manifest": {"summary": "Ready", "system_prompt": "Review"}}),
+        ),
+        (
+            "/api/version/v1/skills/skill-1/versions",
+            "skill-version-created-1",
+            json!({"manifest": {"summary": "Ready", "instructions": "Review"}}),
+        ),
     ] {
         Mock::given(method("POST"))
             .and(path(path_value))
             .and(wiremock_header("authorization", "Bearer upstream-access"))
             .and(wiremock_header("idempotency-key", "create-version-1"))
             .and(wiremock_header("x-request-id", "create-request-1"))
-            .and(wiremock_body_json(
-                json!({"manifest": {"summary": "Ready", "instructions": "Review"}}),
-            ))
+            .and(wiremock_body_json(body))
             .respond_with(ResponseTemplate::new(201).set_body_json(json!({
                 "version_id": version_id,
                 "state": "draft"
@@ -145,16 +151,22 @@ async fn governed_publish_routes_proxy_exact_recovery_reads_and_writes() {
         assert_eq!(response.status(), StatusCode::OK, "route: {route}");
     }
 
-    for route in [
-        "/api/version/v1/agents/agent-1/versions",
-        "/api/version/v1/skills/skill-1/versions",
+    for (route, body) in [
+        (
+            "/api/version/v1/agents/agent-1/versions",
+            json!({"manifest": {"summary": "Ready", "system_prompt": "Review"}}),
+        ),
+        (
+            "/api/version/v1/skills/skill-1/versions",
+            json!({"manifest": {"summary": "Ready", "instructions": "Review"}}),
+        ),
     ] {
         let response = app
             .clone()
             .oneshot(json_with_token_and_headers(
                 "POST",
                 route,
-                json!({"manifest": {"summary": "Ready", "instructions": "Review"}}),
+                body,
                 &token,
                 &csrf,
                 &[
@@ -315,6 +327,8 @@ async fn schedule_bff_is_authenticated_and_requires_csrf_for_writes() {
     );
 
     for path in [
+        "/api/version/v1/agents/agent-1/versions",
+        "/api/version/v1/skills/skill-1/versions",
         "/api/version/v1/agents/agent-1/versions/version-1/transition",
         "/api/publish-request/v1/requests",
         "/api/publish-request/v1/requests/request-1/withdraw",
@@ -405,6 +419,8 @@ async fn runtime_token_channel_cannot_bypass_bound_session_for_schedule_bff() {
     assert_eq!(body_json(share_write).await["code"], "UNAUTHORIZED");
 
     for path in [
+        "/api/version/v1/agents/agent-1/versions",
+        "/api/version/v1/skills/skill-1/versions",
         "/api/version/v1/agents/agent-1/versions/version-1/transition",
         "/api/publish-request/v1/requests",
         "/api/publish-request/v1/requests/request-1/withdraw",
