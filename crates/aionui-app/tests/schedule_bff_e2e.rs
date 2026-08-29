@@ -192,7 +192,7 @@ async fn governed_publish_routes_proxy_exact_recovery_reads_and_writes() {
                 json!({"target_state": "testing", "note": "ready"}),
                 &token,
                 &csrf,
-                &[("idempotency-key", "idem-1")],
+                &[("idempotency-key", "idem-1"), ("x-request-id", "transition-request-1")],
             ))
             .await
             .unwrap();
@@ -214,7 +214,10 @@ async fn governed_publish_routes_proxy_exact_recovery_reads_and_writes() {
             }),
             &token,
             &csrf,
-            &[("idempotency-key", "publish-request-1")],
+            &[
+                ("idempotency-key", "publish-request-1"),
+                ("x-request-id", "publish-request-http-1"),
+            ],
         ))
         .await
         .unwrap();
@@ -240,7 +243,10 @@ async fn governed_publish_routes_proxy_exact_recovery_reads_and_writes() {
                 body,
                 &token,
                 &csrf,
-                &[("idempotency-key", &format!("publish-{action}-1"))],
+                &[
+                    ("idempotency-key", &format!("publish-{action}-1")),
+                    ("x-request-id", &format!("publish-{action}-http-1")),
+                ],
             ))
             .await
             .unwrap();
@@ -316,7 +322,10 @@ async fn schedule_bff_is_authenticated_and_requires_csrf_for_writes() {
             json!({"asset_kind": "agent"}),
             &token,
             &csrf,
-            &[("idempotency-key", "share-intent-local")],
+            &[
+                ("idempotency-key", "share-intent-local"),
+                ("x-request-id", "share-request-local"),
+            ],
         ))
         .await
         .unwrap();
