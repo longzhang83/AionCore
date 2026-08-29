@@ -85,6 +85,7 @@ async fn runtime_token_channel_cannot_bypass_bound_session_for_schedule_bff() {
     for path in [
         "/api/schedule/v1/schedules",
         "/api/catalog/v1/agents?page_size=100",
+        "/api/catalog/v1/skills?page_size=100",
         "/api/team-workspace/v1/workspaces",
     ] {
         let read = app
@@ -148,6 +149,27 @@ async fn auth_center_bound_session_reaches_schedule_catalog_and_workspace_bff() 
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "items": [{"agent_id": "agent-1", "name": "Finance reviewer"}],
             "meta": {"page": 1, "page_size": 100, "total": 1}
+        })))
+        .mount(&upstream)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/catalog/v1/skills"))
+        .and(query_param("page_size", "100"))
+        .and(wiremock_header("authorization", "Bearer upstream-access"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items": [{"skill_id": "skill-1", "name": "Working paper review"}],
+            "meta": {"page": 1, "page_size": 100, "total": 1}
+        })))
+        .mount(&upstream)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/catalog/v1/skills/skill-1/versions/version-1"))
+        .and(wiremock_header("authorization", "Bearer upstream-access"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "skill_id": "skill-1",
+            "version_id": "version-1",
+            "state": "published",
+            "visibility": "public"
         })))
         .mount(&upstream)
         .await;
@@ -238,6 +260,31 @@ async fn auth_center_bound_session_reaches_schedule_catalog_and_workspace_bff() 
         }})
     );
 
+    let skills = app
+        .clone()
+        .oneshot(get_with_token("/api/catalog/v1/skills?page_size=100", &bound_token))
+        .await
+        .unwrap();
+    assert_eq!(skills.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(skills).await,
+        json!({"success": true, "data": {
+            "items": [{"skill_id": "skill-1", "name": "Working paper review"}],
+            "meta": {"page": 1, "page_size": 100, "total": 1}
+        }})
+    );
+
+    let skill_version = app
+        .clone()
+        .oneshot(get_with_token(
+            "/api/catalog/v1/skills/skill-1/versions/version-1",
+            &bound_token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(skill_version.status(), StatusCode::OK);
+    assert_eq!(body_json(skill_version).await["data"]["version_id"], "version-1");
+
     let workspace = app
         .oneshot(get_with_token("/api/team-workspace/v1/workspaces", &bound_token))
         .await
@@ -256,7 +303,7 @@ async fn auth_center_bound_session_reaches_schedule_catalog_and_workspace_bff() 
     );
 
     let received = upstream.received_requests().await.unwrap();
-    assert_eq!(received.len(), 4);
+    assert_eq!(received.len(), 6);
     for request in &received {
         let authorization = request.headers.get("authorization").unwrap().to_str().unwrap();
         assert_eq!(authorization, "Bearer upstream-access");
@@ -289,6 +336,8 @@ async fn acp_catalog_and_workspace_read_bff_require_an_auth_center_bound_session
     for path in [
         "/api/catalog/v1/agents?page_size=100",
         "/api/catalog/v1/agents/agent-1/versions/version-1",
+        "/api/catalog/v1/skills?page_size=100",
+        "/api/catalog/v1/skills/skill-1/versions/version-1",
         "/api/team-workspace/v1/workspaces",
     ] {
         let unauthenticated = app.clone().oneshot(get_request(path)).await.unwrap();

@@ -321,6 +321,19 @@ async fn acp_read_bff_rejects_unfrozen_queries_paths_and_methods_without_upstrea
     let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
     let local_token = bind_upstream_token(&ctx, "upstream-access", 3600);
 
+    let missing_query = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/catalog/v1/agents",
+            &local_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(missing_query.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(missing_query).await["code"], "CATALOG_BAD_REQUEST");
+
     let unknown_query = app
         .clone()
         .oneshot(request(
@@ -401,7 +414,7 @@ async fn acp_read_bff_rejects_unfrozen_queries_paths_and_methods_without_upstrea
     let write = app
         .oneshot(request(
             Method::POST,
-            "/api/catalog/v1/agents",
+            "/api/catalog/v1/agents?page_size=100",
             &local_token,
             Body::empty(),
         ))
@@ -415,7 +428,7 @@ async fn acp_read_bff_rejects_unfrozen_queries_paths_and_methods_without_upstrea
 async fn acp_read_bff_maps_catalog_and_workspace_errors_without_leaking_upstream_messages() {
     let cases = [
         (
-            "/api/catalog/v1/agents",
+            "/api/catalog/v1/agents?page_size=100",
             403,
             json!({"code": "catalog_forbidden", "message": "private catalog details"}),
             "CATALOG_FORBIDDEN",
@@ -430,9 +443,14 @@ async fn acp_read_bff_maps_catalog_and_workspace_errors_without_leaking_upstream
 
     for (bff_path, upstream_status, upstream_body, expected_code) in cases {
         let upstream = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path(bff_path))
-            .respond_with(ResponseTemplate::new(upstream_status).set_body_json(upstream_body))
+        let upstream_path = bff_path.split('?').next().expect("path is present");
+        let mock = Mock::given(method("GET")).and(path(upstream_path));
+        let mock = if bff_path.contains("page_size=100") {
+            mock.and(query_param("page_size", "100"))
+        } else {
+            mock
+        };
+        mock.respond_with(ResponseTemplate::new(upstream_status).set_body_json(upstream_body))
             .mount(&upstream)
             .await;
         let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
@@ -666,4 +684,230 @@ async fn schedule_bff_rejects_oversized_upstream_response_before_exposing_or_par
     let body = json_body(response).await;
     assert_eq!(body["code"], "SCHEDULE_UPSTREAM_INVALID_RESPONSE");
     assert!(!body.to_string().contains("upstream-access"));
+}
+
+#[tokio::test]
+async fn acp_read_bff_forwards_skill_list_and_version_with_browser_credentials_stripped() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/catalog/v1/skills"))
+        .and(query_param("page_size", "100"))
+        .and(wiremock_header("authorization", "Bearer upstream-access"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items": [{"skill_id": "skill-1", "name": "Code review"}],
+            "meta": {"page": 1, "page_size": 100, "total": 1}
+        })))
+        .mount(&upstream)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/catalog/v1/skills/skill-1/versions/version-1"))
+        .and(wiremock_header("authorization", "Bearer upstream-access"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "skill_id": "skill-1",
+            "version_id": "version-1",
+            "state": "published",
+            "manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        })))
+        .mount(&upstream)
+        .await;
+
+    let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+    let local_token = bind_upstream_token(&ctx, "upstream-access", 3600);
+
+    let list = Request::builder()
+        .method(Method::GET)
+        .uri("/api/catalog/v1/skills?page_size=100")
+        .header(header::AUTHORIZATION, format!("Bearer {local_token}"))
+        .header(header::COOKIE, "aionui-session=browser-cookie")
+        .header("x-csrf-token", "browser-csrf")
+        .header(header::ORIGIN, "https://browser.example")
+        .header(header::REFERER, "https://browser.example/catalog")
+        .body(Body::empty())
+        .unwrap();
+    let list = app.clone().oneshot(list).await.unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    assert_eq!(json_body(list).await["data"]["items"][0]["skill_id"], "skill-1");
+
+    let version = Request::builder()
+        .method(Method::GET)
+        .uri("/api/catalog/v1/skills/skill-1/versions/version-1")
+        .header(header::AUTHORIZATION, format!("Bearer {local_token}"))
+        .header(header::COOKIE, "aionui-session=browser-cookie")
+        .header("x-csrf-token", "browser-csrf")
+        .header(header::ORIGIN, "https://browser.example")
+        .header(header::REFERER, "https://browser.example/catalog")
+        .body(Body::empty())
+        .unwrap();
+    let version = app.oneshot(version).await.unwrap();
+    assert_eq!(version.status(), StatusCode::OK);
+    assert_eq!(json_body(version).await["data"]["version_id"], "version-1");
+
+    let received = upstream.received_requests().await.unwrap();
+    assert_eq!(received.len(), 2);
+    for request in &received {
+        let authorization = request.headers.get("authorization").unwrap().to_str().unwrap();
+        assert_eq!(authorization, "Bearer upstream-access");
+        assert!(!authorization.contains(&local_token));
+        for stripped in ["cookie", "x-csrf-token", "origin", "referer"] {
+            assert!(
+                request.headers.get(stripped).is_none(),
+                "forwarded sensitive header: {stripped}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn acp_read_bff_skill_query_allowlist_accepts_only_exact_present_page_size_100() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/catalog/v1/skills"))
+        .and(query_param("page_size", "100"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items": [], "meta": {"total": 0}})))
+        .mount(&upstream)
+        .await;
+    let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+    let local_token = bind_upstream_token(&ctx, "upstream-access", 3600);
+
+    for uri in [
+        "/api/catalog/v1/skills",
+        "/api/catalog/v1/skills?page_size=100&page_size=100",
+        "/api/catalog/v1/skills?page_size=99",
+        "/api/catalog/v1/skills?page_size=1000",
+        "/api/catalog/v1/skills?visibility=team",
+        "/api/catalog/v1/skills?page_size=100&expand=manifest",
+        "/api/catalog/v1/skills?owner_user_id=user-1",
+        "/api/catalog/v1/skills?q=review",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(request(Method::GET, uri, &local_token, Body::empty()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "uri: {uri}");
+        assert_eq!(json_body(response).await["code"], "CATALOG_BAD_REQUEST", "uri: {uri}");
+    }
+
+    let version_query = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/catalog/v1/skills/skill-1/versions/version-1?expand=manifest",
+            &local_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(version_query.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(version_query).await["code"], "CATALOG_BAD_REQUEST");
+}
+
+#[tokio::test]
+async fn acp_read_bff_skills_reject_invalid_ids_and_non_get_methods_without_upstream_io() {
+    let upstream = MockServer::start().await;
+    let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+    let local_token = bind_upstream_token(&ctx, "upstream-access", 3600);
+
+    for uri in [
+        "/api/catalog/v1/skills/%E5%90%AB%E4%B8%AD%E6%96%87/versions/version-1",
+        "/api/catalog/v1/skills/skill-1/versions/ver.sion%21",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(request(Method::GET, uri, &local_token, Body::empty()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "uri: {uri}");
+        assert_eq!(json_body(response).await["code"], "CATALOG_INVALID_ID", "uri: {uri}");
+    }
+
+    let encoded_slash = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/catalog/v1/skills/skill%2Fadmin/versions/version-1",
+            &local_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert!(
+        matches!(encoded_slash.status(), StatusCode::BAD_REQUEST | StatusCode::NOT_FOUND),
+        "encoded slash status: {}",
+        encoded_slash.status()
+    );
+
+    let write = app
+        .oneshot(request(
+            Method::POST,
+            "/api/catalog/v1/skills?page_size=100",
+            &local_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(write.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn acp_read_bff_skills_require_an_auth_center_bound_session() {
+    let upstream = MockServer::start().await;
+    let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+
+    let no_token = Request::builder()
+        .method(Method::GET)
+        .uri("/api/catalog/v1/skills?page_size=100")
+        .body(Body::empty())
+        .unwrap();
+    let no_token = app.clone().oneshot(no_token).await.unwrap();
+    assert_eq!(no_token.status(), StatusCode::UNAUTHORIZED);
+
+    let local_only = ctx.jwt_service.sign_auth_center_bound(USER_ID, "admin", 0).unwrap();
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/catalog/v1/skills?page_size=100",
+            &local_only,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(json_body(response).await["code"], "AUTH_CENTER_SESSION_REQUIRED");
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn acp_read_bff_skill_upstream_unauthorized_preserves_the_local_token_bundle() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/catalog/v1/skills"))
+        .and(query_param("page_size", "100"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "code": "unauthorized",
+            "message": "private audience details"
+        })))
+        .mount(&upstream)
+        .await;
+    let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+    let local_token = bind_upstream_token(&ctx, "upstream-access", 3600);
+    let vault_key = AuthCenterTokenVaultKey::from_token(&local_token, USER_ID);
+
+    let response = app
+        .oneshot(request(
+            Method::GET,
+            "/api/catalog/v1/skills?page_size=100",
+            &local_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = json_body(response).await;
+    assert_eq!(body["code"], "AUTH_CENTER_SESSION_REQUIRED");
+    assert!(!body.to_string().contains("private audience details"));
+    assert!(!body.to_string().contains("upstream-access"));
+    assert!(ctx.vault.get(&vault_key).is_some());
 }

@@ -44,6 +44,8 @@ pub(super) enum ScheduleRoute {
 pub(super) enum CatalogRoute {
     Agents,
     AgentVersion { agent_id: String, version_id: String },
+    Skills,
+    SkillVersion { skill_id: String, version_id: String },
 }
 
 #[derive(Debug)]
@@ -190,6 +192,10 @@ impl AcpRoute {
             Self::Catalog(CatalogRoute::AgentVersion { agent_id, version_id }) => {
                 vec!["api", "catalog", "v1", "agents", agent_id, "versions", version_id]
             }
+            Self::Catalog(CatalogRoute::Skills) => vec!["api", "catalog", "v1", "skills"],
+            Self::Catalog(CatalogRoute::SkillVersion { skill_id, version_id }) => {
+                vec!["api", "catalog", "v1", "skills", skill_id, "versions", version_id]
+            }
             Self::Workspace(WorkspaceRoute::Workspaces) => {
                 vec!["api", "team-workspace", "v1", "workspaces"]
             }
@@ -197,36 +203,35 @@ impl AcpRoute {
     }
 
     pub(super) fn validate_query(&self, query: Option<&str>) -> Result<(), ApiError> {
-        let Some(query) = query else {
-            return Ok(());
-        };
         match self {
             // Preserve the already-frozen Schedule proxy behavior. ACP remains
             // authoritative for Schedule query validation.
             Self::Schedule(_) => Ok(()),
-            Self::Catalog(CatalogRoute::Agents) => {
-                let pairs = url::form_urlencoded::parse(query.as_bytes()).collect::<Vec<_>>();
-                if pairs.len() == 1 && pairs[0].0 == "page_size" && pairs[0].1 == "100" {
-                    Ok(())
-                } else {
-                    Err(ApiError::coded(
-                        StatusCode::BAD_REQUEST,
-                        "CATALOG_BAD_REQUEST",
-                        "The catalog query is invalid.",
-                        None,
-                    ))
-                }
+            // Catalog lists accept only the frozen exact `page_size=100`
+            // contract. Missing, duplicated, differently valued, or extra
+            // query keys are rejected before any upstream I/O.
+            Self::Catalog(CatalogRoute::Agents) | Self::Catalog(CatalogRoute::Skills) => {
+                validate_catalog_list_query(query)
             }
-            Self::Catalog(CatalogRoute::AgentVersion { .. }) | Self::Workspace(_) => Err(ApiError::coded(
-                StatusCode::BAD_REQUEST,
-                match self.error_domain() {
-                    ErrorDomain::Catalog => "CATALOG_BAD_REQUEST",
-                    ErrorDomain::Workspace => "WORKSPACE_BAD_REQUEST",
-                    ErrorDomain::Schedule => unreachable!(),
-                },
-                "This request does not accept query parameters.",
-                None,
-            )),
+            Self::Catalog(CatalogRoute::AgentVersion { .. })
+            | Self::Catalog(CatalogRoute::SkillVersion { .. })
+            | Self::Workspace(_)
+                if query.is_some() =>
+            {
+                Err(ApiError::coded(
+                    StatusCode::BAD_REQUEST,
+                    match self.error_domain() {
+                        ErrorDomain::Catalog => "CATALOG_BAD_REQUEST",
+                        ErrorDomain::Workspace => "WORKSPACE_BAD_REQUEST",
+                        ErrorDomain::Schedule => unreachable!(),
+                    },
+                    "This request does not accept query parameters.",
+                    None,
+                ))
+            }
+            Self::Catalog(CatalogRoute::AgentVersion { .. })
+            | Self::Catalog(CatalogRoute::SkillVersion { .. })
+            | Self::Workspace(_) => Ok(()),
         }
     }
 }
@@ -239,4 +244,26 @@ impl ScheduleRoute {
             Self::Action { .. } => *method == Method::POST,
         }
     }
+}
+
+/// Validates the frozen Catalog list query: one exact `page_size=100` pair.
+fn validate_catalog_list_query(query: Option<&str>) -> Result<(), ApiError> {
+    let Some(query) = query else {
+        return Err(catalog_query_error());
+    };
+    let pairs = url::form_urlencoded::parse(query.as_bytes()).collect::<Vec<_>>();
+    if pairs.len() == 1 && pairs[0].0 == "page_size" && pairs[0].1 == "100" {
+        Ok(())
+    } else {
+        Err(catalog_query_error())
+    }
+}
+
+fn catalog_query_error() -> ApiError {
+    ApiError::coded(
+        StatusCode::BAD_REQUEST,
+        "CATALOG_BAD_REQUEST",
+        "The catalog query is invalid.",
+        None,
+    )
 }

@@ -214,6 +214,11 @@ pub(crate) fn schedule_bff_routes() -> Router<AuthRouterState> {
             "/api/catalog/v1/agents/{agent_id}/versions/{version_id}",
             get(proxy_catalog_agent_version),
         )
+        .route("/api/catalog/v1/skills", get(proxy_catalog_skills))
+        .route(
+            "/api/catalog/v1/skills/{skill_id}/versions/{version_id}",
+            get(proxy_catalog_skill_version),
+        )
         .route("/api/team-workspace/v1/workspaces", get(proxy_workspaces))
 }
 
@@ -243,6 +248,37 @@ async fn proxy_catalog_agent_version(
         state,
         current_user,
         AcpRoute::Catalog(CatalogRoute::AgentVersion { agent_id, version_id }),
+        request,
+    )
+    .await
+}
+
+async fn proxy_catalog_skills(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    request: Request,
+) -> Response {
+    proxy_response(state, current_user, AcpRoute::Catalog(CatalogRoute::Skills), request).await
+}
+
+async fn proxy_catalog_skill_version(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    Path((skill_id, version_id)): Path<(String, String)>,
+    request: Request,
+) -> Response {
+    let skill_id = match validate_id(skill_id, "skill_id", ErrorDomain::Catalog) {
+        Ok(id) => id,
+        Err(error) => return error.into_response(),
+    };
+    let version_id = match validate_id(version_id, "version_id", ErrorDomain::Catalog) {
+        Ok(id) => id,
+        Err(error) => return error.into_response(),
+    };
+    proxy_response(
+        state,
+        current_user,
+        AcpRoute::Catalog(CatalogRoute::SkillVersion { skill_id, version_id }),
         request,
     )
     .await
