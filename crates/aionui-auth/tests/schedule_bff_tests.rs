@@ -338,6 +338,55 @@ async fn version_create_bff_forwards_exact_agent_and_skill_requests() {
 }
 
 #[tokio::test]
+async fn version_create_bff_maps_upstream_errors_as_create_failures() {
+    for (status, expected_code, expected_error) in [
+        (
+            StatusCode::BAD_REQUEST,
+            "VERSION_BAD_REQUEST",
+            "The Agent Platform version request is invalid.",
+        ),
+        (
+            StatusCode::FORBIDDEN,
+            "VERSION_FORBIDDEN",
+            "You do not have permission to manage this Agent Platform version.",
+        ),
+    ] {
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/version/v1/agents/agent-1/versions"))
+            .respond_with(ResponseTemplate::new(status.as_u16()).set_body_json(json!({
+                "code": "private_upstream_code",
+                "message": "private upstream details"
+            })))
+            .mount(&upstream)
+            .await;
+        let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+        let local_token = bind_upstream_token(&ctx, "upstream-secret", 3600);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/version/v1/agents/agent-1/versions")
+                    .header(header::AUTHORIZATION, format!("Bearer {local_token}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header("idempotency-key", "agent-create-error")
+                    .header("x-request-id", "agent-create-error-http")
+                    .body(Body::from(r#"{"manifest":{"summary":"Agent"}}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), status);
+        let body = json_body(response).await;
+        assert_eq!(body["code"], expected_code);
+        assert_eq!(body["error"], expected_error);
+        assert!(!body.to_string().contains("private upstream"));
+    }
+}
+
+#[tokio::test]
 async fn version_create_bff_rejects_missing_headers_query_and_invalid_ids_without_upstream_io() {
     let upstream = MockServer::start().await;
     let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
