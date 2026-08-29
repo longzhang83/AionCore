@@ -30,7 +30,10 @@ use crate::middleware::CurrentUser;
 use crate::routes::AuthRouterState;
 
 mod route;
-use route::{AcpRoute, CatalogRoute, ErrorDomain, ScheduleAction, ScheduleRoute, ShareRoute, WorkspaceRoute};
+use route::{
+    AcpRoute, CatalogRoute, ErrorDomain, PublishRequestAction, PublishRequestRoute, ScheduleAction, ScheduleRoute,
+    ShareRoute, VersionRoute, WorkspaceRoute,
+};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_REQUEST_BODY_BYTES: usize = 1024 * 1024;
@@ -211,16 +214,44 @@ pub(crate) fn schedule_bff_routes() -> Router<AuthRouterState> {
         .route("/api/schedule/v1/schedules/{schedule_id}/runs/{run_id}", get(proxy_run))
         .route("/api/catalog/v1/agents", get(proxy_catalog_agents))
         .route(
+            "/api/catalog/v1/agents/{agent_id}/versions",
+            get(proxy_catalog_agent_versions),
+        )
+        .route(
             "/api/catalog/v1/agents/{agent_id}/versions/{version_id}",
             get(proxy_catalog_agent_version),
         )
         .route("/api/catalog/v1/skills", get(proxy_catalog_skills))
+        .route(
+            "/api/catalog/v1/skills/{skill_id}/versions",
+            get(proxy_catalog_skill_versions),
+        )
         .route(
             "/api/catalog/v1/skills/{skill_id}/versions/{version_id}",
             get(proxy_catalog_skill_version),
         )
         .route("/api/team-workspace/v1/workspaces", get(proxy_workspaces))
         .route("/api/share/v1/shares", post(proxy_create_share))
+        .route(
+            "/api/version/v1/agents/{agent_id}/versions/{version_id}/transition",
+            post(proxy_agent_version_transition),
+        )
+        .route(
+            "/api/version/v1/skills/{skill_id}/versions/{version_id}/transition",
+            post(proxy_skill_version_transition),
+        )
+        .route(
+            "/api/publish-request/v1/requests",
+            get(proxy_publish_requests).post(proxy_publish_requests),
+        )
+        .route(
+            "/api/publish-request/v1/requests/{request_id}/withdraw",
+            post(proxy_withdraw_publish_request),
+        )
+        .route(
+            "/api/publish-request/v1/requests/{request_id}/resubmit",
+            post(proxy_resubmit_publish_request),
+        )
 }
 
 async fn proxy_catalog_agents(
@@ -254,6 +285,25 @@ async fn proxy_catalog_agent_version(
     .await
 }
 
+async fn proxy_catalog_agent_versions(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    Path(agent_id): Path<String>,
+    request: Request,
+) -> Response {
+    let agent_id = match validate_id(agent_id, "agent_id", ErrorDomain::Catalog) {
+        Ok(id) => id,
+        Err(error) => return error.into_response(),
+    };
+    proxy_response(
+        state,
+        current_user,
+        AcpRoute::Catalog(CatalogRoute::AgentVersions { agent_id }),
+        request,
+    )
+    .await
+}
+
 async fn proxy_catalog_skills(
     State(state): State<AuthRouterState>,
     Extension(current_user): Extension<CurrentUser>,
@@ -280,6 +330,126 @@ async fn proxy_catalog_skill_version(
         state,
         current_user,
         AcpRoute::Catalog(CatalogRoute::SkillVersion { skill_id, version_id }),
+        request,
+    )
+    .await
+}
+
+async fn proxy_catalog_skill_versions(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    Path(skill_id): Path<String>,
+    request: Request,
+) -> Response {
+    let skill_id = match validate_id(skill_id, "skill_id", ErrorDomain::Catalog) {
+        Ok(id) => id,
+        Err(error) => return error.into_response(),
+    };
+    proxy_response(
+        state,
+        current_user,
+        AcpRoute::Catalog(CatalogRoute::SkillVersions { skill_id }),
+        request,
+    )
+    .await
+}
+
+async fn proxy_agent_version_transition(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    Path((agent_id, version_id)): Path<(String, String)>,
+    request: Request,
+) -> Response {
+    proxy_version_transition(state, current_user, "agent_id", agent_id, version_id, request, true).await
+}
+
+async fn proxy_skill_version_transition(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    Path((skill_id, version_id)): Path<(String, String)>,
+    request: Request,
+) -> Response {
+    proxy_version_transition(state, current_user, "skill_id", skill_id, version_id, request, false).await
+}
+
+async fn proxy_version_transition(
+    state: AuthRouterState,
+    current_user: CurrentUser,
+    asset_field: &'static str,
+    asset_id: String,
+    version_id: String,
+    request: Request,
+    is_agent: bool,
+) -> Response {
+    let asset_id = match validate_id(asset_id, asset_field, ErrorDomain::Version) {
+        Ok(id) => id,
+        Err(error) => return error.into_response(),
+    };
+    let version_id = match validate_id(version_id, "version_id", ErrorDomain::Version) {
+        Ok(id) => id,
+        Err(error) => return error.into_response(),
+    };
+    let route = if is_agent {
+        VersionRoute::AgentTransition {
+            agent_id: asset_id,
+            version_id,
+        }
+    } else {
+        VersionRoute::SkillTransition {
+            skill_id: asset_id,
+            version_id,
+        }
+    };
+    proxy_response(state, current_user, AcpRoute::Version(route), request).await
+}
+
+async fn proxy_publish_requests(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    request: Request,
+) -> Response {
+    proxy_response(
+        state,
+        current_user,
+        AcpRoute::PublishRequest(PublishRequestRoute::Collection),
+        request,
+    )
+    .await
+}
+
+async fn proxy_withdraw_publish_request(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    Path(request_id): Path<String>,
+    request: Request,
+) -> Response {
+    proxy_publish_request_action(state, current_user, request_id, PublishRequestAction::Withdraw, request).await
+}
+
+async fn proxy_resubmit_publish_request(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    Path(request_id): Path<String>,
+    request: Request,
+) -> Response {
+    proxy_publish_request_action(state, current_user, request_id, PublishRequestAction::Resubmit, request).await
+}
+
+async fn proxy_publish_request_action(
+    state: AuthRouterState,
+    current_user: CurrentUser,
+    request_id: String,
+    action: PublishRequestAction,
+    request: Request,
+) -> Response {
+    let request_id = match validate_id(request_id, "request_id", ErrorDomain::PublishRequest) {
+        Ok(id) => id,
+        Err(error) => return error.into_response(),
+    };
+    proxy_response(
+        state,
+        current_user,
+        AcpRoute::PublishRequest(PublishRequestRoute::Action { request_id, action }),
         request,
     )
     .await
@@ -458,7 +628,7 @@ async fn proxy_acp_inner(
     request: Request,
 ) -> Result<Response, ApiError> {
     let query = request.uri().query().map(str::to_owned);
-    route.validate_query(query.as_deref())?;
+    route.validate_query(request.method(), query.as_deref())?;
     let error_domain = route.error_domain();
     let (parts, body) = request.into_parts();
     let method = parts.method;
@@ -471,7 +641,7 @@ async fn proxy_acp_inner(
             None,
         ));
     }
-    if route.requires_idempotency_key()
+    if route.requires_idempotency_key(&method)
         && headers
             .get(&IDEMPOTENCY_KEY)
             .and_then(|value| value.to_str().ok())
@@ -479,7 +649,12 @@ async fn proxy_acp_inner(
     {
         return Err(ApiError::coded(
             StatusCode::BAD_REQUEST,
-            "SHARE_BAD_REQUEST",
+            match error_domain {
+                ErrorDomain::Version => "VERSION_BAD_REQUEST",
+                ErrorDomain::PublishRequest => "PUBLISH_REQUEST_BAD_REQUEST",
+                ErrorDomain::Share => "SHARE_BAD_REQUEST",
+                ErrorDomain::Schedule | ErrorDomain::Catalog | ErrorDomain::Workspace => "BAD_REQUEST",
+            },
             "Idempotency-Key is required for this request.",
             None,
         ));
@@ -487,10 +662,15 @@ async fn proxy_acp_inner(
     let body = to_bytes(body, MAX_REQUEST_BODY_BYTES)
         .await
         .map_err(|_| ApiError::PayloadTooLarge("Agent Control Plane request body is too large".to_owned()))?;
-    if route.requires_json_body() && body.is_empty() {
+    if route.requires_json_body(&method) && body.is_empty() {
         return Err(ApiError::coded(
             StatusCode::BAD_REQUEST,
-            "SHARE_BAD_REQUEST",
+            match error_domain {
+                ErrorDomain::Version => "VERSION_BAD_REQUEST",
+                ErrorDomain::PublishRequest => "PUBLISH_REQUEST_BAD_REQUEST",
+                ErrorDomain::Share => "SHARE_BAD_REQUEST",
+                ErrorDomain::Schedule | ErrorDomain::Catalog | ErrorDomain::Workspace => "BAD_REQUEST",
+            },
             "A JSON request body is required.",
             None,
         ));
@@ -743,6 +923,39 @@ fn map_platform_upstream_error(domain: ErrorDomain, status: StatusCode) -> ApiEr
             "CATALOG_VERSION_REVOKED",
             "The published Agent version has been revoked.",
         ),
+        (ErrorDomain::Version, StatusCode::BAD_REQUEST) => (
+            "VERSION_BAD_REQUEST",
+            "The Agent Platform version transition is invalid.",
+        ),
+        (ErrorDomain::Version, StatusCode::FORBIDDEN) => (
+            "VERSION_FORBIDDEN",
+            "You do not have permission to transition this Agent Platform version.",
+        ),
+        (ErrorDomain::Version, StatusCode::NOT_FOUND) => (
+            "VERSION_NOT_FOUND",
+            "The requested Agent Platform version was not found.",
+        ),
+        (ErrorDomain::Version, StatusCode::CONFLICT) => (
+            "VERSION_CONFLICT",
+            "The Agent Platform version changed. Refresh and try again.",
+        ),
+        (ErrorDomain::Version, StatusCode::GONE) => ("VERSION_REVOKED", "The Agent Platform version has been revoked."),
+        (ErrorDomain::PublishRequest, StatusCode::BAD_REQUEST) => (
+            "PUBLISH_REQUEST_BAD_REQUEST",
+            "The Agent Platform publish request is invalid.",
+        ),
+        (ErrorDomain::PublishRequest, StatusCode::FORBIDDEN) => (
+            "PUBLISH_REQUEST_FORBIDDEN",
+            "You do not have permission to manage this publish request.",
+        ),
+        (ErrorDomain::PublishRequest, StatusCode::NOT_FOUND) => (
+            "PUBLISH_REQUEST_NOT_FOUND",
+            "The requested publish request was not found.",
+        ),
+        (ErrorDomain::PublishRequest, StatusCode::CONFLICT) => (
+            "PUBLISH_REQUEST_CONFLICT",
+            "The publish request changed. Refresh and try again.",
+        ),
         (ErrorDomain::Workspace, StatusCode::BAD_REQUEST) => {
             ("WORKSPACE_BAD_REQUEST", "The team workspace request is invalid.")
         }
@@ -772,6 +985,8 @@ fn map_platform_upstream_error(domain: ErrorDomain, status: StatusCode) -> ApiEr
         (_, StatusCode::TOO_MANY_REQUESTS) => (
             match domain {
                 ErrorDomain::Catalog => "CATALOG_RATE_LIMITED",
+                ErrorDomain::Version => "VERSION_RATE_LIMITED",
+                ErrorDomain::PublishRequest => "PUBLISH_REQUEST_RATE_LIMITED",
                 ErrorDomain::Workspace => "WORKSPACE_RATE_LIMITED",
                 ErrorDomain::Share => "SHARE_RATE_LIMITED",
                 ErrorDomain::Schedule => unreachable!(),
@@ -781,6 +996,8 @@ fn map_platform_upstream_error(domain: ErrorDomain, status: StatusCode) -> ApiEr
         (_, status) if status.is_client_error() => (
             match domain {
                 ErrorDomain::Catalog => "CATALOG_UPSTREAM_REJECTED",
+                ErrorDomain::Version => "VERSION_UPSTREAM_REJECTED",
+                ErrorDomain::PublishRequest => "PUBLISH_REQUEST_UPSTREAM_REJECTED",
                 ErrorDomain::Workspace => "WORKSPACE_UPSTREAM_REJECTED",
                 ErrorDomain::Share => "SHARE_UPSTREAM_REJECTED",
                 ErrorDomain::Schedule => unreachable!(),

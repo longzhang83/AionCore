@@ -4,7 +4,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use serde_json::json;
 use tower::ServiceExt;
-use wiremock::matchers::{header as wiremock_header, method, path, query_param};
+use wiremock::matchers::{body_json as wiremock_body_json, header as wiremock_header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use aionui_ai_agent::{RuntimeTokenScope, TEAM_RUNTIME_TOKEN_SESSION_GENERATION};
@@ -15,6 +15,184 @@ use common::{
 };
 
 const CONVERSATION_ID: &str = "schedule-bff-helper";
+
+#[tokio::test]
+async fn governed_publish_routes_proxy_exact_recovery_reads_and_writes() {
+    let upstream = MockServer::start().await;
+    for (path_value, version_id) in [
+        ("/api/catalog/v1/agents/agent-1/versions", "agent-version-1"),
+        ("/api/catalog/v1/skills/skill-1/versions", "skill-version-1"),
+    ] {
+        Mock::given(method("GET"))
+            .and(path(path_value))
+            .and(query_param("page_size", "100"))
+            .and(wiremock_header("authorization", "Bearer upstream-access"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "items": [{"version_id": version_id, "state": "draft"}],
+                "meta": {"page": 1, "page_size": 100, "total": 1}
+            })))
+            .mount(&upstream)
+            .await;
+    }
+    for (path_value, version_id) in [
+        (
+            "/api/version/v1/agents/agent-1/versions/agent-version-1/transition",
+            "agent-version-1",
+        ),
+        (
+            "/api/version/v1/skills/skill-1/versions/skill-version-1/transition",
+            "skill-version-1",
+        ),
+    ] {
+        Mock::given(method("POST"))
+            .and(path(path_value))
+            .and(wiremock_header("authorization", "Bearer upstream-access"))
+            .and(wiremock_header("idempotency-key", "idem-1"))
+            .and(wiremock_body_json(json!({"target_state": "testing", "note": "ready"})))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("idempotent-replay", "false")
+                    .set_body_json(json!({"version_id": version_id, "state": "testing"})),
+            )
+            .mount(&upstream)
+            .await;
+    }
+    Mock::given(method("GET"))
+        .and(path("/api/publish-request/v1/requests"))
+        .and(query_param("asset_kind", "agent"))
+        .and(query_param("asset_id", "agent-1"))
+        .and(query_param("page", "1"))
+        .and(query_param("page_size", "200"))
+        .and(wiremock_header("authorization", "Bearer upstream-access"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items": [],
+            "meta": {"page": 1, "page_size": 100, "total": 0}
+        })))
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/publish-request/v1/requests"))
+        .and(wiremock_header("authorization", "Bearer upstream-access"))
+        .and(wiremock_header("idempotency-key", "publish-request-1"))
+        .and(wiremock_body_json(json!({
+            "asset_kind": "agent",
+            "asset_id": "agent-1",
+            "source_version_id": "agent-version-1",
+            "source_version_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "organization_id": "org-1",
+            "requested_visibility": "public"
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "request_id": "request-1",
+            "state": "submitted"
+        })))
+        .mount(&upstream)
+        .await;
+    for (action, body) in [
+        ("withdraw", json!({"reason": "No longer ready"})),
+        (
+            "resubmit",
+            json!({
+                "source_version_id": "agent-version-1",
+                "source_version_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "title": "Agent one"
+            }),
+        ),
+    ] {
+        Mock::given(method("POST"))
+            .and(path(format!("/api/publish-request/v1/requests/request-1/{action}")))
+            .and(wiremock_header("authorization", "Bearer upstream-access"))
+            .and(wiremock_header("idempotency-key", format!("publish-{action}-1")))
+            .and(wiremock_body_json(body))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "request_id": "request-1",
+                "state": if action == "withdraw" { "withdrawn" } else { "submitted" }
+            })))
+            .mount(&upstream)
+            .await;
+    }
+
+    let (mut app, services, vault) =
+        build_app_with_schedule_bff_mock(&upstream, std::time::Duration::from_secs(2)).await;
+    let (_, csrf) = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
+    let token = bind_auth_center_token_for_user(&services, &vault, "admin", "upstream-access", 3600).await;
+
+    for route in [
+        "/api/catalog/v1/agents/agent-1/versions?page_size=100",
+        "/api/catalog/v1/skills/skill-1/versions?page_size=100",
+        "/api/publish-request/v1/requests?asset_kind=agent&asset_id=agent-1&page=1&page_size=200",
+    ] {
+        let response = app.clone().oneshot(get_with_token(route, &token)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "route: {route}");
+    }
+
+    for route in [
+        "/api/version/v1/agents/agent-1/versions/agent-version-1/transition",
+        "/api/version/v1/skills/skill-1/versions/skill-version-1/transition",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(json_with_token_and_headers(
+                "POST",
+                route,
+                json!({"target_state": "testing", "note": "ready"}),
+                &token,
+                &csrf,
+                &[("idempotency-key", "idem-1")],
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "route: {route}");
+    }
+
+    let create = app
+        .clone()
+        .oneshot(json_with_token_and_headers(
+            "POST",
+            "/api/publish-request/v1/requests",
+            json!({
+                "asset_kind": "agent",
+                "asset_id": "agent-1",
+                "source_version_id": "agent-version-1",
+                "source_version_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "organization_id": "org-1",
+                "requested_visibility": "public"
+            }),
+            &token,
+            &csrf,
+            &[("idempotency-key", "publish-request-1")],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::CREATED);
+    assert_eq!(body_json(create).await["data"]["request_id"], "request-1");
+
+    for (action, body) in [
+        ("withdraw", json!({"reason": "No longer ready"})),
+        (
+            "resubmit",
+            json!({
+                "source_version_id": "agent-version-1",
+                "source_version_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "title": "Agent one"
+            }),
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(json_with_token_and_headers(
+                "POST",
+                &format!("/api/publish-request/v1/requests/request-1/{action}"),
+                body,
+                &token,
+                &csrf,
+                &[("idempotency-key", &format!("publish-{action}-1"))],
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "action: {action}");
+    }
+}
 
 #[tokio::test]
 async fn schedule_bff_is_authenticated_and_requires_csrf_for_writes() {
@@ -77,6 +255,7 @@ async fn schedule_bff_is_authenticated_and_requires_csrf_for_writes() {
     assert_eq!(body_json(missing_share_csrf).await["code"], "CSRF_INVALID");
 
     let local_only_share = app
+        .clone()
         .oneshot(json_with_token_and_headers(
             "POST",
             "/api/share/v1/shares",
@@ -92,6 +271,25 @@ async fn schedule_bff_is_authenticated_and_requires_csrf_for_writes() {
         body_json(local_only_share).await["code"],
         "AUTH_CENTER_SESSION_REQUIRED"
     );
+
+    for path in [
+        "/api/version/v1/agents/agent-1/versions/version-1/transition",
+        "/api/publish-request/v1/requests",
+        "/api/publish-request/v1/requests/request-1/withdraw",
+        "/api/publish-request/v1/requests/request-1/resubmit",
+    ] {
+        let missing_csrf = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("content-type", "application/json")
+            .header("idempotency-key", "publish-intent-local")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::from(json!({"target_state": "testing"}).to_string()))
+            .unwrap();
+        let response = app.clone().oneshot(missing_csrf).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "path: {path}");
+        assert_eq!(body_json(response).await["code"], "CSRF_INVALID", "path: {path}");
+    }
 }
 
 #[tokio::test]
@@ -115,7 +313,10 @@ async fn runtime_token_channel_cannot_bypass_bound_session_for_schedule_bff() {
     for path in [
         "/api/schedule/v1/schedules",
         "/api/catalog/v1/agents?page_size=100",
+        "/api/catalog/v1/agents/agent-1/versions?page_size=100",
         "/api/catalog/v1/skills?page_size=100",
+        "/api/catalog/v1/skills/skill-1/versions?page_size=100",
+        "/api/publish-request/v1/requests?asset_kind=agent&asset_id=agent-1&page=1&page_size=200",
         "/api/team-workspace/v1/workspaces",
     ] {
         let read = app
@@ -147,6 +348,7 @@ async fn runtime_token_channel_cannot_bypass_bound_session_for_schedule_bff() {
     assert_eq!(body_json(write).await["code"], "UNAUTHORIZED");
 
     let share_write = app
+        .clone()
         .oneshot(runtime_json(
             "POST",
             "/api/share/v1/shares",
@@ -159,6 +361,28 @@ async fn runtime_token_channel_cannot_bypass_bound_session_for_schedule_bff() {
         .unwrap();
     assert_eq!(share_write.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(body_json(share_write).await["code"], "UNAUTHORIZED");
+
+    for path in [
+        "/api/version/v1/agents/agent-1/versions/version-1/transition",
+        "/api/publish-request/v1/requests",
+        "/api/publish-request/v1/requests/request-1/withdraw",
+        "/api/publish-request/v1/requests/request-1/resubmit",
+    ] {
+        let write = app
+            .clone()
+            .oneshot(runtime_json(
+                "POST",
+                path,
+                json!({"target_state": "testing"}),
+                &user.id,
+                CONVERSATION_ID,
+                &issue.token,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(write.status(), StatusCode::UNAUTHORIZED, "path: {path}");
+        assert_eq!(body_json(write).await["code"], "UNAUTHORIZED", "path: {path}");
+    }
 
     assert!(upstream.received_requests().await.unwrap().is_empty());
 }
@@ -448,9 +672,12 @@ async fn acp_catalog_and_workspace_read_bff_require_an_auth_center_bound_session
 
     for path in [
         "/api/catalog/v1/agents?page_size=100",
+        "/api/catalog/v1/agents/agent-1/versions?page_size=100",
         "/api/catalog/v1/agents/agent-1/versions/version-1",
         "/api/catalog/v1/skills?page_size=100",
+        "/api/catalog/v1/skills/skill-1/versions?page_size=100",
         "/api/catalog/v1/skills/skill-1/versions/version-1",
+        "/api/publish-request/v1/requests?asset_kind=agent&asset_id=agent-1&page=1&page_size=200",
         "/api/team-workspace/v1/workspaces",
     ] {
         let unauthenticated = app.clone().oneshot(get_request(path)).await.unwrap();
