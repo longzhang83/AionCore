@@ -35,6 +35,23 @@ async fn governed_publish_routes_proxy_exact_recovery_reads_and_writes() {
             .await;
     }
     for (path_value, version_id) in [
+        ("/api/version/v1/agents/agent-1/versions", "agent-version-created-1"),
+        ("/api/version/v1/skills/skill-1/versions", "skill-version-created-1"),
+    ] {
+        Mock::given(method("POST"))
+            .and(path(path_value))
+            .and(wiremock_header("authorization", "Bearer upstream-access"))
+            .and(wiremock_header("idempotency-key", "create-version-1"))
+            .and(wiremock_header("x-request-id", "create-request-1"))
+            .and(wiremock_body_json(json!({"manifest": {"summary": "Ready", "instructions": "Review"}})))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+                "version_id": version_id,
+                "state": "draft"
+            })))
+            .mount(&upstream)
+            .await;
+    }
+    for (path_value, version_id) in [
         (
             "/api/version/v1/agents/agent-1/versions/agent-version-1/transition",
             "agent-version-1",
@@ -124,6 +141,29 @@ async fn governed_publish_routes_proxy_exact_recovery_reads_and_writes() {
     ] {
         let response = app.clone().oneshot(get_with_token(route, &token)).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK, "route: {route}");
+    }
+
+    for route in [
+        "/api/version/v1/agents/agent-1/versions",
+        "/api/version/v1/skills/skill-1/versions",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(json_with_token_and_headers(
+                "POST",
+                route,
+                json!({"manifest": {"summary": "Ready", "instructions": "Review"}}),
+                &token,
+                &csrf,
+                &[
+                    ("idempotency-key", "create-version-1"),
+                    ("x-request-id", "create-request-1"),
+                ],
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED, "route: {route}");
+        assert_eq!(body_json(response).await["data"]["state"], "draft");
     }
 
     for route in [

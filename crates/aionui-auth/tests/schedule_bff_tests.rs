@@ -231,6 +231,149 @@ async fn schedule_bff_exposes_only_the_frozen_path_and_method_allowlist() {
 }
 
 #[tokio::test]
+async fn version_create_bff_forwards_exact_agent_and_skill_requests() {
+    let upstream = MockServer::start().await;
+    for (asset_kind, asset_id, idempotency_key, request_id) in [
+        ("agents", "agent-1", "agent-create-1", "agent-request-1"),
+        ("skills", "skill-1", "skill-create-1", "skill-request-1"),
+    ] {
+        Mock::given(method("POST"))
+            .and(path(format!("/api/version/v1/{asset_kind}/{asset_id}/versions")))
+            .and(wiremock_header("authorization", "Bearer upstream-access"))
+            .and(wiremock_header("idempotency-key", idempotency_key))
+            .and(wiremock_header("x-request-id", request_id))
+            .respond_with(
+                ResponseTemplate::new(201)
+                    .insert_header("idempotent-replay", "false")
+                    .insert_header("x-request-id", format!("upstream-{request_id}"))
+                    .set_body_json(json!({"version_id": format!("{asset_id}-version-1"), "state": "draft"})),
+            )
+            .mount(&upstream)
+            .await;
+    }
+    let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+    let local_token = bind_upstream_token(&ctx, "upstream-access", 3600);
+
+    for (asset_kind, asset_id, idempotency_key, request_id) in [
+        ("agents", "agent-1", "agent-create-1", "agent-request-1"),
+        ("skills", "skill-1", "skill-create-1", "skill-request-1"),
+    ] {
+        let body = json!({
+            "manifest": {
+                "summary": format!("{asset_kind} summary"),
+                "instructions": format!("{asset_kind} instructions")
+            }
+        })
+        .to_string();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/api/version/v1/{asset_kind}/{asset_id}/versions"))
+                    .header(header::AUTHORIZATION, format!("Bearer {local_token}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::COOKIE, "aionui-session=browser-cookie")
+                    .header("x-csrf-token", "browser-csrf")
+                    .header(header::ORIGIN, "https://browser.example")
+                    .header("idempotency-key", idempotency_key)
+                    .header("x-request-id", request_id)
+                    .body(Body::from(body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED, "asset kind: {asset_kind}");
+        assert_eq!(response.headers().get("idempotent-replay").unwrap(), "false");
+        assert_eq!(
+            response.headers().get("x-request-id").unwrap(),
+            format!("upstream-{request_id}").as_str()
+        );
+        assert_eq!(json_body(response).await["data"]["state"], "draft");
+
+        let received = upstream.received_requests().await.unwrap();
+        let forwarded = received
+            .iter()
+            .find(|request| request.url.path() == format!("/api/version/v1/{asset_kind}/{asset_id}/versions"))
+            .expect("version create request forwarded upstream");
+        assert_eq!(String::from_utf8(forwarded.body.clone()).unwrap(), body);
+        assert_eq!(
+            forwarded.headers.get("idempotency-key").unwrap().to_str().unwrap(),
+            idempotency_key
+        );
+        assert_eq!(forwarded.headers.get("x-request-id").unwrap().to_str().unwrap(), request_id);
+        for stripped in ["cookie", "x-csrf-token", "origin", "referer"] {
+            assert!(forwarded.headers.get(stripped).is_none(), "forwarded sensitive header: {stripped}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn version_create_bff_rejects_missing_key_query_and_invalid_ids_without_upstream_io() {
+    let upstream = MockServer::start().await;
+    let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+    let local_token = bind_upstream_token(&ctx, "upstream-access", 3600);
+
+    let missing_key = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/version/v1/agents/agent-1/versions")
+                .header(header::AUTHORIZATION, format!("Bearer {local_token}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_key.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(missing_key).await["code"], "VERSION_BAD_REQUEST");
+
+    let query = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/version/v1/skills/skill-1/versions?organization_id=org-1")
+                .header(header::AUTHORIZATION, format!("Bearer {local_token}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("idempotency-key", "skill-create-1")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(query.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(query).await["code"], "VERSION_BAD_REQUEST");
+
+    for uri in [
+        "/api/version/v1/agents/%E5%90%AB%E4%B8%AD%E6%96%87/versions",
+        "/api/version/v1/skills/skill.invalid/versions",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(uri)
+                    .header(header::AUTHORIZATION, format!("Bearer {local_token}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header("idempotency-key", "create-invalid")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "uri: {uri}");
+        assert_eq!(json_body(response).await["code"], "VERSION_INVALID_ID", "uri: {uri}");
+    }
+
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn acp_read_bff_forwards_only_frozen_catalog_and_workspace_get_routes() {
     let upstream = MockServer::start().await;
     Mock::given(method("GET"))
