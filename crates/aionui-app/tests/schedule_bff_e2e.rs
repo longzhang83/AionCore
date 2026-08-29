@@ -43,7 +43,9 @@ async fn governed_publish_routes_proxy_exact_recovery_reads_and_writes() {
             .and(wiremock_header("authorization", "Bearer upstream-access"))
             .and(wiremock_header("idempotency-key", "create-version-1"))
             .and(wiremock_header("x-request-id", "create-request-1"))
-            .and(wiremock_body_json(json!({"manifest": {"summary": "Ready", "instructions": "Review"}})))
+            .and(wiremock_body_json(
+                json!({"manifest": {"summary": "Ready", "instructions": "Review"}}),
+            ))
             .respond_with(ResponseTemplate::new(201).set_body_json(json!({
                 "version_id": version_id,
                 "state": "draft"

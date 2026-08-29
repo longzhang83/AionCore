@@ -52,7 +52,9 @@ pub(super) enum CatalogRoute {
 
 #[derive(Debug)]
 pub(super) enum VersionRoute {
+    AgentCreate { agent_id: String },
     AgentTransition { agent_id: String, version_id: String },
+    SkillCreate { skill_id: String },
     SkillTransition { skill_id: String, version_id: String },
 }
 
@@ -282,6 +284,9 @@ impl AcpRoute {
                 vec!["api", "team-workspace", "v1", "workspaces"]
             }
             Self::Share(ShareRoute::Create) => vec!["api", "share", "v1", "shares"],
+            Self::Version(VersionRoute::AgentCreate { agent_id }) => {
+                vec!["api", "version", "v1", "agents", agent_id, "versions"]
+            }
             Self::Version(VersionRoute::AgentTransition { agent_id, version_id }) => vec![
                 "api",
                 "version",
@@ -292,6 +297,9 @@ impl AcpRoute {
                 version_id,
                 "transition",
             ],
+            Self::Version(VersionRoute::SkillCreate { skill_id }) => {
+                vec!["api", "version", "v1", "skills", skill_id, "versions"]
+            }
             Self::Version(VersionRoute::SkillTransition { skill_id, version_id }) => vec![
                 "api",
                 "version",

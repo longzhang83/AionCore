@@ -233,8 +233,16 @@ pub(crate) fn schedule_bff_routes() -> Router<AuthRouterState> {
         .route("/api/team-workspace/v1/workspaces", get(proxy_workspaces))
         .route("/api/share/v1/shares", post(proxy_create_share))
         .route(
+            "/api/version/v1/agents/{agent_id}/versions",
+            post(proxy_agent_version_create),
+        )
+        .route(
             "/api/version/v1/agents/{agent_id}/versions/{version_id}/transition",
             post(proxy_agent_version_transition),
+        )
+        .route(
+            "/api/version/v1/skills/{skill_id}/versions",
+            post(proxy_skill_version_create),
         )
         .route(
             "/api/version/v1/skills/{skill_id}/versions/{version_id}/transition",
@@ -352,6 +360,44 @@ async fn proxy_catalog_skill_versions(
         request,
     )
     .await
+}
+
+async fn proxy_agent_version_create(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    Path(agent_id): Path<String>,
+    request: Request,
+) -> Response {
+    proxy_version_create(state, current_user, "agent_id", agent_id, request, true).await
+}
+
+async fn proxy_skill_version_create(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    Path(skill_id): Path<String>,
+    request: Request,
+) -> Response {
+    proxy_version_create(state, current_user, "skill_id", skill_id, request, false).await
+}
+
+async fn proxy_version_create(
+    state: AuthRouterState,
+    current_user: CurrentUser,
+    asset_field: &'static str,
+    asset_id: String,
+    request: Request,
+    is_agent: bool,
+) -> Response {
+    let asset_id = match validate_id(asset_id, asset_field, ErrorDomain::Version) {
+        Ok(id) => id,
+        Err(error) => return error.into_response(),
+    };
+    let route = if is_agent {
+        VersionRoute::AgentCreate { agent_id: asset_id }
+    } else {
+        VersionRoute::SkillCreate { skill_id: asset_id }
+    };
+    proxy_response(state, current_user, AcpRoute::Version(route), request).await
 }
 
 async fn proxy_agent_version_transition(

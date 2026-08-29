@@ -302,9 +302,15 @@ async fn version_create_bff_forwards_exact_agent_and_skill_requests() {
             forwarded.headers.get("idempotency-key").unwrap().to_str().unwrap(),
             idempotency_key
         );
-        assert_eq!(forwarded.headers.get("x-request-id").unwrap().to_str().unwrap(), request_id);
+        assert_eq!(
+            forwarded.headers.get("x-request-id").unwrap().to_str().unwrap(),
+            request_id
+        );
         for stripped in ["cookie", "x-csrf-token", "origin", "referer"] {
-            assert!(forwarded.headers.get(stripped).is_none(), "forwarded sensitive header: {stripped}");
+            assert!(
+                forwarded.headers.get(stripped).is_none(),
+                "forwarded sensitive header: {stripped}"
+            );
         }
     }
 }
