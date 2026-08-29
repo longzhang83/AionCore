@@ -987,13 +987,12 @@ fn map_platform_upstream_error(domain: ErrorDomain, status: StatusCode) -> ApiEr
             "CATALOG_VERSION_REVOKED",
             "The published Agent version has been revoked.",
         ),
-        (ErrorDomain::Version, StatusCode::BAD_REQUEST) => (
-            "VERSION_BAD_REQUEST",
-            "The Agent Platform version transition is invalid.",
-        ),
+        (ErrorDomain::Version, StatusCode::BAD_REQUEST) => {
+            ("VERSION_BAD_REQUEST", "The Agent Platform version request is invalid.")
+        }
         (ErrorDomain::Version, StatusCode::FORBIDDEN) => (
             "VERSION_FORBIDDEN",
-            "You do not have permission to transition this Agent Platform version.",
+            "You do not have permission to manage this Agent Platform version.",
         ),
         (ErrorDomain::Version, StatusCode::NOT_FOUND) => (
             "VERSION_NOT_FOUND",
