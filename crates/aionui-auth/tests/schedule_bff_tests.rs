@@ -338,7 +338,7 @@ async fn version_create_bff_forwards_exact_agent_and_skill_requests() {
 }
 
 #[tokio::test]
-async fn version_create_bff_rejects_missing_key_query_and_invalid_ids_without_upstream_io() {
+async fn version_create_bff_rejects_missing_headers_query_and_invalid_ids_without_upstream_io() {
     let upstream = MockServer::start().await;
     let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
     let local_token = bind_upstream_token(&ctx, "upstream-access", 3600);
@@ -358,6 +358,23 @@ async fn version_create_bff_rejects_missing_key_query_and_invalid_ids_without_up
         .unwrap();
     assert_eq!(missing_key.status(), StatusCode::BAD_REQUEST);
     assert_eq!(json_body(missing_key).await["code"], "VERSION_BAD_REQUEST");
+
+    let missing_request_id = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/version/v1/skills/skill-1/versions")
+                .header(header::AUTHORIZATION, format!("Bearer {local_token}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("idempotency-key", "skill-create-1")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_request_id.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(missing_request_id).await["code"], "VERSION_BAD_REQUEST");
 
     let query = app
         .clone()
@@ -1248,6 +1265,7 @@ async fn share_bff_maps_upstream_errors_safely_and_preserves_the_local_token_bun
                     .header(header::AUTHORIZATION, format!("Bearer {local_token}"))
                     .header(header::CONTENT_TYPE, "application/json")
                     .header("idempotency-key", "share-intent-error")
+                    .header("x-request-id", "share-request-error")
                     .body(Body::from("{}"))
                     .unwrap(),
             )

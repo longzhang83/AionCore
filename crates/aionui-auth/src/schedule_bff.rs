@@ -705,6 +705,24 @@ async fn proxy_acp_inner(
             None,
         ));
     }
+    if route.requires_request_id(&method)
+        && headers
+            .get(&REQUEST_ID)
+            .and_then(|value| value.to_str().ok())
+            .is_none_or(|value| value.trim().is_empty())
+    {
+        return Err(ApiError::coded(
+            StatusCode::BAD_REQUEST,
+            match error_domain {
+                ErrorDomain::Version => "VERSION_BAD_REQUEST",
+                ErrorDomain::PublishRequest => "PUBLISH_REQUEST_BAD_REQUEST",
+                ErrorDomain::Share => "SHARE_BAD_REQUEST",
+                ErrorDomain::Schedule | ErrorDomain::Catalog | ErrorDomain::Workspace => "BAD_REQUEST",
+            },
+            "X-Request-ID is required for this request.",
+            None,
+        ));
+    }
     let body = to_bytes(body, MAX_REQUEST_BODY_BYTES)
         .await
         .map_err(|_| ApiError::PayloadTooLarge("Agent Control Plane request body is too large".to_owned()))?;

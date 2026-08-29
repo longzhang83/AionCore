@@ -396,6 +396,15 @@ impl AcpRoute {
         )
     }
 
+    pub(super) fn requires_request_id(&self, method: &Method) -> bool {
+        matches!(
+            (self, method),
+            (Self::Share(ShareRoute::Create), &Method::POST)
+                | (Self::Version(_), &Method::POST)
+                | (Self::PublishRequest(_), &Method::POST)
+        )
+    }
+
     pub(super) fn requires_json_body(&self, method: &Method) -> bool {
         matches!(
             (self, method),
