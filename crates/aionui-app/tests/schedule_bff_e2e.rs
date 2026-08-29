@@ -51,6 +51,7 @@ async fn schedule_bff_is_authenticated_and_requires_csrf_for_writes() {
     assert_eq!(body_json(missing_csrf).await["code"], "CSRF_INVALID");
 
     let protected_write = app
+        .clone()
         .oneshot(json_with_token(
             "POST",
             "/api/schedule/v1/schedules",
@@ -62,6 +63,35 @@ async fn schedule_bff_is_authenticated_and_requires_csrf_for_writes() {
         .unwrap();
     assert_eq!(protected_write.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(body_json(protected_write).await["code"], "AUTH_CENTER_SESSION_REQUIRED");
+
+    let missing_share_csrf = Request::builder()
+        .method("POST")
+        .uri("/api/share/v1/shares")
+        .header("content-type", "application/json")
+        .header("idempotency-key", "share-intent-local")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::from(json!({"asset_kind": "agent"}).to_string()))
+        .unwrap();
+    let missing_share_csrf = app.clone().oneshot(missing_share_csrf).await.unwrap();
+    assert_eq!(missing_share_csrf.status(), StatusCode::FORBIDDEN);
+    assert_eq!(body_json(missing_share_csrf).await["code"], "CSRF_INVALID");
+
+    let local_only_share = app
+        .oneshot(json_with_token_and_headers(
+            "POST",
+            "/api/share/v1/shares",
+            json!({"asset_kind": "agent"}),
+            &token,
+            &csrf,
+            &[("idempotency-key", "share-intent-local")],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(local_only_share.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        body_json(local_only_share).await["code"],
+        "AUTH_CENTER_SESSION_REQUIRED"
+    );
 }
 
 #[tokio::test]
@@ -102,6 +132,7 @@ async fn runtime_token_channel_cannot_bypass_bound_session_for_schedule_bff() {
     // auth middleware itself rather than reaching the downstream bound-session
     // check, and must never produce upstream I/O.
     let write = app
+        .clone()
         .oneshot(runtime_json(
             "POST",
             "/api/schedule/v1/schedules",
@@ -115,6 +146,20 @@ async fn runtime_token_channel_cannot_bypass_bound_session_for_schedule_bff() {
     assert_eq!(write.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(body_json(write).await["code"], "UNAUTHORIZED");
 
+    let share_write = app
+        .oneshot(runtime_json(
+            "POST",
+            "/api/share/v1/shares",
+            json!({"asset_kind": "agent"}),
+            &user.id,
+            CONVERSATION_ID,
+            &issue.token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(share_write.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(body_json(share_write).await["code"], "UNAUTHORIZED");
+
     assert!(upstream.received_requests().await.unwrap().is_empty());
 }
 
@@ -126,6 +171,19 @@ async fn auth_center_bound_session_reaches_schedule_catalog_and_workspace_bff() 
         .and(query_param("workspace_id", "workspace-1"))
         .and(wiremock_header("authorization", "Bearer upstream-access"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items": [{"schedule_id": "schedule-1"}]})))
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/share/v1/shares"))
+        .and(wiremock_header("authorization", "Bearer upstream-access"))
+        .and(wiremock_header("idempotency-key", "share-intent-1"))
+        .and(wiremock_header("x-request-id", "share-request-1"))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .insert_header("idempotent-replay", "false")
+                .insert_header("x-request-id", "upstream-share-request-1")
+                .set_body_json(json!({"share_id": "share-1", "state": "active"})),
+        )
         .mount(&upstream)
         .await;
     Mock::given(method("POST"))
@@ -220,13 +278,13 @@ async fn auth_center_bound_session_reaches_schedule_catalog_and_workspace_bff() 
         json!({"success": true, "data": {"items": [{"schedule_id": "schedule-1"}]}})
     );
 
-    let body = json!({"workspace_id": "workspace-1", "title": "nightly"});
+    let schedule_body = json!({"workspace_id": "workspace-1", "title": "nightly"});
     let schedule_post = app
         .clone()
         .oneshot(json_with_token_and_headers(
             "POST",
             "/api/schedule/v1/schedules?workspace_id=workspace-1",
-            body.clone(),
+            schedule_body.clone(),
             &bound_token,
             &csrf,
             &[
@@ -286,6 +344,7 @@ async fn auth_center_bound_session_reaches_schedule_catalog_and_workspace_bff() 
     assert_eq!(body_json(skill_version).await["data"]["version_id"], "version-1");
 
     let workspace = app
+        .clone()
         .oneshot(get_with_token("/api/team-workspace/v1/workspaces", &bound_token))
         .await
         .unwrap();
@@ -302,8 +361,40 @@ async fn auth_center_bound_session_reaches_schedule_catalog_and_workspace_bff() 
         }]})
     );
 
+    let share_body = json!({
+        "asset_kind": "agent",
+        "asset_id": "agent-1",
+        "asset_version_id": "version-1",
+        "asset_version_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "target_workspace_id": "workspace-1",
+        "scope": {"kind": "workspace", "values": []}
+    });
+    let share = app
+        .oneshot(json_with_token_and_headers(
+            "POST",
+            "/api/share/v1/shares",
+            share_body.clone(),
+            &bound_token,
+            &csrf,
+            &[
+                ("idempotency-key", "share-intent-1"),
+                ("x-request-id", "share-request-1"),
+                ("origin", "https://browser.example"),
+                ("referer", "https://browser.example/settings"),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(share.status(), StatusCode::CREATED);
+    assert_eq!(share.headers().get("idempotent-replay").unwrap(), "false");
+    assert_eq!(share.headers().get("x-request-id").unwrap(), "upstream-share-request-1");
+    assert_eq!(
+        body_json(share).await,
+        json!({"success": true, "data": {"share_id": "share-1", "state": "active"}})
+    );
+
     let received = upstream.received_requests().await.unwrap();
-    assert_eq!(received.len(), 6);
+    assert_eq!(received.len(), 7);
     for request in &received {
         let authorization = request.headers.get("authorization").unwrap().to_str().unwrap();
         assert_eq!(authorization, "Bearer upstream-access");
@@ -316,16 +407,38 @@ async fn auth_center_bound_session_reaches_schedule_catalog_and_workspace_bff() 
             );
         }
     }
-    let post = received
+    let schedule_post = received
         .iter()
-        .find(|request| request.method.as_str() == "POST")
+        .find(|request| request.method.as_str() == "POST" && request.url.path() == "/api/schedule/v1/schedules")
         .expect("schedule POST forwarded upstream");
     assert_eq!(
-        String::from_utf8(post.body.clone()).unwrap(),
-        serde_json::to_string(&body).unwrap()
+        String::from_utf8(schedule_post.body.clone()).unwrap(),
+        serde_json::to_string(&schedule_body).unwrap()
     );
-    assert_eq!(post.headers.get("idempotency-key").unwrap().to_str().unwrap(), "idem-1");
-    assert_eq!(post.headers.get("x-request-id").unwrap().to_str().unwrap(), "request-1");
+    assert_eq!(
+        schedule_post.headers.get("idempotency-key").unwrap().to_str().unwrap(),
+        "idem-1"
+    );
+    assert_eq!(
+        schedule_post.headers.get("x-request-id").unwrap().to_str().unwrap(),
+        "request-1"
+    );
+    let share_post = received
+        .iter()
+        .find(|request| request.method.as_str() == "POST" && request.url.path() == "/api/share/v1/shares")
+        .expect("share POST forwarded upstream");
+    assert_eq!(
+        String::from_utf8(share_post.body.clone()).unwrap(),
+        serde_json::to_string(&share_body).unwrap()
+    );
+    assert_eq!(
+        share_post.headers.get("idempotency-key").unwrap().to_str().unwrap(),
+        "share-intent-1"
+    );
+    assert_eq!(
+        share_post.headers.get("x-request-id").unwrap().to_str().unwrap(),
+        "share-request-1"
+    );
 }
 
 #[tokio::test]

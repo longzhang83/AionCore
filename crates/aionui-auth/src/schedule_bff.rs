@@ -30,7 +30,7 @@ use crate::middleware::CurrentUser;
 use crate::routes::AuthRouterState;
 
 mod route;
-use route::{AcpRoute, CatalogRoute, ErrorDomain, ScheduleAction, ScheduleRoute, WorkspaceRoute};
+use route::{AcpRoute, CatalogRoute, ErrorDomain, ScheduleAction, ScheduleRoute, ShareRoute, WorkspaceRoute};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_REQUEST_BODY_BYTES: usize = 1024 * 1024;
@@ -220,6 +220,7 @@ pub(crate) fn schedule_bff_routes() -> Router<AuthRouterState> {
             get(proxy_catalog_skill_version),
         )
         .route("/api/team-workspace/v1/workspaces", get(proxy_workspaces))
+        .route("/api/share/v1/shares", post(proxy_create_share))
 }
 
 async fn proxy_catalog_agents(
@@ -296,6 +297,14 @@ async fn proxy_workspaces(
         request,
     )
     .await
+}
+
+async fn proxy_create_share(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    request: Request,
+) -> Response {
+    proxy_response(state, current_user, AcpRoute::Share(ShareRoute::Create), request).await
 }
 
 async fn proxy_collection(
@@ -462,9 +471,30 @@ async fn proxy_acp_inner(
             None,
         ));
     }
+    if route.requires_idempotency_key()
+        && headers
+            .get(&IDEMPOTENCY_KEY)
+            .and_then(|value| value.to_str().ok())
+            .is_none_or(|value| value.trim().is_empty())
+    {
+        return Err(ApiError::coded(
+            StatusCode::BAD_REQUEST,
+            "SHARE_BAD_REQUEST",
+            "Idempotency-Key is required for this request.",
+            None,
+        ));
+    }
     let body = to_bytes(body, MAX_REQUEST_BODY_BYTES)
         .await
         .map_err(|_| ApiError::PayloadTooLarge("Agent Control Plane request body is too large".to_owned()))?;
+    if route.requires_json_body() && body.is_empty() {
+        return Err(ApiError::coded(
+            StatusCode::BAD_REQUEST,
+            "SHARE_BAD_REQUEST",
+            "A JSON request body is required.",
+            None,
+        ));
+    }
     if method == Method::GET && !body.is_empty() {
         return Err(ApiError::BadRequest("GET requests must not include a body".to_owned()));
     }
@@ -650,7 +680,7 @@ fn map_upstream_error(domain: ErrorDomain, status: StatusCode, body: &[u8]) -> A
             None,
         ),
         StatusCode::UNAUTHORIZED => auth_center_session_required(domain),
-        _ if !matches!(domain, ErrorDomain::Schedule) => map_read_upstream_error(domain, status),
+        _ if !matches!(domain, ErrorDomain::Schedule) => map_platform_upstream_error(domain, status),
         StatusCode::FORBIDDEN => ApiError::coded(
             StatusCode::FORBIDDEN,
             "SCHEDULE_FORBIDDEN",
@@ -696,7 +726,7 @@ fn map_upstream_error(domain: ErrorDomain, status: StatusCode, body: &[u8]) -> A
     }
 }
 
-fn map_read_upstream_error(domain: ErrorDomain, status: StatusCode) -> ApiError {
+fn map_platform_upstream_error(domain: ErrorDomain, status: StatusCode) -> ApiError {
     let (code, message) = match (domain, status) {
         (ErrorDomain::Catalog, StatusCode::BAD_REQUEST) => {
             ("CATALOG_BAD_REQUEST", "The Agent catalog request is invalid.")
@@ -723,10 +753,27 @@ fn map_read_upstream_error(domain: ErrorDomain, status: StatusCode) -> ApiError 
         (ErrorDomain::Workspace, StatusCode::NOT_FOUND) => {
             ("WORKSPACE_NOT_FOUND", "The requested team workspace was not found.")
         }
+        (ErrorDomain::Share, StatusCode::BAD_REQUEST) => {
+            ("SHARE_BAD_REQUEST", "The Agent Platform share request is invalid.")
+        }
+        (ErrorDomain::Share, StatusCode::FORBIDDEN) => (
+            "SHARE_FORBIDDEN",
+            "You do not have permission to share this Agent Platform asset.",
+        ),
+        (ErrorDomain::Share, StatusCode::NOT_FOUND) => (
+            "SHARE_NOT_FOUND",
+            "The requested Agent Platform asset or workspace was not found.",
+        ),
+        (ErrorDomain::Share, StatusCode::CONFLICT) => (
+            "SHARE_CONFLICT",
+            "The Agent Platform share changed. Refresh and try again.",
+        ),
+        (ErrorDomain::Share, StatusCode::GONE) => ("SHARE_EXPIRED", "The Agent Platform share is no longer available."),
         (_, StatusCode::TOO_MANY_REQUESTS) => (
             match domain {
                 ErrorDomain::Catalog => "CATALOG_RATE_LIMITED",
                 ErrorDomain::Workspace => "WORKSPACE_RATE_LIMITED",
+                ErrorDomain::Share => "SHARE_RATE_LIMITED",
                 ErrorDomain::Schedule => unreachable!(),
             },
             "Too many Agent Platform requests. Try again later.",
@@ -735,6 +782,7 @@ fn map_read_upstream_error(domain: ErrorDomain, status: StatusCode) -> ApiError 
             match domain {
                 ErrorDomain::Catalog => "CATALOG_UPSTREAM_REJECTED",
                 ErrorDomain::Workspace => "WORKSPACE_UPSTREAM_REJECTED",
+                ErrorDomain::Share => "SHARE_UPSTREAM_REJECTED",
                 ErrorDomain::Schedule => unreachable!(),
             },
             "The Agent Platform request could not be completed.",

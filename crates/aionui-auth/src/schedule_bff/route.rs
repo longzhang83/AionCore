@@ -54,10 +54,16 @@ pub(super) enum WorkspaceRoute {
 }
 
 #[derive(Debug)]
+pub(super) enum ShareRoute {
+    Create,
+}
+
+#[derive(Debug)]
 pub(super) enum AcpRoute {
     Schedule(ScheduleRoute),
     Catalog(CatalogRoute),
     Workspace(WorkspaceRoute),
+    Share(ShareRoute),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -65,6 +71,7 @@ pub(super) enum ErrorDomain {
     Schedule,
     Catalog,
     Workspace,
+    Share,
 }
 
 impl ErrorDomain {
@@ -73,6 +80,7 @@ impl ErrorDomain {
             Self::Schedule => "SCHEDULE",
             Self::Catalog => "CATALOG",
             Self::Workspace => "WORKSPACE",
+            Self::Share => "SHARE",
         }
     }
 
@@ -81,6 +89,7 @@ impl ErrorDomain {
             Self::Schedule => "SCHEDULE_INVALID_ID",
             Self::Catalog => "CATALOG_INVALID_ID",
             Self::Workspace => "WORKSPACE_INVALID_ID",
+            Self::Share => "SHARE_INVALID_ID",
         }
     }
 
@@ -89,6 +98,7 @@ impl ErrorDomain {
             Self::Schedule => "SCHEDULE_UPSTREAM_NOT_CONFIGURED",
             Self::Catalog => "CATALOG_UPSTREAM_NOT_CONFIGURED",
             Self::Workspace => "WORKSPACE_UPSTREAM_NOT_CONFIGURED",
+            Self::Share => "SHARE_UPSTREAM_NOT_CONFIGURED",
         }
     }
 
@@ -97,6 +107,7 @@ impl ErrorDomain {
             Self::Schedule => "SCHEDULE_UPSTREAM_TIMEOUT",
             Self::Catalog => "CATALOG_UPSTREAM_TIMEOUT",
             Self::Workspace => "WORKSPACE_UPSTREAM_TIMEOUT",
+            Self::Share => "SHARE_UPSTREAM_TIMEOUT",
         }
     }
 
@@ -105,6 +116,7 @@ impl ErrorDomain {
             Self::Schedule => "SCHEDULE_UPSTREAM_UNAVAILABLE",
             Self::Catalog => "CATALOG_UPSTREAM_UNAVAILABLE",
             Self::Workspace => "WORKSPACE_UPSTREAM_UNAVAILABLE",
+            Self::Share => "SHARE_UPSTREAM_UNAVAILABLE",
         }
     }
 
@@ -113,6 +125,7 @@ impl ErrorDomain {
             Self::Schedule => "SCHEDULE_UPSTREAM_INVALID_RESPONSE",
             Self::Catalog => "CATALOG_UPSTREAM_INVALID_RESPONSE",
             Self::Workspace => "WORKSPACE_UPSTREAM_INVALID_RESPONSE",
+            Self::Share => "SHARE_UPSTREAM_INVALID_RESPONSE",
         }
     }
 
@@ -121,6 +134,7 @@ impl ErrorDomain {
             Self::Schedule => "Sign in again to use scheduled tasks.",
             Self::Catalog => "Sign in again to browse the Agent catalog.",
             Self::Workspace => "Sign in again to browse team workspaces.",
+            Self::Share => "Sign in again to share Agent Platform assets.",
         }
     }
 
@@ -129,6 +143,7 @@ impl ErrorDomain {
             Self::Schedule => "Scheduled tasks are not configured.",
             Self::Catalog => "The Agent catalog is not configured.",
             Self::Workspace => "Team workspaces are not configured.",
+            Self::Share => "Agent Platform sharing is not configured.",
         }
     }
 
@@ -137,6 +152,7 @@ impl ErrorDomain {
             Self::Schedule => "Scheduled tasks did not respond in time.",
             Self::Catalog => "The Agent catalog did not respond in time.",
             Self::Workspace => "Team workspaces did not respond in time.",
+            Self::Share => "Agent Platform sharing did not respond in time.",
         }
     }
 
@@ -145,6 +161,7 @@ impl ErrorDomain {
             Self::Schedule => "Scheduled tasks are temporarily unavailable.",
             Self::Catalog => "The Agent catalog is temporarily unavailable.",
             Self::Workspace => "Team workspaces are temporarily unavailable.",
+            Self::Share => "Agent Platform sharing is temporarily unavailable.",
         }
     }
 
@@ -153,6 +170,7 @@ impl ErrorDomain {
             Self::Schedule => "Scheduled tasks returned an invalid response.",
             Self::Catalog => "The Agent catalog returned an invalid response.",
             Self::Workspace => "Team workspaces returned an invalid response.",
+            Self::Share => "Agent Platform sharing returned an invalid response.",
         }
     }
 }
@@ -162,6 +180,7 @@ impl AcpRoute {
         match self {
             Self::Schedule(route) => route.permits(method),
             Self::Catalog(_) | Self::Workspace(_) => *method == Method::GET,
+            Self::Share(ShareRoute::Create) => *method == Method::POST,
         }
     }
 
@@ -170,6 +189,7 @@ impl AcpRoute {
             Self::Schedule(_) => ErrorDomain::Schedule,
             Self::Catalog(_) => ErrorDomain::Catalog,
             Self::Workspace(_) => ErrorDomain::Workspace,
+            Self::Share(_) => ErrorDomain::Share,
         }
     }
 
@@ -199,6 +219,7 @@ impl AcpRoute {
             Self::Workspace(WorkspaceRoute::Workspaces) => {
                 vec!["api", "team-workspace", "v1", "workspaces"]
             }
+            Self::Share(ShareRoute::Create) => vec!["api", "share", "v1", "shares"],
         }
     }
 
@@ -216,6 +237,7 @@ impl AcpRoute {
             Self::Catalog(CatalogRoute::AgentVersion { .. })
             | Self::Catalog(CatalogRoute::SkillVersion { .. })
             | Self::Workspace(_)
+            | Self::Share(_)
                 if query.is_some() =>
             {
                 Err(ApiError::coded(
@@ -223,6 +245,7 @@ impl AcpRoute {
                     match self.error_domain() {
                         ErrorDomain::Catalog => "CATALOG_BAD_REQUEST",
                         ErrorDomain::Workspace => "WORKSPACE_BAD_REQUEST",
+                        ErrorDomain::Share => "SHARE_BAD_REQUEST",
                         ErrorDomain::Schedule => unreachable!(),
                     },
                     "This request does not accept query parameters.",
@@ -231,8 +254,17 @@ impl AcpRoute {
             }
             Self::Catalog(CatalogRoute::AgentVersion { .. })
             | Self::Catalog(CatalogRoute::SkillVersion { .. })
-            | Self::Workspace(_) => Ok(()),
+            | Self::Workspace(_)
+            | Self::Share(_) => Ok(()),
         }
+    }
+
+    pub(super) fn requires_idempotency_key(&self) -> bool {
+        matches!(self, Self::Share(ShareRoute::Create))
+    }
+
+    pub(super) fn requires_json_body(&self) -> bool {
+        matches!(self, Self::Share(ShareRoute::Create))
     }
 }
 

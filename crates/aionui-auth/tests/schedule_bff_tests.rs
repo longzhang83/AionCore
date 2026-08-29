@@ -911,3 +911,182 @@ async fn acp_read_bff_skill_upstream_unauthorized_preserves_the_local_token_bund
     assert!(!body.to_string().contains("upstream-access"));
     assert!(ctx.vault.get(&vault_key).is_some());
 }
+
+#[tokio::test]
+async fn share_bff_forwards_only_the_frozen_create_contract_and_strips_browser_credentials() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/share/v1/shares"))
+        .and(wiremock_header("authorization", "Bearer upstream-access"))
+        .and(wiremock_header("idempotency-key", "share-intent-1"))
+        .and(wiremock_header("x-request-id", "share-request-1"))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .insert_header("idempotent-replay", "true")
+                .insert_header("x-request-id", "upstream-share-request-1")
+                .set_body_json(json!({"share_id": "share-1", "state": "active"})),
+        )
+        .mount(&upstream)
+        .await;
+    let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+    let local_token = bind_upstream_token(&ctx, "upstream-access", 3600);
+    let body = json!({
+        "asset_kind": "agent",
+        "asset_id": "agent-1",
+        "asset_version_id": "version-1",
+        "asset_version_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "target_workspace_id": "workspace-1",
+        "scope": {"kind": "workspace", "values": []}
+    })
+    .to_string();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/share/v1/shares")
+                .header(header::AUTHORIZATION, format!("Bearer {local_token}"))
+                .header(header::COOKIE, "aionui-session=browser-cookie")
+                .header("x-csrf-token", "browser-csrf")
+                .header(header::ORIGIN, "https://browser.example")
+                .header(header::REFERER, "https://browser.example/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("idempotency-key", "share-intent-1")
+                .header("x-request-id", "share-request-1")
+                .body(Body::from(body.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(response.headers().get("idempotent-replay").unwrap(), "true");
+    assert_eq!(
+        response.headers().get("x-request-id").unwrap(),
+        "upstream-share-request-1"
+    );
+    assert_eq!(
+        json_body(response).await,
+        json!({"success": true, "data": {"share_id": "share-1", "state": "active"}})
+    );
+
+    let received = upstream.received_requests().await.unwrap();
+    assert_eq!(received.len(), 1);
+    assert_eq!(String::from_utf8(received[0].body.clone()).unwrap(), body);
+    assert_eq!(
+        received[0].headers.get("authorization").unwrap().to_str().unwrap(),
+        "Bearer upstream-access"
+    );
+    for stripped in ["cookie", "x-csrf-token", "origin", "referer"] {
+        assert!(
+            received[0].headers.get(stripped).is_none(),
+            "forwarded sensitive header: {stripped}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn share_bff_rejects_unfrozen_queries_methods_and_missing_write_contract_without_upstream_io() {
+    let upstream = MockServer::start().await;
+    let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+    let local_token = bind_upstream_token(&ctx, "upstream-access", 3600);
+    let valid_body = Body::from(
+        json!({
+            "asset_kind": "skill",
+            "asset_id": "skill-1",
+            "asset_version_id": "version-1",
+            "target_workspace_id": "workspace-1",
+            "scope": {"kind": "workspace", "values": []}
+        })
+        .to_string(),
+    );
+
+    let query = Request::builder()
+        .method(Method::POST)
+        .uri("/api/share/v1/shares?owner_user_id=someone-else")
+        .header(header::AUTHORIZATION, format!("Bearer {local_token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("idempotency-key", "share-intent-1")
+        .body(valid_body)
+        .unwrap();
+    let query = app.clone().oneshot(query).await.unwrap();
+    assert_eq!(query.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(query).await["code"], "SHARE_BAD_REQUEST");
+
+    let missing_key = Request::builder()
+        .method(Method::POST)
+        .uri("/api/share/v1/shares")
+        .header(header::AUTHORIZATION, format!("Bearer {local_token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let missing_key = app.clone().oneshot(missing_key).await.unwrap();
+    assert_eq!(missing_key.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(missing_key).await["code"], "SHARE_BAD_REQUEST");
+
+    let empty_body = Request::builder()
+        .method(Method::POST)
+        .uri("/api/share/v1/shares")
+        .header(header::AUTHORIZATION, format!("Bearer {local_token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("idempotency-key", "share-intent-2")
+        .body(Body::empty())
+        .unwrap();
+    let empty_body = app.clone().oneshot(empty_body).await.unwrap();
+    assert_eq!(empty_body.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(empty_body).await["code"], "SHARE_BAD_REQUEST");
+
+    let get = app
+        .oneshot(request(
+            Method::GET,
+            "/api/share/v1/shares",
+            &local_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(get.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn share_bff_maps_upstream_errors_safely_and_preserves_the_local_token_bundle() {
+    for (status, upstream_code, expected_code) in [
+        (400, "share_scope_invalid", "SHARE_BAD_REQUEST"),
+        (403, "share_forbidden", "SHARE_FORBIDDEN"),
+        (409, "object_hash_mismatch", "SHARE_CONFLICT"),
+        (401, "unauthorized", "AUTH_CENTER_SESSION_REQUIRED"),
+    ] {
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/share/v1/shares"))
+            .respond_with(ResponseTemplate::new(status).set_body_json(json!({
+                "code": upstream_code,
+                "message": "private upstream share details"
+            })))
+            .mount(&upstream)
+            .await;
+        let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+        let local_token = bind_upstream_token(&ctx, "upstream-secret", 3600);
+        let vault_key = AuthCenterTokenVaultKey::from_token(&local_token, USER_ID);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/share/v1/shares")
+                    .header(header::AUTHORIZATION, format!("Bearer {local_token}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header("idempotency-key", "share-intent-error")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), status);
+        let body = json_body(response).await;
+        assert_eq!(body["code"], expected_code);
+        assert!(!body.to_string().contains("private upstream share details"));
+        assert!(!body.to_string().contains("upstream-secret"));
+        assert!(ctx.vault.get(&vault_key).is_some());
+    }
+}
