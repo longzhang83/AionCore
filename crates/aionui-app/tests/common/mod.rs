@@ -7,8 +7,15 @@ use http_body_util::BodyExt;
 use tower::ServiceExt;
 use wiremock::MockServer;
 
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use aionui_ai_agent::{AgentInstance, IAgentTask, IMockAgent, WorkerTaskManagerImpl};
 use aionui_app::{AppConfig, AppServices, build_module_states, create_router, create_router_with_states};
+use aionui_auth::{
+    AuthCenterTokenResponse, AuthCenterTokenVaultKey, IAuthCenterTokenVault, InMemoryAuthCenterTokenVault,
+    RsmAuthConfig, ScheduleBffConfig, bundle_from_token_response,
+};
 use aionui_extension::{ExternalPathsManager, SkillPaths, SkillRouterState};
 use aionui_file::FileService;
 use aionui_system::VersionCheckService;
@@ -18,6 +25,37 @@ pub async fn build_app() -> (axum::Router, AppServices) {
     let services = AppServices::from_config(db, &AppConfig::default()).await.unwrap();
     let router = create_router(&services).await.expect("build router");
     (router, services)
+}
+
+pub async fn build_app_with_schedule_bff_mock(
+    upstream: &MockServer,
+    timeout: Duration,
+) -> (axum::Router, AppServices, Arc<InMemoryAuthCenterTokenVault>) {
+    let db = aionui_db::init_database_memory().await.unwrap();
+    let mut services = AppServices::from_config(db, &AppConfig::default()).await.unwrap();
+    let vault = Arc::new(InMemoryAuthCenterTokenVault::new());
+    let rsm_auth_config = RsmAuthConfig {
+        enabled: true,
+        issuer: Some("https://auth.example".to_owned()),
+        client_id: Some("agent-control-plane".to_owned()),
+        client_secret: None,
+        redirect_uri: None,
+        additional_scopes: Vec::new(),
+        app_code: "agent".to_owned(),
+        internal_base_url: None,
+        internal_token: None,
+    };
+    let schedule_bff_config = ScheduleBffConfig::new_with_identity_contract(
+        upstream.uri(),
+        timeout,
+        &rsm_auth_config,
+        Some("agent-control-plane"),
+    )
+    .unwrap();
+    services.auth_center_token_vault = vault.clone() as Arc<dyn IAuthCenterTokenVault>;
+    services.schedule_bff_config = Arc::new(schedule_bff_config);
+    let router = create_router(&services).await.expect("build router");
+    (router, services, vault)
 }
 
 /// Build an app whose skill router uses the given temp directories.
@@ -290,6 +328,58 @@ pub fn json_with_token(method_str: &str, uri: &str, body: serde_json::Value, tok
         .unwrap()
 }
 
+pub fn json_with_token_and_headers(
+    method_str: &str,
+    uri: &str,
+    body: serde_json::Value,
+    token: &str,
+    csrf: &str,
+    headers: &[(&str, &str)],
+) -> Request<Body> {
+    let mut builder = Request::builder()
+        .method(method_str)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .header("x-csrf-token", csrf)
+        .header("cookie", format!("aionui-csrf-token={csrf}"));
+    for (name, value) in headers {
+        builder = builder.header(*name, *value);
+    }
+    builder.body(Body::from(serde_json::to_vec(&body).unwrap())).unwrap()
+}
+
+pub fn runtime_get(uri: &str, user_id: &str, conversation_id: &str, token: &str) -> Request<Body> {
+    Request::builder()
+        .method("GET")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("x-aionui-user-id", user_id)
+        .header("x-aionui-conversation-id", conversation_id)
+        .header("x-aionui-runtime-token", token)
+        .body(Body::empty())
+        .unwrap()
+}
+
+pub fn runtime_json(
+    method_str: &str,
+    uri: &str,
+    body: serde_json::Value,
+    user_id: &str,
+    conversation_id: &str,
+    token: &str,
+) -> Request<Body> {
+    Request::builder()
+        .method(method_str)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("x-aionui-user-id", user_id)
+        .header("x-aionui-conversation-id", conversation_id)
+        .header("x-aionui-runtime-token", token)
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap()
+}
+
 pub fn delete_with_token(uri: &str, token: &str, csrf: &str) -> Request<Body> {
     Request::builder()
         .method("DELETE")
@@ -340,6 +430,39 @@ pub async fn setup_and_login(
     let token = json["token"].as_str().unwrap().to_owned();
 
     (token, csrf)
+}
+
+pub async fn bind_auth_center_token_for_user(
+    services: &AppServices,
+    vault: &Arc<InMemoryAuthCenterTokenVault>,
+    username: &str,
+    upstream_token: &str,
+    expires_in: i64,
+) -> String {
+    let user = services
+        .user_repo
+        .find_by_username(username)
+        .await
+        .unwrap()
+        .unwrap_or_else(|| panic!("test user '{username}' should exist"));
+    let local_token = services
+        .jwt_service
+        .sign_auth_center_bound(&user.id, username, user.session_generation)
+        .unwrap();
+    let issued_at_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64;
+    let bundle = bundle_from_token_response(
+        AuthCenterTokenResponse {
+            access_token: upstream_token.to_owned(),
+            refresh_token: Some("refresh-must-stay-server-side".to_owned()),
+            id_token: Some("id-token-must-stay-server-side".to_owned()),
+            token_type: Some("Bearer".to_owned()),
+            scope: Some("schedule:read schedule:write".to_owned()),
+            expires_in: Some(expires_in),
+        },
+        issued_at_ms,
+    );
+    vault.store(AuthCenterTokenVaultKey::from_token(&local_token, &user.id), bundle);
+    local_token
 }
 
 /// Log in an account that already exists — for a second app instance brought up
