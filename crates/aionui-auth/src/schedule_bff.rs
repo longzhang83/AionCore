@@ -31,8 +31,8 @@ use crate::routes::AuthRouterState;
 
 mod route;
 use route::{
-    AcpRoute, CatalogRoute, ErrorDomain, PublishRequestAction, PublishRequestRoute, ScheduleAction, ScheduleRoute,
-    ShareRoute, VersionRoute, WorkspaceRoute,
+    AcpRoute, CatalogRoute, ErrorDomain, PublishRequestAction, PublishRequestRoute, ReviewDocumentRoute,
+    ScheduleAction, ScheduleRoute, ShareRoute, VersionRoute, WorkspaceRoute,
 };
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -259,6 +259,12 @@ pub(crate) fn schedule_bff_routes() -> Router<AuthRouterState> {
         .route(
             "/api/publish-request/v1/requests/{request_id}/resubmit",
             post(proxy_resubmit_publish_request),
+        )
+        .route("/api/review/v1/documents", get(proxy_review_documents))
+        .route("/api/review/v1/documents/{document_id}", get(proxy_review_document))
+        .route(
+            "/api/review/v1/documents/{document_id}/drafts/{draft_id}",
+            get(proxy_review_draft),
         )
 }
 
@@ -515,6 +521,62 @@ async fn proxy_workspaces(
     .await
 }
 
+async fn proxy_review_documents(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    request: Request,
+) -> Response {
+    proxy_response(
+        state,
+        current_user,
+        AcpRoute::ReviewDocument(ReviewDocumentRoute::Collection),
+        request,
+    )
+    .await
+}
+
+async fn proxy_review_document(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    Path(document_id): Path<String>,
+    request: Request,
+) -> Response {
+    let document_id = match validate_id(document_id, "document_id", ErrorDomain::ReviewDocument) {
+        Ok(id) => id,
+        Err(error) => return error.into_response(),
+    };
+    proxy_response(
+        state,
+        current_user,
+        AcpRoute::ReviewDocument(ReviewDocumentRoute::Document { document_id }),
+        request,
+    )
+    .await
+}
+
+async fn proxy_review_draft(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    Path((document_id, draft_id)): Path<(String, String)>,
+    request: Request,
+) -> Response {
+    let document_id = match validate_id(document_id, "document_id", ErrorDomain::ReviewDocument) {
+        Ok(id) => id,
+        Err(error) => return error.into_response(),
+    };
+    let draft_id = match validate_id(draft_id, "draft_id", ErrorDomain::ReviewDocument) {
+        Ok(id) => id,
+        Err(error) => return error.into_response(),
+    };
+    proxy_response(
+        state,
+        current_user,
+        AcpRoute::ReviewDocument(ReviewDocumentRoute::Draft { document_id, draft_id }),
+        request,
+    )
+    .await
+}
+
 async fn proxy_create_share(
     State(state): State<AuthRouterState>,
     Extension(current_user): Extension<CurrentUser>,
@@ -699,7 +761,9 @@ async fn proxy_acp_inner(
                 ErrorDomain::Version => "VERSION_BAD_REQUEST",
                 ErrorDomain::PublishRequest => "PUBLISH_REQUEST_BAD_REQUEST",
                 ErrorDomain::Share => "SHARE_BAD_REQUEST",
-                ErrorDomain::Schedule | ErrorDomain::Catalog | ErrorDomain::Workspace => "BAD_REQUEST",
+                ErrorDomain::Schedule | ErrorDomain::Catalog | ErrorDomain::Workspace | ErrorDomain::ReviewDocument => {
+                    "BAD_REQUEST"
+                }
             },
             "Idempotency-Key is required for this request.",
             None,
@@ -717,7 +781,9 @@ async fn proxy_acp_inner(
                 ErrorDomain::Version => "VERSION_BAD_REQUEST",
                 ErrorDomain::PublishRequest => "PUBLISH_REQUEST_BAD_REQUEST",
                 ErrorDomain::Share => "SHARE_BAD_REQUEST",
-                ErrorDomain::Schedule | ErrorDomain::Catalog | ErrorDomain::Workspace => "BAD_REQUEST",
+                ErrorDomain::Schedule | ErrorDomain::Catalog | ErrorDomain::Workspace | ErrorDomain::ReviewDocument => {
+                    "BAD_REQUEST"
+                }
             },
             "X-Request-ID is required for this request.",
             None,
@@ -733,7 +799,9 @@ async fn proxy_acp_inner(
                 ErrorDomain::Version => "VERSION_BAD_REQUEST",
                 ErrorDomain::PublishRequest => "PUBLISH_REQUEST_BAD_REQUEST",
                 ErrorDomain::Share => "SHARE_BAD_REQUEST",
-                ErrorDomain::Schedule | ErrorDomain::Catalog | ErrorDomain::Workspace => "BAD_REQUEST",
+                ErrorDomain::Schedule | ErrorDomain::Catalog | ErrorDomain::Workspace | ErrorDomain::ReviewDocument => {
+                    "BAD_REQUEST"
+                }
             },
             "A JSON request body is required.",
             None,
@@ -1045,6 +1113,25 @@ fn map_platform_upstream_error(domain: ErrorDomain, status: StatusCode) -> ApiEr
             "The Agent Platform share changed. Refresh and try again.",
         ),
         (ErrorDomain::Share, StatusCode::GONE) => ("SHARE_EXPIRED", "The Agent Platform share is no longer available."),
+        (ErrorDomain::ReviewDocument, StatusCode::BAD_REQUEST) => {
+            ("REVIEW_DOCUMENT_BAD_REQUEST", "The review document request is invalid.")
+        }
+        (ErrorDomain::ReviewDocument, StatusCode::FORBIDDEN) => (
+            "REVIEW_DOCUMENT_FORBIDDEN",
+            "You do not have permission to browse this review document scope.",
+        ),
+        (ErrorDomain::ReviewDocument, StatusCode::NOT_FOUND) => (
+            "REVIEW_DOCUMENT_NOT_FOUND",
+            "The requested review document was not found.",
+        ),
+        (ErrorDomain::ReviewDocument, StatusCode::CONFLICT) => (
+            "REVIEW_DOCUMENT_CONFLICT",
+            "The review document changed. Refresh and try again.",
+        ),
+        (ErrorDomain::ReviewDocument, StatusCode::GONE) => (
+            "REVIEW_DOCUMENT_REVOKED",
+            "The review document or draft is no longer available.",
+        ),
         (_, StatusCode::TOO_MANY_REQUESTS) => (
             match domain {
                 ErrorDomain::Catalog => "CATALOG_RATE_LIMITED",
@@ -1052,6 +1139,7 @@ fn map_platform_upstream_error(domain: ErrorDomain, status: StatusCode) -> ApiEr
                 ErrorDomain::PublishRequest => "PUBLISH_REQUEST_RATE_LIMITED",
                 ErrorDomain::Workspace => "WORKSPACE_RATE_LIMITED",
                 ErrorDomain::Share => "SHARE_RATE_LIMITED",
+                ErrorDomain::ReviewDocument => "REVIEW_DOCUMENT_RATE_LIMITED",
                 ErrorDomain::Schedule => unreachable!(),
             },
             "Too many Agent Platform requests. Try again later.",
@@ -1063,6 +1151,7 @@ fn map_platform_upstream_error(domain: ErrorDomain, status: StatusCode) -> ApiEr
                 ErrorDomain::PublishRequest => "PUBLISH_REQUEST_UPSTREAM_REJECTED",
                 ErrorDomain::Workspace => "WORKSPACE_UPSTREAM_REJECTED",
                 ErrorDomain::Share => "SHARE_UPSTREAM_REJECTED",
+                ErrorDomain::ReviewDocument => "REVIEW_DOCUMENT_UPSTREAM_REJECTED",
                 ErrorDomain::Schedule => unreachable!(),
             },
             "The Agent Platform request could not be completed.",
@@ -1348,6 +1437,36 @@ mod tests {
                 validate_id(invalid.to_owned(), "schedule_id", ErrorDomain::Schedule).is_err(),
                 "accepted {invalid:?}"
             );
+        }
+    }
+
+    #[test]
+    fn review_document_path_ids_use_the_same_safe_segment_contract() {
+        for valid in ["document-1", "draft_1", "01JABCDEF123"] {
+            assert_eq!(
+                validate_id(valid.to_owned(), "document_id", ErrorDomain::ReviewDocument).unwrap(),
+                valid
+            );
+            assert_eq!(
+                validate_id(valid.to_owned(), "draft_id", ErrorDomain::ReviewDocument).unwrap(),
+                valid
+            );
+        }
+        for invalid in [
+            "",
+            ".",
+            "..",
+            "document/other",
+            "document%2Fother",
+            "document.invalid",
+            "含中文",
+        ] {
+            let document = validate_id(invalid.to_owned(), "document_id", ErrorDomain::ReviewDocument);
+            assert!(document.is_err(), "accepted {invalid:?} as document_id");
+            assert_eq!(document.unwrap_err().error_code(), "REVIEW_DOCUMENT_INVALID_ID");
+            let draft = validate_id(invalid.to_owned(), "draft_id", ErrorDomain::ReviewDocument);
+            assert!(draft.is_err(), "accepted {invalid:?} as draft_id");
+            assert_eq!(draft.unwrap_err().error_code(), "REVIEW_DOCUMENT_INVALID_ID");
         }
     }
 }

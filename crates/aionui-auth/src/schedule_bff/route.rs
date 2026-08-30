@@ -84,6 +84,13 @@ pub(super) enum ShareRoute {
 }
 
 #[derive(Debug)]
+pub(super) enum ReviewDocumentRoute {
+    Collection,
+    Document { document_id: String },
+    Draft { document_id: String, draft_id: String },
+}
+
+#[derive(Debug)]
 pub(super) enum AcpRoute {
     Schedule(ScheduleRoute),
     Catalog(CatalogRoute),
@@ -91,6 +98,7 @@ pub(super) enum AcpRoute {
     PublishRequest(PublishRequestRoute),
     Workspace(WorkspaceRoute),
     Share(ShareRoute),
+    ReviewDocument(ReviewDocumentRoute),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -101,6 +109,7 @@ pub(super) enum ErrorDomain {
     PublishRequest,
     Workspace,
     Share,
+    ReviewDocument,
 }
 
 impl ErrorDomain {
@@ -112,6 +121,7 @@ impl ErrorDomain {
             Self::PublishRequest => "PUBLISH_REQUEST",
             Self::Workspace => "WORKSPACE",
             Self::Share => "SHARE",
+            Self::ReviewDocument => "REVIEW_DOCUMENT",
         }
     }
 
@@ -123,6 +133,7 @@ impl ErrorDomain {
             Self::PublishRequest => "PUBLISH_REQUEST_INVALID_ID",
             Self::Workspace => "WORKSPACE_INVALID_ID",
             Self::Share => "SHARE_INVALID_ID",
+            Self::ReviewDocument => "REVIEW_DOCUMENT_INVALID_ID",
         }
     }
 
@@ -134,6 +145,7 @@ impl ErrorDomain {
             Self::PublishRequest => "PUBLISH_REQUEST_UPSTREAM_NOT_CONFIGURED",
             Self::Workspace => "WORKSPACE_UPSTREAM_NOT_CONFIGURED",
             Self::Share => "SHARE_UPSTREAM_NOT_CONFIGURED",
+            Self::ReviewDocument => "REVIEW_DOCUMENT_UPSTREAM_NOT_CONFIGURED",
         }
     }
 
@@ -145,6 +157,7 @@ impl ErrorDomain {
             Self::PublishRequest => "PUBLISH_REQUEST_UPSTREAM_TIMEOUT",
             Self::Workspace => "WORKSPACE_UPSTREAM_TIMEOUT",
             Self::Share => "SHARE_UPSTREAM_TIMEOUT",
+            Self::ReviewDocument => "REVIEW_DOCUMENT_UPSTREAM_TIMEOUT",
         }
     }
 
@@ -156,6 +169,7 @@ impl ErrorDomain {
             Self::PublishRequest => "PUBLISH_REQUEST_UPSTREAM_UNAVAILABLE",
             Self::Workspace => "WORKSPACE_UPSTREAM_UNAVAILABLE",
             Self::Share => "SHARE_UPSTREAM_UNAVAILABLE",
+            Self::ReviewDocument => "REVIEW_DOCUMENT_UPSTREAM_UNAVAILABLE",
         }
     }
 
@@ -167,6 +181,7 @@ impl ErrorDomain {
             Self::PublishRequest => "PUBLISH_REQUEST_UPSTREAM_INVALID_RESPONSE",
             Self::Workspace => "WORKSPACE_UPSTREAM_INVALID_RESPONSE",
             Self::Share => "SHARE_UPSTREAM_INVALID_RESPONSE",
+            Self::ReviewDocument => "REVIEW_DOCUMENT_UPSTREAM_INVALID_RESPONSE",
         }
     }
 
@@ -178,6 +193,7 @@ impl ErrorDomain {
             Self::PublishRequest => "Sign in again to manage publish requests.",
             Self::Workspace => "Sign in again to browse team workspaces.",
             Self::Share => "Sign in again to share Agent Platform assets.",
+            Self::ReviewDocument => "Sign in again to browse review documents.",
         }
     }
 
@@ -189,6 +205,7 @@ impl ErrorDomain {
             Self::PublishRequest => "Agent Platform publish requests are not configured.",
             Self::Workspace => "Team workspaces are not configured.",
             Self::Share => "Agent Platform sharing is not configured.",
+            Self::ReviewDocument => "Review documents are not configured.",
         }
     }
 
@@ -200,6 +217,7 @@ impl ErrorDomain {
             Self::PublishRequest => "Agent Platform publish requests did not respond in time.",
             Self::Workspace => "Team workspaces did not respond in time.",
             Self::Share => "Agent Platform sharing did not respond in time.",
+            Self::ReviewDocument => "Review documents did not respond in time.",
         }
     }
 
@@ -211,6 +229,7 @@ impl ErrorDomain {
             Self::PublishRequest => "Agent Platform publish requests are temporarily unavailable.",
             Self::Workspace => "Team workspaces are temporarily unavailable.",
             Self::Share => "Agent Platform sharing is temporarily unavailable.",
+            Self::ReviewDocument => "Review documents are temporarily unavailable.",
         }
     }
 
@@ -222,6 +241,7 @@ impl ErrorDomain {
             Self::PublishRequest => "Agent Platform publish requests returned an invalid response.",
             Self::Workspace => "Team workspaces returned an invalid response.",
             Self::Share => "Agent Platform sharing returned an invalid response.",
+            Self::ReviewDocument => "Review documents returned an invalid response.",
         }
     }
 }
@@ -230,7 +250,7 @@ impl AcpRoute {
     pub(super) fn permits(&self, method: &Method) -> bool {
         match self {
             Self::Schedule(route) => route.permits(method),
-            Self::Catalog(_) | Self::Workspace(_) => *method == Method::GET,
+            Self::Catalog(_) | Self::Workspace(_) | Self::ReviewDocument(_) => *method == Method::GET,
             Self::Version(_) => *method == Method::POST,
             Self::PublishRequest(PublishRequestRoute::Collection) => {
                 matches!(*method, Method::GET | Method::POST)
@@ -248,6 +268,7 @@ impl AcpRoute {
             Self::PublishRequest(_) => ErrorDomain::PublishRequest,
             Self::Workspace(_) => ErrorDomain::Workspace,
             Self::Share(_) => ErrorDomain::Share,
+            Self::ReviewDocument(_) => ErrorDomain::ReviewDocument,
         }
     }
 
@@ -324,6 +345,15 @@ impl AcpRoute {
                     PublishRequestAction::Resubmit => "resubmit",
                 },
             ],
+            Self::ReviewDocument(ReviewDocumentRoute::Collection) => {
+                vec!["api", "review", "v1", "documents"]
+            }
+            Self::ReviewDocument(ReviewDocumentRoute::Document { document_id }) => {
+                vec!["api", "review", "v1", "documents", document_id]
+            }
+            Self::ReviewDocument(ReviewDocumentRoute::Draft { document_id, draft_id }) => {
+                vec!["api", "review", "v1", "documents", document_id, "drafts", draft_id]
+            }
         }
     }
 
@@ -341,6 +371,14 @@ impl AcpRoute {
             | Self::Catalog(CatalogRoute::SkillVersions { .. }) => {
                 validate_page_size_query(query, ErrorDomain::Catalog)
             }
+            // Review Document read collection accepts the frozen frontend
+            // shape `page=1&page_size=100&workspace_id=<single-segment id>`.
+            // Any other key, any duplicate, any unknown value, or any missing
+            // pair is rejected before upstream I/O.
+            Self::ReviewDocument(ReviewDocumentRoute::Collection) => validate_review_document_list_query(query),
+            // Review Document document and draft detail accept no query.
+            Self::ReviewDocument(_) if query.is_some() => Err(review_document_query_rejected()),
+            Self::ReviewDocument(_) => Ok(()),
             Self::PublishRequest(PublishRequestRoute::Collection) if *method == Method::GET => {
                 validate_publish_request_list_query(query)
             }
@@ -374,6 +412,7 @@ impl AcpRoute {
                         ErrorDomain::Workspace => "WORKSPACE_BAD_REQUEST",
                         ErrorDomain::Share => "SHARE_BAD_REQUEST",
                         ErrorDomain::Schedule => unreachable!(),
+                        ErrorDomain::ReviewDocument => unreachable!(),
                     },
                     "This request does not accept query parameters.",
                     None,
@@ -503,6 +542,71 @@ fn list_query_error(domain: ErrorDomain) -> ApiError {
     )
 }
 
+/// Validates the frozen Review Document read-collection query:
+/// the only shape accepted is `page=1&page_size=100&workspace_id=<safe>`.
+/// Any missing pair, duplicate, unknown key, or invalid value is rejected
+/// before any upstream I/O.
+fn validate_review_document_list_query(query: Option<&str>) -> Result<(), ApiError> {
+    let Some(query) = query else {
+        return Err(review_document_list_query_error());
+    };
+    let pairs = url::form_urlencoded::parse(query.as_bytes()).collect::<Vec<_>>();
+    if pairs.len() != 3 {
+        return Err(review_document_list_query_error());
+    }
+    let mut page = None;
+    let mut page_size = None;
+    let mut workspace_id = None;
+    for (key, value) in pairs {
+        let slot = match key.as_ref() {
+            "page" => &mut page,
+            "page_size" => &mut page_size,
+            "workspace_id" => &mut workspace_id,
+            _ => return Err(review_document_list_query_error()),
+        };
+        if slot.replace(value.into_owned()).is_some() {
+            return Err(review_document_list_query_error());
+        }
+    }
+    if page.as_deref() == Some("1")
+        && page_size.as_deref() == Some("100")
+        && workspace_id.as_deref().is_some_and(is_safe_single_segment_id)
+    {
+        Ok(())
+    } else {
+        Err(review_document_list_query_error())
+    }
+}
+
+fn review_document_list_query_error() -> ApiError {
+    ApiError::coded(
+        StatusCode::BAD_REQUEST,
+        "REVIEW_DOCUMENT_BAD_REQUEST",
+        "The review document query is invalid.",
+        None,
+    )
+}
+
+fn review_document_query_rejected() -> ApiError {
+    ApiError::coded(
+        StatusCode::BAD_REQUEST,
+        "REVIEW_DOCUMENT_BAD_REQUEST",
+        "This request does not accept query parameters.",
+        None,
+    )
+}
+
+/// Accepts exactly one URL path segment: 1..=255 ASCII bytes that are
+/// alphanumeric, `-`, or `_`. Empty, dotted, encoded slash, or any other byte
+/// is rejected so it cannot reach the upstream URL.
+fn is_safe_single_segment_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 255
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -541,5 +645,111 @@ mod tests {
         assert!(!route.requires_json_body(&Method::GET));
         assert!(route.requires_idempotency_key(&Method::POST));
         assert!(route.requires_json_body(&Method::POST));
+    }
+
+    #[test]
+    fn review_document_collection_accepts_only_the_frozen_read_query() {
+        let route = AcpRoute::ReviewDocument(ReviewDocumentRoute::Collection);
+
+        assert!(
+            route
+                .validate_query(&Method::GET, Some("page=1&page_size=100&workspace_id=workspace-1"),)
+                .is_ok()
+        );
+        assert!(
+            route
+                .validate_query(&Method::GET, Some("workspace_id=workspace-1&page=1&page_size=100"),)
+                .is_ok()
+        );
+
+        for bad in [
+            None,
+            Some(""),
+            Some("page=1&page_size=100"),
+            Some("page=1&workspace_id=workspace-1"),
+            Some("page_size=100&workspace_id=workspace-1"),
+            Some("page=1&page_size=100&workspace_id=workspace-1&format=xlsx"),
+            Some("page=1&page_size=100&workspace_id=workspace-1&review_state=open"),
+            Some("page=1&page_size=100&workspace_id=workspace-1&base_revision_id=rev-1"),
+            Some("page=2&page_size=100&workspace_id=workspace-1"),
+            Some("page=1&page_size=99&workspace_id=workspace-1"),
+            Some("page=1&page_size=100&workspace_id="),
+            Some("page=1&page_size=100&workspace_id=workspace%2Fadmin"),
+            Some("page=1&page_size=100&workspace_id=workspace.invalid"),
+            Some("page=1&page_size=100&workspace_id=%E5%90%AB%E4%B8%AD%E6%96%87"),
+            Some("page=1&page_size=100&page=2&workspace_id=workspace-1"),
+            Some("page=01&page_size=100&workspace_id=workspace-1"),
+            Some("format=xlsx&page=1&page_size=100&workspace_id=workspace-1"),
+        ] {
+            assert!(
+                route.validate_query(&Method::GET, bad).is_err(),
+                "accepted review query: {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn review_document_collection_rejects_writes_and_unknown_methods() {
+        let route = AcpRoute::ReviewDocument(ReviewDocumentRoute::Collection);
+
+        assert!(!route.permits(&Method::POST));
+        assert!(!route.permits(&Method::PUT));
+        assert!(!route.permits(&Method::DELETE));
+        assert!(!route.permits(&Method::PATCH));
+        assert!(route.permits(&Method::GET));
+        assert!(!route.requires_idempotency_key(&Method::GET));
+        assert!(!route.requires_request_id(&Method::GET));
+        assert!(!route.requires_json_body(&Method::GET));
+    }
+
+    #[test]
+    fn review_document_details_reject_any_query_and_any_write() {
+        let document = AcpRoute::ReviewDocument(ReviewDocumentRoute::Document {
+            document_id: "document-1".to_owned(),
+        });
+        let draft = AcpRoute::ReviewDocument(ReviewDocumentRoute::Draft {
+            document_id: "document-1".to_owned(),
+            draft_id: "draft-1".to_owned(),
+        });
+
+        for route in [&document, &draft] {
+            assert!(route.permits(&Method::GET));
+            assert!(!route.permits(&Method::POST));
+            assert!(!route.permits(&Method::PUT));
+            assert!(!route.permits(&Method::DELETE));
+            assert!(!route.permits(&Method::PATCH));
+            assert!(route.validate_query(&Method::GET, None).is_ok());
+            assert!(route.validate_query(&Method::GET, Some("")).is_err());
+            assert!(
+                route
+                    .validate_query(&Method::GET, Some("page=1&page_size=100&workspace_id=workspace-1"))
+                    .is_err()
+            );
+            assert!(route.validate_query(&Method::GET, Some("format=xlsx")).is_err());
+            assert!(matches!(route.error_domain(), ErrorDomain::ReviewDocument));
+        }
+    }
+
+    #[test]
+    fn review_document_upstream_segments_rebuild_safe_paths() {
+        assert_eq!(
+            AcpRoute::ReviewDocument(ReviewDocumentRoute::Collection).upstream_segments(),
+            vec!["api", "review", "v1", "documents"],
+        );
+        assert_eq!(
+            AcpRoute::ReviewDocument(ReviewDocumentRoute::Document {
+                document_id: "document-1".to_owned()
+            })
+            .upstream_segments(),
+            vec!["api", "review", "v1", "documents", "document-1"],
+        );
+        assert_eq!(
+            AcpRoute::ReviewDocument(ReviewDocumentRoute::Draft {
+                document_id: "document-1".to_owned(),
+                draft_id: "draft-1".to_owned(),
+            })
+            .upstream_segments(),
+            vec!["api", "review", "v1", "documents", "document-1", "drafts", "draft-1",],
+        );
     }
 }

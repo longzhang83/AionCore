@@ -8,6 +8,7 @@ use wiremock::matchers::{body_json as wiremock_body_json, header as wiremock_hea
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use aionui_ai_agent::{RuntimeTokenScope, TEAM_RUNTIME_TOKEN_SESSION_GENERATION};
+use aionui_auth::IAuthCenterTokenVault;
 
 use common::{
     bind_auth_center_token_for_user, body_json, build_app, build_app_with_schedule_bff_mock, get_request,
@@ -758,4 +759,294 @@ async fn acp_catalog_and_workspace_read_bff_require_an_auth_center_bound_session
             "path: {path}"
         );
     }
+}
+
+#[tokio::test]
+async fn review_document_read_bff_forwards_only_the_frozen_frontend_query() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/review/v1/documents"))
+        .and(query_param("page", "1"))
+        .and(query_param("page_size", "100"))
+        .and(query_param("workspace_id", "workspace-1"))
+        .and(wiremock_header("authorization", "Bearer upstream-access"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items": [{
+                "document_id": "document-1",
+                "workspace_id": "workspace-1",
+                "format": "xlsx",
+                "review_state": "in_review"
+            }],
+            "meta": {"page": 1, "page_size": 100, "total": 1}
+        })))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/review/v1/documents/document-1"))
+        .and(wiremock_header("authorization", "Bearer upstream-access"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "document_id": "document-1",
+            "workspace_id": "workspace-1",
+            "format": "xlsx",
+            "base_revision_id": "rev-1"
+        })))
+        .mount(&upstream)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/review/v1/documents/document-1/drafts/draft-1"))
+        .and(wiremock_header("authorization", "Bearer upstream-access"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "draft_id": "draft-1",
+            "document_id": "document-1",
+            "review_state": "in_review"
+        })))
+        .mount(&upstream)
+        .await;
+
+    let (mut app, services, vault) =
+        build_app_with_schedule_bff_mock(&upstream, std::time::Duration::from_secs(2)).await;
+    let (browser_token, csrf) = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
+    let bound_token = bind_auth_center_token_for_user(&services, &vault, "admin", "upstream-access", 3600).await;
+
+    let list = app
+        .clone()
+        .oneshot(get_with_token(
+            "/api/review/v1/documents?page=1&page_size=100&workspace_id=workspace-1",
+            &bound_token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    assert_eq!(body_json(list).await["data"]["items"][0]["document_id"], "document-1");
+
+    let document = app
+        .clone()
+        .oneshot(get_with_token("/api/review/v1/documents/document-1", &bound_token))
+        .await
+        .unwrap();
+    assert_eq!(document.status(), StatusCode::OK);
+    assert_eq!(body_json(document).await["data"]["document_id"], "document-1");
+
+    let draft = app
+        .clone()
+        .oneshot(get_with_token(
+            "/api/review/v1/documents/document-1/drafts/draft-1",
+            &bound_token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(draft.status(), StatusCode::OK);
+    assert_eq!(body_json(draft).await["data"]["draft_id"], "draft-1");
+
+    let received = upstream.received_requests().await.unwrap();
+    assert_eq!(received.len(), 3);
+    for request in &received {
+        let authorization = request.headers.get("authorization").unwrap().to_str().unwrap();
+        assert_eq!(authorization, "Bearer upstream-access");
+        assert!(!authorization.contains(&browser_token));
+        assert!(!authorization.contains(&bound_token));
+        for stripped in ["cookie", "x-csrf-token", "origin", "referer"] {
+            assert!(
+                request.headers.get(stripped).is_none(),
+                "forwarded sensitive header: {stripped}"
+            );
+        }
+        if request.url.path() == "/api/review/v1/documents" {
+            assert_eq!(
+                request.url.query(),
+                Some("page=1&page_size=100&workspace_id=workspace-1")
+            );
+        } else {
+            assert!(request.url.query().is_none(), "detail route must not forward query");
+        }
+    }
+    // csrf is unused here but should remain bound for the lifetime of the test.
+    let _ = csrf;
+}
+
+#[tokio::test]
+async fn review_document_read_bff_rejects_unfrozen_query_shapes_and_writes_without_upstream_io() {
+    let (mut app, services) = build_app().await;
+    let (token, csrf) = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
+    // The unauthenticated/build_app path does not mount an upstream mock, so
+    // every rejected request must still be answered from the local stack.
+    for (method_str, uri) in [
+        ("GET", "/api/review/v1/documents"),
+        ("GET", "/api/review/v1/documents?page=1&page_size=100"),
+        (
+            "GET",
+            "/api/review/v1/documents?page=2&page_size=100&workspace_id=workspace-1",
+        ),
+        (
+            "GET",
+            "/api/review/v1/documents?page=1&page_size=100&workspace_id=workspace-1&format=xlsx",
+        ),
+        (
+            "GET",
+            "/api/review/v1/documents?page=1&page_size=100&workspace_id=workspace-1&review_state=open",
+        ),
+        (
+            "GET",
+            "/api/review/v1/documents?page=1&page_size=100&workspace_id=workspace-1&base_revision_id=rev-1",
+        ),
+        (
+            "GET",
+            "/api/review/v1/documents?page=1&page_size=100&workspace_id=workspace.invalid",
+        ),
+        (
+            "GET",
+            "/api/review/v1/documents?page=1&page_size=100&workspace_id=%E5%90%AB%E4%B8%AD%E6%96%87",
+        ),
+        ("GET", "/api/review/v1/documents/document-1?expand=secrets"),
+        (
+            "GET",
+            "/api/review/v1/documents/document-1/drafts/draft-1?review_state=open",
+        ),
+        ("GET", "/api/review/v1/documents/document%2Fadmin"),
+        ("GET", "/api/review/v1/documents/document-1/drafts/draft%2Fadmin"),
+        ("GET", "/api/review/v1/documents/%E5%90%AB%E4%B8%AD%E6%96%87"),
+        (
+            "POST",
+            "/api/review/v1/documents?page=1&page_size=100&workspace_id=workspace-1",
+        ),
+        ("POST", "/api/review/v1/documents/document-1/drafts"),
+        ("POST", "/api/review/v1/documents/document-1/drafts/draft-1/lease"),
+    ] {
+        let mut builder = Request::builder().method(method_str).uri(uri);
+        if method_str == "POST" {
+            builder = builder
+                .header("content-type", "application/json")
+                .header("x-csrf-token", &csrf)
+                .header("cookie", format!("aionui-csrf-token={csrf}"));
+        }
+        builder = builder.header("authorization", format!("Bearer {token}"));
+        let response = app.clone().oneshot(builder.body(Body::empty()).unwrap()).await.unwrap();
+        assert!(
+            matches!(
+                response.status(),
+                StatusCode::BAD_REQUEST
+                    | StatusCode::METHOD_NOT_ALLOWED
+                    | StatusCode::NOT_FOUND
+                    | StatusCode::UNAUTHORIZED
+            ),
+            "method: {method_str}, uri: {uri} -> {}",
+            response.status()
+        );
+    }
+}
+
+#[tokio::test]
+async fn review_document_read_bff_requires_an_auth_center_bound_session() {
+    let (mut app, services) = build_app().await;
+    let (token, _) = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
+
+    for path in [
+        "/api/review/v1/documents?page=1&page_size=100&workspace_id=workspace-1",
+        "/api/review/v1/documents/document-1",
+        "/api/review/v1/documents/document-1/drafts/draft-1",
+    ] {
+        let unauthenticated = app.clone().oneshot(get_request(path)).await.unwrap();
+        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED, "path: {path}");
+
+        let local_only_session = app.clone().oneshot(get_with_token(path, &token)).await.unwrap();
+        assert_eq!(local_only_session.status(), StatusCode::UNAUTHORIZED, "path: {path}");
+        assert_eq!(
+            body_json(local_only_session).await["code"],
+            "AUTH_CENTER_SESSION_REQUIRED",
+            "path: {path}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn runtime_token_channel_cannot_bypass_bound_session_for_review_document_bff() {
+    let upstream = MockServer::start().await;
+    let (mut app, services, _) = build_app_with_schedule_bff_mock(&upstream, std::time::Duration::from_secs(2)).await;
+    let _ = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
+    let user = services
+        .user_repo
+        .find_by_username("admin")
+        .await
+        .unwrap()
+        .expect("admin user should exist");
+    let issue = services.runtime_token_service.issue(
+        user.id.as_str(),
+        CONVERSATION_ID,
+        TEAM_RUNTIME_TOKEN_SESSION_GENERATION,
+        [RuntimeTokenScope::ConversationHelper],
+    );
+
+    for path in [
+        "/api/review/v1/documents?page=1&page_size=100&workspace_id=workspace-1",
+        "/api/review/v1/documents/document-1",
+        "/api/review/v1/documents/document-1/drafts/draft-1",
+    ] {
+        let read = app
+            .clone()
+            .oneshot(runtime_get(path, &user.id, CONVERSATION_ID, &issue.token))
+            .await
+            .unwrap();
+        assert_eq!(read.status(), StatusCode::UNAUTHORIZED, "path: {path}");
+        assert_eq!(body_json(read).await["code"], "UNAUTHORIZED", "path: {path}");
+    }
+
+    for path in [
+        "/api/review/v1/documents/document-1/drafts",
+        "/api/review/v1/documents/document-1/drafts/draft-1/lease",
+    ] {
+        let write = app
+            .clone()
+            .oneshot(runtime_json(
+                "POST",
+                path,
+                json!({"target_state": "testing"}),
+                &user.id,
+                CONVERSATION_ID,
+                &issue.token,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(write.status(), StatusCode::NOT_FOUND, "path: {path}");
+    }
+
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn review_document_read_bff_upstream_unauthorized_preserves_the_local_token_bundle() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/review/v1/documents"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "code": "unauthorized",
+            "message": "private audience details"
+        })))
+        .mount(&upstream)
+        .await;
+    let (mut app, services, vault) =
+        build_app_with_schedule_bff_mock(&upstream, std::time::Duration::from_secs(2)).await;
+    let _ = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
+    let user = services
+        .user_repo
+        .find_by_username("admin")
+        .await
+        .unwrap()
+        .expect("admin user should exist");
+    let bound_token = bind_auth_center_token_for_user(&services, &vault, "admin", "upstream-access", 3600).await;
+    let vault_key = aionui_auth::AuthCenterTokenVaultKey::from_token(&bound_token, user.id.as_str());
+
+    let response = app
+        .oneshot(get_with_token(
+            "/api/review/v1/documents?page=1&page_size=100&workspace_id=workspace-1",
+            &bound_token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = body_json(response).await;
+    assert_eq!(body["code"], "AUTH_CENTER_SESSION_REQUIRED");
+    assert!(!body.to_string().contains("private audience details"));
+    assert!(!body.to_string().contains("upstream-access"));
+    assert!(vault.get(&vault_key).is_some());
 }
