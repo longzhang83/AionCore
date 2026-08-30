@@ -88,6 +88,7 @@ pub(super) enum ReviewDocumentRoute {
     Collection,
     Document { document_id: String },
     Draft { document_id: String, draft_id: String },
+    TypedDiff { document_id: String, draft_id: String },
 }
 
 #[derive(Debug)]
@@ -354,6 +355,16 @@ impl AcpRoute {
             Self::ReviewDocument(ReviewDocumentRoute::Draft { document_id, draft_id }) => {
                 vec!["api", "review", "v1", "documents", document_id, "drafts", draft_id]
             }
+            Self::ReviewDocument(ReviewDocumentRoute::TypedDiff { document_id, draft_id }) => vec![
+                "api",
+                "review",
+                "v1",
+                "documents",
+                document_id,
+                "drafts",
+                draft_id,
+                "typed-diff",
+            ],
         }
     }
 
@@ -376,7 +387,7 @@ impl AcpRoute {
             // Any other key, any duplicate, any unknown value, or any missing
             // pair is rejected before upstream I/O.
             Self::ReviewDocument(ReviewDocumentRoute::Collection) => validate_review_document_list_query(query),
-            // Review Document document and draft detail accept no query.
+            // Review Document document, draft, and typed-diff detail accept no query.
             Self::ReviewDocument(_) if query.is_some() => Err(review_document_query_rejected()),
             Self::ReviewDocument(_) => Ok(()),
             Self::PublishRequest(PublishRequestRoute::Collection) if *method == Method::GET => {
@@ -731,6 +742,9 @@ mod tests {
             );
             assert!(route.validate_query(&Method::GET, Some("format=xlsx")).is_err());
             assert!(matches!(route.error_domain(), ErrorDomain::ReviewDocument));
+            assert!(!route.requires_idempotency_key(&Method::GET));
+            assert!(!route.requires_request_id(&Method::GET));
+            assert!(!route.requires_json_body(&Method::GET));
         }
     }
 

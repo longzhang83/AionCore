@@ -41,6 +41,7 @@ const MAX_RESPONSE_BODY_BYTES: usize = 2 * 1024 * 1024;
 const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("idempotency-key");
 const REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 const IDEMPOTENT_REPLAY: HeaderName = HeaderName::from_static("idempotent-replay");
+const REVIEW_TYPED_DIFF_ROUTE: &str = "/api/review/v1/documents/{document_id}/drafts/{draft_id}/typed-diff";
 
 /// Fail-closed Schedule BFF configuration.
 ///
@@ -266,6 +267,7 @@ pub(crate) fn schedule_bff_routes() -> Router<AuthRouterState> {
             "/api/review/v1/documents/{document_id}/drafts/{draft_id}",
             get(proxy_review_draft),
         )
+        .route(REVIEW_TYPED_DIFF_ROUTE, get(proxy_review_typed_diff))
 }
 
 async fn proxy_catalog_agents(
@@ -575,6 +577,28 @@ async fn proxy_review_draft(
         request,
     )
     .await
+}
+
+async fn proxy_review_typed_diff(
+    State(state): State<AuthRouterState>,
+    Extension(current_user): Extension<CurrentUser>,
+    Path((document_id, draft_id)): Path<(String, String)>,
+    request: Request,
+) -> Response {
+    let route = match review_typed_diff_route(document_id, draft_id) {
+        Ok(route) => route,
+        Err(error) => return error.into_response(),
+    };
+    proxy_response(state, current_user, route, request).await
+}
+
+fn review_typed_diff_route(document_id: String, draft_id: String) -> Result<AcpRoute, ApiError> {
+    let document_id = validate_id(document_id, "document_id", ErrorDomain::ReviewDocument)?;
+    let draft_id = validate_id(draft_id, "draft_id", ErrorDomain::ReviewDocument)?;
+    Ok(AcpRoute::ReviewDocument(ReviewDocumentRoute::TypedDiff {
+        document_id,
+        draft_id,
+    }))
 }
 
 async fn proxy_create_share(
@@ -1497,10 +1521,7 @@ mod tests {
         for invalid in ["", ".", "..", "other/path", "other%2Fpath", "other.invalid", "含中文"] {
             let invalid_document = review_typed_diff_route(invalid.to_owned(), "draft-1".to_owned());
             assert!(invalid_document.is_err(), "accepted {invalid:?} as document_id");
-            assert_eq!(
-                invalid_document.unwrap_err().error_code(),
-                "REVIEW_DOCUMENT_INVALID_ID"
-            );
+            assert_eq!(invalid_document.unwrap_err().error_code(), "REVIEW_DOCUMENT_INVALID_ID");
 
             let invalid_draft = review_typed_diff_route("document-1".to_owned(), invalid.to_owned());
             assert!(invalid_draft.is_err(), "accepted {invalid:?} as draft_id");
