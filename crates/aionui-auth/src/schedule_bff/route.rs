@@ -711,8 +711,12 @@ mod tests {
             document_id: "document-1".to_owned(),
             draft_id: "draft-1".to_owned(),
         });
+        let typed_diff = AcpRoute::ReviewDocument(ReviewDocumentRoute::TypedDiff {
+            document_id: "document-1".to_owned(),
+            draft_id: "draft-1".to_owned(),
+        });
 
-        for route in [&document, &draft] {
+        for route in [&document, &draft, &typed_diff] {
             assert!(route.permits(&Method::GET));
             assert!(!route.permits(&Method::POST));
             assert!(!route.permits(&Method::PUT));
@@ -750,6 +754,23 @@ mod tests {
             })
             .upstream_segments(),
             vec!["api", "review", "v1", "documents", "document-1", "drafts", "draft-1",],
+        );
+        assert_eq!(
+            AcpRoute::ReviewDocument(ReviewDocumentRoute::TypedDiff {
+                document_id: "document-1".to_owned(),
+                draft_id: "draft-1".to_owned(),
+            })
+            .upstream_segments(),
+            vec![
+                "api",
+                "review",
+                "v1",
+                "documents",
+                "document-1",
+                "drafts",
+                "draft-1",
+                "typed-diff",
+            ],
         );
     }
 }

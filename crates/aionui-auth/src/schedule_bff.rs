@@ -1425,6 +1425,28 @@ mod tests {
     }
 
     #[test]
+    fn typed_diff_allowlist_and_upstream_path_are_exact() {
+        assert_eq!(
+            REVIEW_TYPED_DIFF_ROUTE,
+            "/api/review/v1/documents/{document_id}/drafts/{draft_id}/typed-diff"
+        );
+
+        let config = ScheduleBffConfig::new_with_identity_contract(
+            "https://acp.example/internal",
+            Duration::from_secs(1),
+            &rsm_auth_config(true, Some("agent-control-plane")),
+            Some("agent-control-plane"),
+        )
+        .unwrap();
+        let route = review_typed_diff_route("document-1".to_owned(), "draft_1".to_owned()).unwrap();
+
+        assert_eq!(
+            config.upstream_url(&route, None).unwrap().as_str(),
+            "https://acp.example/internal/api/review/v1/documents/document-1/drafts/draft_1/typed-diff"
+        );
+    }
+
+    #[test]
     fn path_ids_accept_only_single_safe_segments() {
         for valid in ["schedule-1", "schedule_1", "01JABCDEF123"] {
             assert_eq!(
@@ -1467,6 +1489,22 @@ mod tests {
             let draft = validate_id(invalid.to_owned(), "draft_id", ErrorDomain::ReviewDocument);
             assert!(draft.is_err(), "accepted {invalid:?} as draft_id");
             assert_eq!(draft.unwrap_err().error_code(), "REVIEW_DOCUMENT_INVALID_ID");
+        }
+    }
+
+    #[test]
+    fn typed_diff_rejects_either_invalid_id_before_building_an_upstream_route() {
+        for invalid in ["", ".", "..", "other/path", "other%2Fpath", "other.invalid", "含中文"] {
+            let invalid_document = review_typed_diff_route(invalid.to_owned(), "draft-1".to_owned());
+            assert!(invalid_document.is_err(), "accepted {invalid:?} as document_id");
+            assert_eq!(
+                invalid_document.unwrap_err().error_code(),
+                "REVIEW_DOCUMENT_INVALID_ID"
+            );
+
+            let invalid_draft = review_typed_diff_route("document-1".to_owned(), invalid.to_owned());
+            assert!(invalid_draft.is_err(), "accepted {invalid:?} as draft_id");
+            assert_eq!(invalid_draft.unwrap_err().error_code(), "REVIEW_DOCUMENT_INVALID_ID");
         }
     }
 }
