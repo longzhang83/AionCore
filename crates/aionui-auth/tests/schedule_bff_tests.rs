@@ -1473,6 +1473,126 @@ async fn review_document_read_bff_forwards_document_and_draft_detail_with_no_que
 }
 
 #[tokio::test]
+async fn review_document_typed_diff_bff_forwards_the_exact_authenticated_read() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/review/v1/documents/document-1/drafts/draft-1/typed-diff"))
+        .and(wiremock_header("authorization", "Bearer upstream-access"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "document_id": "document-1",
+            "draft_id": "draft-1",
+            "typed_diff": [{"kind": "replace", "path": "body/0"}]
+        })))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+
+    let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+    let local_token = bind_upstream_token(&ctx, "upstream-access", 3600);
+    let response = app
+        .oneshot(request(
+            Method::GET,
+            "/api/review/v1/documents/document-1/drafts/draft-1/typed-diff",
+            &local_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(response).await,
+        json!({
+            "success": true,
+            "data": {
+                "document_id": "document-1",
+                "draft_id": "draft-1",
+                "typed_diff": [{"kind": "replace", "path": "body/0"}]
+            }
+        })
+    );
+
+    let received = upstream.received_requests().await.unwrap();
+    assert_eq!(received.len(), 1);
+    assert_eq!(
+        received[0].url.path(),
+        "/api/review/v1/documents/document-1/drafts/draft-1/typed-diff"
+    );
+    assert!(received[0].url.query().is_none());
+}
+
+#[tokio::test]
+async fn review_document_typed_diff_bff_rejects_queries_writes_and_unsafe_ids_without_upstream_io() {
+    let upstream = MockServer::start().await;
+    let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+    let local_token = bind_upstream_token(&ctx, "upstream-access", 3600);
+
+    let query = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/review/v1/documents/document-1/drafts/draft-1/typed-diff?format=json",
+            &local_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(query.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(query).await["code"], "REVIEW_DOCUMENT_BAD_REQUEST");
+
+    let write = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/review/v1/documents/document-1/drafts/draft-1/typed-diff",
+            &local_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(write.status(), StatusCode::METHOD_NOT_ALLOWED);
+
+    for uri in [
+        "/api/review/v1/documents/document.invalid/drafts/draft-1/typed-diff",
+        "/api/review/v1/documents/document-1/drafts/draft.invalid/typed-diff",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(request(Method::GET, uri, &local_token, Body::empty()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "uri: {uri}");
+        assert_eq!(
+            json_body(response).await["code"],
+            "REVIEW_DOCUMENT_INVALID_ID",
+            "uri: {uri}"
+        );
+    }
+
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn review_document_typed_diff_bff_rejects_unauthenticated_requests_without_upstream_io() {
+    let upstream = MockServer::start().await;
+    let (app, _) = test_app(&upstream, Duration::from_secs(2)).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/review/v1/documents/document-1/drafts/draft-1/typed-diff")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(json_body(response).await["code"], "UNAUTHORIZED");
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn review_document_read_bff_rejects_unfrozen_query_shapes_and_path_segments_without_upstream_io() {
     let upstream = MockServer::start().await;
 
