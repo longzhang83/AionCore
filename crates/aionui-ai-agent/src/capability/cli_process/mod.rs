@@ -127,10 +127,17 @@ impl CliAgentProcess {
 
         // Refresh the snapshot while the leader is still alive: descendants
         // spawned during the grace window are only visible through the parent
-        // links that die with the leader. Once it exited, the first snapshot
-        // is the best record that remains.
+        // links that die with the leader. UNION with the first snapshot rather
+        // than replacing it — the leader can exit in the gap between the grace
+        // timeout and the exit monitor's watch update, in which case the fresh
+        // snapshot reads an already-reparented (empty) tree and the first
+        // snapshot is the only record of the escapees. Reap is ESRCH-safe and
+        // identity-gated, so union members already dead cost nothing.
         if self.exit_rx.borrow().is_none() {
-            escaped = aionui_process::snapshot_escaped_descendants(self.pid);
+            let mut fresh = aionui_process::snapshot_escaped_descendants(self.pid);
+            escaped.append(&mut fresh);
+            escaped.sort_unstable();
+            escaped.dedup();
         }
 
         // Always sweep the process group. `force_kill` treats ESRCH as
