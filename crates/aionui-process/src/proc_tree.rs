@@ -162,6 +162,12 @@ fn macos_parent_table() -> Vec<(u32, u32)> {
 /// Not filtered to processes outside `group`: one still inside it is already
 /// dead by sweep time, and `SIGKILL` to a gone pid is a no-op (`ESRCH` is
 /// success). Filtering would need a second per-pid accessor to buy nothing.
+///
+/// Known microsecond race (shared with `containment.rs`/`process.rs`
+/// callers): a pid that dies AND is recycled between the parent-table read
+/// and the start-time read records the new process's start-time, mis-anchoring
+/// the identity gate. The window is too small to close cheaply and has never
+/// been observed; documented here so nobody "fixes" it by weakening the gate.
 pub(crate) fn escaped_descendants(pid: u32, _group: Option<u32>) -> Vec<(u32, Option<u64>)> {
     let table = parent_table();
     collect_descendants(pid, &table)
@@ -208,6 +214,29 @@ pub(crate) fn reap(snapshot: &[(u32, Option<u64>)]) -> usize {
         }
     }
     still_alive
+}
+
+/// Snapshot the descendant tree of `pid` for a later sweep, with each pid's
+/// start-time recorded for the identity gate.
+///
+/// Public wrapper for callers outside this crate that own their own signal
+/// path (e.g. `aionui-ai-agent`'s `CliAgentProcess`). MUST be called before
+/// any signal is sent to the tree: the parent link is the only thing tying an
+/// escaped descendant to `pid`, and the kernel severs it by reparenting
+/// orphans to init the instant their parent dies.
+pub fn snapshot_escaped_descendants(pid: u32) -> Vec<(u32, Option<u64>)> {
+    escaped_descendants(pid, None)
+}
+
+/// `SIGKILL` every member of a pre-kill snapshot that is still verifiably the
+/// same process (start-time identity gate); returns how many remain alive.
+///
+/// Public wrapper around the crate's standing "never kill on doubt" reap: a
+/// pid recycled between snapshot and sweep is left alone. Signal the tree
+/// through your normal path first; this is the sweep for descendants that
+/// escaped the process group (`setsid`/`setpgid`) and survived it.
+pub fn reap_escaped_descendants(snapshot: &[(u32, Option<u64>)]) -> usize {
+    reap(snapshot)
 }
 
 #[cfg(test)]
@@ -281,5 +310,51 @@ mod tests {
         }
         let me = std::process::id();
         assert!(table.iter().any(|(pid, _)| *pid == me), "own pid missing from table");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reap_spares_a_live_process_whose_recorded_start_time_differs() {
+        // A pid recycled between snapshot and sweep lands on an unrelated
+        // process; the identity gate exists so that process is NEVER killed.
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("sleep 60")
+            .spawn()
+            .expect("spawn sleeper");
+        let pid = child.id();
+        let real = crate::read_process_start_time(pid).expect("own child's start-time observable");
+        assert_ne!(real, 0, "0 is the non-identity sentinel, not a discriminator");
+
+        let still_alive = reap_escaped_descendants(&[(pid, Some(real + 1))]);
+        assert_eq!(still_alive, 1, "mismatched start-time must spare the process");
+        // SAFETY: signal 0 performs error checking only, on a pid this test owns.
+        assert!(
+            unsafe { libc::kill(pid as i32, 0) } == 0,
+            "spared process must still be alive"
+        );
+
+        child.kill().ok();
+        child.wait().ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reap_kills_a_process_whose_recorded_start_time_matches() {
+        // Positive control for the guard above: without it, a reap that killed
+        // nothing would still pass.
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("sleep 60")
+            .spawn()
+            .expect("spawn sleeper");
+        let pid = child.id();
+        let real = crate::read_process_start_time(pid).expect("own child's start-time observable");
+
+        let still_alive = reap_escaped_descendants(&[(pid, Some(real))]);
+        child.wait().ok(); // reap the zombie so kill(pid, 0) cannot read it as alive
+        assert_eq!(still_alive, 0, "identity-matched process must be killed");
+        // SAFETY: signal 0 performs error checking only, on a pid this test owns.
+        assert!(unsafe { libc::kill(pid as i32, 0) } != 0, "killed process must be gone");
     }
 }

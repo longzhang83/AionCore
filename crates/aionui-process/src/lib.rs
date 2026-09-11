@@ -32,6 +32,7 @@ pub use instance_lock::{InstanceLock, LockHeld, acquire_instance_lock};
 pub use proc_control::{
     Liveness, ObservedLiveness, classify_liveness, force_kill, probe, process_group_alive, read_process_start_time,
 };
+pub use proc_tree::{reap_escaped_descendants, snapshot_escaped_descendants};
 pub use process::{BoxedStdin, BoxedStdout, ManagedProcess, TerminalExit};
 pub use registry_store::{
     FileRegistryStore, LOCK_FILE, ProcessIdentity, REGISTRY_FILE, RegisteredProcess, RegistryStore, SUBDIR,

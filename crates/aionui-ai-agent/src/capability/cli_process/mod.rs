@@ -102,6 +102,14 @@ impl CliAgentProcess {
     ///    a grandchild (`openclaw-acp`) that survives leader exit, and only
     ///    a group-wide kill reaps it
     pub async fn kill(&self, grace_period: Duration) -> Result<(), AgentError> {
+        // Snapshot descendants BEFORE any signal: a grandchild that left the
+        // process group (setsid/setpgid — measured with bun-shim → codex-acp →
+        // MCP children) survives the group SIGKILL below, and the parent link
+        // that still ties it to this tree is severed the instant the leader
+        // dies. The sweep after the group kill only knows what to reap through
+        // this snapshot.
+        let mut escaped = aionui_process::snapshot_escaped_descendants(self.pid);
+
         // Close stdin first to signal the child
         self.close_stdin().await;
 
@@ -117,6 +125,14 @@ impl CliAgentProcess {
         })
         .await;
 
+        // Refresh the snapshot while the leader is still alive: descendants
+        // spawned during the grace window are only visible through the parent
+        // links that die with the leader. Once it exited, the first snapshot
+        // is the best record that remains.
+        if self.exit_rx.borrow().is_none() {
+            escaped = aionui_process::snapshot_escaped_descendants(self.pid);
+        }
+
         // Always sweep the process group. `force_kill` treats ESRCH as
         // success, so this is idempotent when the leader (and group) are
         // already gone.
@@ -125,7 +141,21 @@ impl CliAgentProcess {
         } else {
             warn!(pid = self.pid, "Grace period expired, sending SIGKILL");
         }
-        force_kill(self.pid, self.process_group_id)?;
+        // A failed group kill must not skip the descendant sweep — it is then
+        // the only thing still able to reap escapees.
+        let kill_result = force_kill(self.pid, self.process_group_id);
+
+        // Sweep group-escaped descendants captured before the kill. Identity-
+        // gated inside aionui-process: a pid recycled onto something unrelated
+        // in between is spared, never killed on doubt.
+        let leaked = aionui_process::reap_escaped_descendants(&escaped);
+        if leaked > 0 {
+            warn!(
+                pid = self.pid,
+                leaked, "escaped descendants survived the teardown sweep"
+            );
+        }
+        kill_result?;
 
         // Wait for the exit monitor to observe process termination so callers
         // do not race a still-live leader after force-kill returns. Skip the
@@ -157,8 +187,15 @@ impl CliAgentProcess {
     /// to leak as an orphan.
     #[allow(dead_code)] // Complete CliProcess lifecycle API
     pub fn force_kill_tree(&self) {
+        // Same snapshot-first rule as kill(): escaped descendants are only
+        // findable through the parent link, which dies with the leader.
+        let escaped = aionui_process::snapshot_escaped_descendants(self.pid);
         if let Err(e) = force_kill(self.pid, self.process_group_id) {
             warn!(pid = self.pid, error = %e, "force_kill_tree failed");
+        }
+        let leaked = aionui_process::reap_escaped_descendants(&escaped);
+        if leaked > 0 {
+            warn!(pid = self.pid, leaked, "escaped descendants survived force_kill_tree");
         }
     }
 
@@ -570,5 +607,143 @@ pub(super) mod tests {
             .await
             .expect("Should return immediately");
         assert!(status2.is_some());
+    }
+
+    #[cfg(unix)]
+    fn escaped_detach_command() -> String {
+        fn which_path(bin: &str) -> Option<std::path::PathBuf> {
+            std::env::var_os("PATH").and_then(|paths| {
+                std::env::split_paths(&paths)
+                    .map(|dir| dir.join(bin))
+                    .find(|candidate| candidate.is_file())
+            })
+        }
+        // Absolute paths: the runtime spawns with a cleaned environment, so a
+        // helper resolved from PATH inside the child may not be found and the
+        // fixture would silently stop escaping (learned from aionui-process's
+        // reap_escaped_descendants fixtures).
+        match (which_path("setsid"), which_path("perl")) {
+            (Some(p), _) => p.display().to_string(),
+            (None, Some(p)) => format!("{} -e 'use POSIX; POSIX::setsid(); exec @ARGV'", p.display()),
+            _ => panic!("need setsid(1) or perl to build a process that leaves its group"),
+        }
+    }
+
+    #[cfg(unix)]
+    fn pid_alive(pid: u32) -> bool {
+        // SAFETY: signal 0 performs error checking only; it never delivers a signal.
+        let result = unsafe { libc::kill(pid as i32, 0) };
+        if result == 0 {
+            return true;
+        }
+        !matches!(std::io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH))
+    }
+
+    #[cfg(unix)]
+    fn pid_group(pid: u32) -> i32 {
+        // SAFETY: getpgid on a pid this test spawned; -1 on failure is handled by callers.
+        unsafe { libc::getpgid(pid as i32) }
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_group_split(parent: u32, child: u32) -> bool {
+        // The detach happens INSIDE the child (setsid after fork), so the pid is
+        // published before the new group exists; comparing immediately races.
+        for _ in 0..200 {
+            if pid_group(child) > 0 && pid_group(parent) != pid_group(child) {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        false
+    }
+
+    #[cfg(unix)]
+    async fn read_marker_pid(path: &std::path::Path) -> u32 {
+        for _ in 0..200 {
+            if let Ok(s) = std::fs::read_to_string(path)
+                && let Ok(pid) = s.trim().parse::<u32>()
+            {
+                return pid;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("escaped grandchild never reported its pid");
+    }
+
+    #[cfg(unix)]
+    fn escaped_tree_config(marker_path: &str) -> CommandSpec {
+        let detach = escaped_detach_command();
+        CommandSpec {
+            command: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                format!("{detach} sleep 600 & echo $! > \"$1\"; sleep 600"),
+                "escaped-tree-fixture".into(),
+                marker_path.to_owned(),
+            ],
+            env: vec![],
+            cwd: None,
+        }
+    }
+
+    #[cfg(unix)]
+    async fn assert_reaped_or_cleaned(pid: u32, context: &str) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while pid_alive(pid) && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let leaked = pid_alive(pid);
+        if leaked {
+            // Belt and braces: never leave the fixture behind if the assert fails.
+            // SAFETY: killing a pid this test itself created.
+            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        }
+        assert!(
+            !leaked,
+            "{context}: setsid-escaped grandchild pid={pid} survived the teardown"
+        );
+    }
+
+    /// Live-measured leak (RSM P10-F1): the bun-shim → codex-acp → MCP-child
+    /// tree, where each grandchild setsid's into its own session and survives
+    /// the group SIGKILL aimed at the leader's group. `kill` must sweep them
+    /// through a parent-link snapshot taken BEFORE any signal.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn kill_reaps_a_setsid_escaped_grandchild_tree() {
+        let marker = tempfile::NamedTempFile::new().unwrap();
+        let proc = spawn_sdk_test_process(escaped_tree_config(&marker.path().to_string_lossy())).await;
+
+        let escaped = read_marker_pid(marker.path()).await;
+        assert!(pid_alive(escaped), "tree did not start");
+        assert!(
+            wait_for_group_split(proc.pid(), escaped).await,
+            "fixture did not escape the group; the test would prove nothing"
+        );
+
+        proc.kill(Duration::from_millis(100)).await.unwrap();
+
+        assert_reaped_or_cleaned(escaped, "CliAgentProcess::kill").await;
+    }
+
+    /// Same leak shape through the probe path: `force_kill_tree` must sweep
+    /// escaped descendants too, not only signal the leader's group.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn force_kill_tree_reaps_a_setsid_escaped_grandchild_tree() {
+        let marker = tempfile::NamedTempFile::new().unwrap();
+        let proc = spawn_sdk_test_process(escaped_tree_config(&marker.path().to_string_lossy())).await;
+
+        let escaped = read_marker_pid(marker.path()).await;
+        assert!(pid_alive(escaped), "tree did not start");
+        assert!(
+            wait_for_group_split(proc.pid(), escaped).await,
+            "fixture did not escape the group; the test would prove nothing"
+        );
+
+        proc.force_kill_tree();
+
+        assert_reaped_or_cleaned(escaped, "CliAgentProcess::force_kill_tree").await;
     }
 }
