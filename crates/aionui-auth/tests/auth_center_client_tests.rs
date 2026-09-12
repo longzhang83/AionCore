@@ -329,6 +329,21 @@ async fn oidc_callback_sends_dpop_token_endpoint_proof() {
         })))
         .mount(&mock_server)
         .await;
+    // Device enrollment fires right after the successful token exchange, so
+    // it must be mocked or the callback would fail closed before reaching
+    // the (still failing) id_token validation this test pins down.
+    Mock::given(method("POST"))
+        .and(path("/api/auth-center/v1/devices"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "device_id": "00000000-0000-4000-8000-000000000000",
+            "status": "active",
+            "binding_version": 1,
+            "authority_epoch": 1,
+            "registered_at": "2026-09-12T00:00:00Z",
+            "updated_at": "2026-09-12T00:00:00Z"
+        })))
+        .mount(&mock_server)
+        .await;
 
     let config = oidc_config(mock_server.uri());
     let client = AuthCenterProtocolClient::new(reqwest::Client::new());

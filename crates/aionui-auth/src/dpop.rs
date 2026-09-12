@@ -302,6 +302,12 @@ struct ProofClaims<'a> {
     /// profile must NOT carry it (verified: oauthdpop/proof.go:177-180).
     #[serde(skip_serializing_if = "Option::is_none")]
     ath: Option<&'a str>,
+    /// DPoP nonce, carried only when the receiver demanded one (the Auth
+    /// Center's `use_dpop_nonce` retry flow). The verifier validates it only
+    /// against its expected nonce (verified: oauthdpop/proof.go:192-194), so
+    /// proofs without a nonce stay nonce-free.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nonce: Option<&'a str>,
 }
 
 /// Mint a DPoP proof (compact `typ=dpop+jwt` JWT) signed with `handle`.
@@ -314,6 +320,8 @@ struct ProofClaims<'a> {
 ///   Auth Center replay ledger, AionCore stores nothing.
 /// * `ath` — `Some(base64url(SHA-256(access_token)))` for resource requests,
 ///   `None` for the token-endpoint request.
+/// * `nonce` — `Some(nonce)` only when the receiver demanded one (e.g. the
+///   device-registration endpoint's `use_dpop_nonce` retry); `None` otherwise.
 pub fn build_dpop_proof(
     handle: &DpopSigningHandle,
     htm: &str,
@@ -321,6 +329,7 @@ pub fn build_dpop_proof(
     iat: i64,
     jti: &str,
     ath: Option<&str>,
+    nonce: Option<&str>,
 ) -> Result<String, DpopError> {
     if htm.is_empty() || htu.is_empty() || jti.is_empty() || htm.contains(char::is_whitespace) {
         return Err(DpopError::InvalidProofInput);
@@ -336,6 +345,7 @@ pub fn build_dpop_proof(
         htu,
         iat,
         ath,
+        nonce,
     };
     let encode = |value: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.as_bytes());
     let header_segment = encode(&serde_json::to_string(&header).map_err(|_| DpopError::ProofEncoding)?);
@@ -444,6 +454,7 @@ mod tests {
             1_700_000_000,
             &generate_dpop_jti(),
             None,
+            None,
         )
         .unwrap();
 
@@ -497,6 +508,7 @@ mod tests {
             1_700_000_001,
             &generate_dpop_jti(),
             Some(&ath),
+            None,
         )
         .unwrap();
 
@@ -542,17 +554,74 @@ mod tests {
     fn invalid_proof_input_is_rejected() {
         let handle = InMemoryDpopKeyStore::new().generate().unwrap();
         assert!(matches!(
-            build_dpop_proof(&handle, "", "https://a.example/x", 1, "jti-jti-jti-jti", None),
+            build_dpop_proof(&handle, "", "https://a.example/x", 1, "jti-jti-jti-jti", None, None),
             Err(DpopError::InvalidProofInput)
         ));
         assert!(matches!(
-            build_dpop_proof(&handle, "GET", "", 1, "jti-jti-jti-jti", None),
+            build_dpop_proof(&handle, "GET", "", 1, "jti-jti-jti-jti", None, None),
             Err(DpopError::InvalidProofInput)
         ));
         assert!(matches!(
-            build_dpop_proof(&handle, "GET", "https://a.example/x", 1, "", None),
+            build_dpop_proof(&handle, "GET", "https://a.example/x", 1, "", None, None),
             Err(DpopError::InvalidProofInput)
         ));
+    }
+
+    #[test]
+    fn nonce_appears_in_claims_only_when_provided() {
+        let handle = InMemoryDpopKeyStore::new().generate().unwrap();
+        let plain = build_dpop_proof(
+            &handle,
+            "POST",
+            "https://auth.example/x",
+            1,
+            "jti-jti-jti-jti",
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(
+            decoded_segment(&plain, 1).get("nonce").is_none(),
+            "proof without nonce must not carry the claim"
+        );
+
+        let nonce = "nonce-value-0123456789abcdef";
+        let with_nonce = build_dpop_proof(
+            &handle,
+            "POST",
+            "https://auth.example/x",
+            1,
+            "jti-jti-jti-jti",
+            None,
+            Some(nonce),
+        )
+        .unwrap();
+        let claims = decoded_segment(&with_nonce, 1);
+        assert_eq!(claims["nonce"], nonce);
+        // Signature must still verify against the header JWK.
+        verify_proof_signature(&with_nonce, &handle);
+    }
+
+    /// Self-verify an ES256 proof signature against the JWK embedded in its
+    /// own header.
+    fn verify_proof_signature(proof: &str, handle: &DpopSigningHandle) {
+        let segments: Vec<&str> = proof.split('.').collect();
+        let jwk = handle.public_jwk();
+        let x = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&jwk.x).unwrap();
+        let y = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&jwk.y).unwrap();
+        let mut sec1 = vec![0x04];
+        sec1.extend_from_slice(&x);
+        sec1.extend_from_slice(&y);
+        let verifying_key = VerifyingKey::from_sec1_bytes(&sec1).unwrap();
+        let signature = signature_from_r_s(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(segments[2])
+                .unwrap(),
+        );
+        let signing_input = format!("{}.{}", segments[0], segments[1]);
+        verifying_key
+            .verify(signing_input.as_bytes(), &signature)
+            .expect("proof signature must verify with the header JWK");
     }
 
     #[test]

@@ -51,8 +51,10 @@ use std::fmt;
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+use crate::device_registration::DeviceRegistrationReceipt;
 
 /// Server-side token bundle persisted for one local user/session after a
 /// successful Auth Center OIDC exchange.
@@ -60,7 +62,7 @@ use sha2::{Digest, Sha256};
 /// The bundle is bound to a single local JWT (identified by its
 /// fingerprint) via the vault and removed on logout. It is never returned
 /// to the browser and never serialised into HTTP responses.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AuthCenterUserTokenBundle {
     /// Access token (always present — required by OIDC).
     pub access_token: AuthCenterTokenSecret,
@@ -76,6 +78,12 @@ pub struct AuthCenterUserTokenBundle {
     pub expires_at_ms: Option<i64>,
     /// Local wall-clock timestamp (ms since epoch) when the bundle was stored.
     pub issued_at_ms: i64,
+    /// Device registration receipt from the Auth Center for this login's
+    /// DPoP session key. `None` for bundles created before device enrollment
+    /// existed; `#[serde(default)]` keeps previously persisted bundles
+    /// (without this field) deserialisable.
+    #[serde(default)]
+    pub device_registration: Option<DeviceRegistrationReceipt>,
 }
 
 impl fmt::Debug for AuthCenterUserTokenBundle {
@@ -88,6 +96,7 @@ impl fmt::Debug for AuthCenterUserTokenBundle {
             .field("scope", &self.scope)
             .field("expires_at_ms", &self.expires_at_ms)
             .field("issued_at_ms", &self.issued_at_ms)
+            .field("device_registration", &self.device_registration)
             .finish()
     }
 }
@@ -99,7 +108,7 @@ impl fmt::Debug for AuthCenterUserTokenBundle {
 /// Construct with [`AuthCenterTokenSecret::new`]; recover the raw string
 /// with [`AuthCenterTokenSecret::expose`] only at the actual call site to
 /// the Auth Center.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AuthCenterTokenSecret(String);
 
 impl AuthCenterTokenSecret {
@@ -400,6 +409,7 @@ pub fn bundle_from_token_response(response: AuthCenterTokenResponse, issued_at_m
         scope: response.scope,
         expires_at_ms: compute_expires_at_ms(issued_at_ms, response.expires_in),
         issued_at_ms,
+        device_registration: None,
     }
 }
 
@@ -492,6 +502,41 @@ mod tests {
         assert_eq!(bundle.scope.as_deref(), Some("openid profile email"));
         assert_eq!(bundle.issued_at_ms, 1_000_000);
         assert_eq!(bundle.expires_at_ms, Some(1_000_000 + 3_600 * 1000));
+    }
+
+    #[test]
+    fn old_bundle_without_device_fields_deserializes_with_default_receipt() {
+        // A bundle persisted before device enrollment existed must keep
+        // deserialising: the device receipt defaults to None.
+        let json = r#"{
+            "access_token": "AT",
+            "refresh_token": "RT",
+            "id_token": "IT",
+            "token_type": "Bearer",
+            "scope": "openid",
+            "expires_at_ms": 1700003600000,
+            "issued_at_ms": 1700000000000
+        }"#;
+        let bundle: AuthCenterUserTokenBundle = serde_json::from_str(json).unwrap();
+        assert_eq!(bundle.access_token.expose(), "AT");
+        assert!(bundle.device_registration.is_none());
+    }
+
+    #[test]
+    fn bundle_with_device_receipt_round_trips_through_json() {
+        let mut bundle = bundle_from_token_response(sample_response(), 1_000_000);
+        bundle.device_registration = Some(crate::device_registration::DeviceRegistrationReceipt {
+            device_id: "device-uuid-1".into(),
+            status: "active".into(),
+            binding_version: 1,
+            authority_epoch: 1,
+            registered_at: "2026-09-12T00:00:00.123456789Z".into(),
+            updated_at: "2026-09-12T00:00:00.123456789Z".into(),
+        });
+        let serialized = serde_json::to_string(&bundle).unwrap();
+        let parsed: AuthCenterUserTokenBundle = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(parsed.device_registration, bundle.device_registration);
+        assert_eq!(parsed.access_token.expose(), "ACCESS-XYZ");
     }
 
     #[test]
