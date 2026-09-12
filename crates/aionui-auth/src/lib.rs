@@ -18,6 +18,7 @@ mod routes;
 mod schedule_bff;
 mod security;
 mod service;
+mod token_refresh;
 mod validation;
 
 // Error type
