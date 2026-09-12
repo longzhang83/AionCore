@@ -25,7 +25,7 @@ use aionui_api_types::ApiResponse;
 use aionui_common::ApiError;
 
 use crate::auth_center_client::RsmAuthConfig;
-use crate::auth_center_tokens::AuthCenterTokenVaultKey;
+use crate::auth_center_tokens::{AuthCenterTokenVaultKey, AuthCenterUserTokenBundle};
 use crate::dpop::{
     DpopKeySelector, DpopSigningHandle, IDpopKeyStore, InMemoryDpopKeyStore, dpop_ath, dpop_resource_htu,
     generate_dpop_jti,
@@ -63,6 +63,10 @@ pub struct ScheduleBffConfig {
     /// proof that accompanies every ACP-bound access token. Carried here so
     /// both the OIDC callback and the outbound proxy share one store.
     dpop_key_store: Arc<dyn IDpopKeyStore>,
+    /// Per-session single-flight slots for the refresh grant. Carried here
+    /// (rather than the router state) because this config is the shared,
+    /// clone-cheap handle every proxy request already reaches for.
+    refresh_single_flight: Arc<crate::token_refresh::RefreshSingleFlight>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -89,6 +93,7 @@ impl ScheduleBffConfig {
             base_url: None,
             timeout: DEFAULT_TIMEOUT,
             dpop_key_store: Arc::new(InMemoryDpopKeyStore::new()),
+            refresh_single_flight: Arc::new(crate::token_refresh::RefreshSingleFlight::default()),
         }
     }
 
@@ -115,6 +120,7 @@ impl ScheduleBffConfig {
             base_url: Some(base_url),
             timeout,
             dpop_key_store: Arc::new(InMemoryDpopKeyStore::new()),
+            refresh_single_flight: Arc::new(crate::token_refresh::RefreshSingleFlight::default()),
         })
     }
 
@@ -122,6 +128,13 @@ impl ScheduleBffConfig {
     /// key binding) and the outbound proxy (resource-side proofs).
     pub fn dpop_key_store(&self) -> &Arc<dyn IDpopKeyStore> {
         &self.dpop_key_store
+    }
+
+    /// The refresh-grant single-flight slot for one session's vault key. At
+    /// most one refresh is ever in flight per session; concurrent callers
+    /// queue on this slot and re-read the vault after acquiring it.
+    pub(crate) fn refresh_slot(&self, vault_key: &AuthCenterTokenVaultKey) -> Arc<tokio::sync::Mutex<()>> {
+        self.refresh_single_flight.slot(vault_key)
     }
 
     /// Replace the DPoP key store (used by tests and by deployments that
@@ -875,30 +888,22 @@ async fn proxy_acp_inner(
     }
 
     let vault_key = AuthCenterTokenVaultKey::from_token(&local_token, &current_user.id);
-    let bundle = state
+    let mut bundle = state
         .auth_center_token_vault
         .get(&vault_key)
         .ok_or_else(|| auth_center_session_required(error_domain))?;
-    if bundle
-        .expires_at_ms
-        .is_some_and(|expires_at| expires_at <= chrono::Utc::now().timestamp_millis())
-    {
-        state.auth_center_token_vault.clear(&vault_key);
-        // The bundle is gone; its DPoP key must follow. Failure to clear is
-        // logged but not fatal — the key alone proves nothing without the
-        // vault bundle, which is already removed.
-        if let Err(error) = state.schedule_bff_config.dpop_key_store().clear(&DpopKeySelector::new(
-            current_user.id.clone(),
-            vault_key.token_fingerprint.clone(),
-        )) {
-            tracing::warn!(
-                domain = error_domain.prefix(),
-                holder = %current_user.id,
-                error = %error,
-                "failed to clear expired session DPoP key"
-            );
+    if crate::token_refresh::bundle_needs_refresh(&bundle) {
+        if bundle.refresh_token.is_some() {
+            // The bundle is expiring and can be rotated: run the DPoP-bound
+            // refresh grant (single-flight per session) and continue this
+            // upstream call with the fresh bundle.
+            bundle = refresh_session_bundle(&state, &current_user.id, &vault_key, error_domain).await?;
+        } else if crate::token_refresh::bundle_is_expired(&bundle) {
+            // Without a refresh token the session cannot be rotated — keep
+            // the original eviction semantics for strictly expired bundles.
+            evict_session(&state, &current_user.id, &vault_key, error_domain);
+            return Err(auth_center_session_required(error_domain));
         }
-        return Err(auth_center_session_required(error_domain));
     }
 
     let upstream_url = state.schedule_bff_config.upstream_url(&route, query.as_deref())?;
@@ -995,6 +1000,105 @@ async fn proxy_acp_inner(
 enum UpstreamReadError {
     Request(reqwest::Error),
     TooLarge,
+}
+
+/// Evict one Auth Center session: remove the vault bundle, then its DPoP key.
+/// A key-store failure is logged but not fatal — the key alone proves nothing
+/// without the vault bundle, which is already removed.
+fn evict_session(
+    state: &AuthRouterState,
+    holder: &str,
+    vault_key: &AuthCenterTokenVaultKey,
+    error_domain: ErrorDomain,
+) {
+    state.auth_center_token_vault.clear(vault_key);
+    if let Err(error) = state.schedule_bff_config.dpop_key_store().clear(&DpopKeySelector::new(
+        holder.to_owned(),
+        vault_key.token_fingerprint.clone(),
+    )) {
+        tracing::warn!(
+            domain = error_domain.prefix(),
+            holder = %holder,
+            error = %error,
+            "failed to clear expired session DPoP key"
+        );
+    }
+}
+
+/// Rotate a session bundle that is at (or within `REFRESH_WINDOW_MS` of)
+/// expiry through the Auth Center refresh grant, and store the fresh bundle.
+///
+/// Single-flight per vault key: concurrent callers queue on a keyed mutex and
+/// re-read the vault after acquiring it, so at most one refresh grant is ever
+/// in flight for one session and the loser reuses the winner's fresh bundle
+/// instead of presenting an already-consumed refresh token (which would
+/// revoke the whole refresh family server-side). Exactly one grant attempt is
+/// made per caller: after the request is sent, any failure is terminal — the
+/// grant may have been consumed even when no usable response arrived, and a
+/// retry risks the family revocation above.
+///
+/// Every failure keeps the eviction semantics: clear the vault bundle and the
+/// session's DPoP key, then require a new session.
+async fn refresh_session_bundle(
+    state: &AuthRouterState,
+    holder: &str,
+    vault_key: &AuthCenterTokenVaultKey,
+    error_domain: ErrorDomain,
+) -> Result<AuthCenterUserTokenBundle, ApiError> {
+    let slot = state.schedule_bff_config.refresh_slot(vault_key);
+    let _slot_guard = slot.lock().await;
+
+    // Re-check under the slot: a concurrent request may already have rotated
+    // the bundle while this caller was waiting.
+    let Some(current) = state.auth_center_token_vault.get(vault_key) else {
+        // The bundle vanished while waiting (logout or admin revocation).
+        return Err(auth_center_session_required(error_domain));
+    };
+    if !crate::token_refresh::bundle_needs_refresh(&current) {
+        return Ok(current);
+    }
+    let Some(refresh_token) = current.refresh_token.clone() else {
+        evict_session(state, holder, vault_key, error_domain);
+        return Err(auth_center_session_required(error_domain));
+    };
+
+    let issued_at_ms = aionui_common::now_ms();
+    let selector = DpopKeySelector::new(holder.to_owned(), vault_key.token_fingerprint.clone());
+    match crate::token_refresh::refresh_grant(
+        &state.http_client,
+        &state.rsm_auth_config,
+        state.schedule_bff_config.dpop_key_store(),
+        &selector,
+        refresh_token.expose(),
+        state.schedule_bff_config.timeout,
+    )
+    .await
+    {
+        Ok(response) => {
+            let refreshed = crate::token_refresh::refreshed_bundle(&current, response, issued_at_ms);
+            // Atomic bundle replacement: the vault swap is a single store;
+            // there is no intermediate state where both bundles are gone.
+            state
+                .auth_center_token_vault
+                .store(vault_key.clone(), refreshed.clone());
+            tracing::info!(
+                domain = error_domain.prefix(),
+                holder = %holder,
+                "refreshed the Auth Center access token via refresh grant"
+            );
+            Ok(refreshed)
+        }
+        Err(error) => {
+            tracing::warn!(
+                domain = error_domain.prefix(),
+                holder = %holder,
+                error = %error,
+                "Auth Center refresh grant failed; evicting the session bundle"
+            );
+            evict_session(state, holder, vault_key, error_domain);
+            Err(auth_center_session_required(error_domain))
+        }
+    }
 }
 
 /// Mint the DPoP proof protecting one outbound ACP request.
