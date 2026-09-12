@@ -11,6 +11,7 @@ mod message_persistence;
 pub mod response_middleware;
 pub mod routes;
 pub mod routes_aux;
+mod run_dir;
 mod runtime_completion;
 mod runtime_persistence;
 pub mod runtime_state;
@@ -41,3 +42,7 @@ pub use state::ConversationRouterState;
 #[cfg(test)]
 #[path = "service_test.rs"]
 mod service_test;
+
+#[cfg(test)]
+#[path = "run_dir_test.rs"]
+mod run_dir_test;

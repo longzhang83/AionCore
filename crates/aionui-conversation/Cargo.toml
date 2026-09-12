@@ -24,6 +24,11 @@ serde_json.workspace = true
 tracing.workspace = true
 async-trait.workspace = true
 thiserror.workspace = true
+# G02-b per-turn run dirs: manifest walk + digest. All three are existing
+# workspace deps (no new crates), newly referenced by this crate.
+walkdir.workspace = true
+sha2.workspace = true
+hex.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

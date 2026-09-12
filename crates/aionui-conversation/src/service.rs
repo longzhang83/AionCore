@@ -6,8 +6,8 @@ use std::sync::Arc;
 use aionui_ai_agent::session_context::{AgentSessionContext, AgentSessionKind};
 use aionui_ai_agent::types::BuildTaskOptions;
 use aionui_ai_agent::{
-    ActiveLeaseRegistry, AgentAvailabilityFeedbackPort, AgentError, AgentInstance, IWorkerTaskManager, RuntimeSendError,
-    RuntimeTokenScope, RuntimeTokenService, TEAM_RUNTIME_TOKEN_SESSION_GENERATION,
+    ActiveLeaseRegistry, AgentAvailabilityFeedbackPort, AgentError, AgentInstance, IWorkerTaskManager,
+    RuntimeSendError, RuntimeTokenScope, RuntimeTokenService, TEAM_RUNTIME_TOKEN_SESSION_GENERATION,
 };
 
 use crate::message_cursor::{decode_message_cursor, encode_message_cursor};
@@ -659,6 +659,12 @@ impl ConversationService {
         self.runtime_state.clone()
     }
 
+    /// Root under which the server provisions its own directory trees
+    /// (`conversations/` workspaces, `conversation-runs/` per-turn run dirs).
+    pub(crate) fn workspace_root(&self) -> &Path {
+        &self.workspace_root
+    }
+
     pub fn auto_workspace_to_delete_for_row(
         &self,
         row: &aionui_db::models::ConversationRow,
@@ -818,6 +824,61 @@ impl ConversationService {
         }
 
         self.complete_turn(user_id, conversation_id, turn_id).await;
+    }
+
+    /// G02-b cleanup entry: remove a per-turn run directory (and its empty
+    /// conversation bucket) once its `manifest.json` exists — see
+    /// `run_dir::remove_collected_run_dir` for the gate. A run that was never
+    /// collected is never deleted. Deliberately NOT wired to any timer yet; a
+    /// later card owns retention scheduling, mirroring how
+    /// `cleanup_empty_date_workspace_parents` sits ready beside the delete path.
+    pub async fn cleanup_collected_run_dir(&self, user_id: &str, conversation_id: &str, turn_id: &str) {
+        let row = match self.conversation_repo.get(user_id, conversation_id).await {
+            Ok(Some(row)) => row,
+            Ok(None) => {
+                debug!(
+                    conversation_id,
+                    turn_id, "Run dir cleanup skipped: conversation not found"
+                );
+                return;
+            }
+            Err(err) => {
+                warn!(
+                    conversation_id,
+                    turn_id,
+                    error = %ErrorChain(&err),
+                    "Run dir cleanup skipped: conversation lookup failed"
+                );
+                return;
+            }
+        };
+        let run_path = match crate::run_dir::run_dir_path(&self.workspace_root, &row, turn_id) {
+            Ok(path) => path,
+            Err(err) => {
+                warn!(
+                    conversation_id,
+                    turn_id,
+                    error = %err,
+                    "Run dir cleanup skipped: run path resolution failed"
+                );
+                return;
+            }
+        };
+        match crate::run_dir::remove_collected_run_dir(&run_path).await {
+            Ok(true) => info!(
+                conversation_id,
+                turn_id,
+                run_dir = %run_path.display(),
+                "Collected run dir removed"
+            ),
+            Ok(false) => debug!(conversation_id, turn_id, "Run dir not collected yet; cleanup skipped"),
+            Err(err) => warn!(
+                conversation_id,
+                turn_id,
+                error = %err,
+                "Failed to remove collected run dir"
+            ),
+        }
     }
 }
 
@@ -4365,7 +4426,7 @@ fn map_create_workspace_validation_error(error: WorkspacePathValidationError) ->
 /// `extra.backend` (e.g. `"claude"`); otherwise the `AgentType` serde
 /// name (e.g. `"aionrs"`). Falls back to the agent type's serde name
 /// when the backend field is missing or not a string.
-fn conversation_label(agent_type: &AgentType, backend: Option<&serde_json::Value>) -> String {
+pub(crate) fn conversation_label(agent_type: &AgentType, backend: Option<&serde_json::Value>) -> String {
     if *agent_type == AgentType::Acp
         && let Some(serde_json::Value::String(s)) = backend
         && !s.is_empty()
