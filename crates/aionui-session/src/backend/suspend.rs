@@ -131,8 +131,9 @@ impl SuspendController {
     }
 
     /// If Active, NOT in a live turn, AND idle past `idle_ttl_ms`, close the
-    /// process (abort reader → drop io → `kill_on_drop`) and go Dormant. Returns
-    /// whether it suspended. No-op when `idle_ttl_ms` is None.
+    /// process (abort reader → `io.terminate()` containment teardown → drop io)
+    /// and go Dormant. Returns whether it suspended. No-op when `idle_ttl_ms`
+    /// is None.
     ///
     /// `turn_active` is the load-bearing safety gate: a turn can stream/run tools
     /// for longer than the idle ttl (normal for a coding agent) without bumping
@@ -158,9 +159,14 @@ impl SuspendController {
         if slot.is_active() && now_ms - self.last_activity.load(Ordering::SeqCst) >= ttl {
             if let Slot::Active(handle) = std::mem::replace(&mut *slot, Slot::Dormant) {
                 handle.reader.abort(); // release the io clone the reader holds
-                // `handle.io` drops here → the ManagedProcess is reaped
-                // (kill_on_drop). The backend swaps in fresh stdin on the next wake,
-                // so the now-dangling old stdin is released when its process dies.
+                // Full containment teardown (group-kill + escaped-descendant
+                // sweep), same as `terminate()`: Drop's `kill_on_drop` alone
+                // only group-kills and leaks setsid-escaped grandchildren
+                // (F1 evidence: ≥80 MB per suspended acp session).
+                handle.io.terminate().await;
+                // `handle.io` drops here as a no-op (already terminal). The
+                // backend swaps in fresh stdin on the next wake, so the
+                // now-dangling old stdin is released with the process.
             }
             *self.current_abort.lock().unwrap_or_else(|e| e.into_inner()) = None;
             return true;
@@ -413,6 +419,37 @@ mod tests {
         assert_eq!(counter.load(Ordering::SeqCst), 1);
         ctrl.terminate().await; // already Dormant → no-op
         assert_eq!(counter.load(Ordering::SeqCst), 1, "second terminate is a no-op");
+    }
+
+    /// Idle suspend must run the SAME containment teardown as `terminate()`
+    /// (group-kill + escaped-descendant sweep). Drop's `kill_on_drop` alone
+    /// only group-kills and leaks setsid-escaped grandchildren (F1). This test
+    /// is RED against the drop-only close path (counter stays 0).
+    #[tokio::test]
+    async fn suspend_if_idle_runs_containment_teardown() {
+        let io = CountingTerminateIo::new();
+        let counter = io.terminate_counter();
+        let io: Arc<dyn AgentIo> = Arc::from(Box::new(io) as Box<dyn AgentIo>);
+        let reader = tokio::spawn(async {
+            std::future::pending::<()>().await;
+        });
+        let abort = reader.abort_handle();
+        let ctrl = SuspendController::active(ProcHandle::new(reader, io), Some(100), 0);
+
+        assert!(ctrl.suspend_if_idle(200, false).await, "idle controller suspends");
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            1,
+            "suspend runs the full containment teardown exactly once"
+        );
+        for _ in 0..40 {
+            if abort.is_finished() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(abort.is_finished(), "suspend aborts the live reader first");
+        assert!(!ctrl.is_active().await, "suspend leaves the slot Dormant");
     }
 
     #[tokio::test]
