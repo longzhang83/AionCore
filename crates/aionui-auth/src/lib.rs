@@ -5,6 +5,7 @@ mod auth_center_client;
 mod auth_center_tokens;
 mod cookie;
 mod csrf;
+mod device_registration;
 mod dpop;
 mod error;
 mod extract;
@@ -81,6 +82,12 @@ pub use auth_center_tokens::{
 pub use dpop::{
     DpopError, DpopKeySelector, DpopPublicJwk, DpopSigningHandle, IDpopKeyStore, InMemoryDpopKeyStore,
     build_dpop_proof, dpop_ath, dpop_resource_htu, generate_dpop_jti, jwk_thumbprint,
+};
+
+// Device registration (enrollment) client
+pub use device_registration::{
+    DEVICE_REGISTRATION_PATH, DeviceRegistrationError, DeviceRegistrationReceipt, derive_device_idempotency_key,
+    register_device,
 };
 
 // Routes

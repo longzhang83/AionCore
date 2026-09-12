@@ -1034,6 +1034,7 @@ fn outbound_dpop_proof(
         chrono::Utc::now().timestamp(),
         &generate_dpop_jti(),
         Some(&dpop_ath(access_token)),
+        None,
     )
     .map_err(|error| {
         tracing::error!(holder = %selector.holder, error = %error, "DPoP proof generation failed");

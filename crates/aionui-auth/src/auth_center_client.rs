@@ -374,12 +374,27 @@ impl AuthCenterProtocolClient {
             chrono::Utc::now().timestamp(),
             &crate::dpop::generate_dpop_jti(),
             None,
+            None,
         )
         .map_err(|error| AuthCenterError::Internal(format!("DPoP token endpoint proof failed: {error}")))?;
 
         let token = self
             .exchange_token(&discovery, &ready, code, &stored, &dpop_proof)
             .await?;
+
+        // Device enrollment: register this login's DPoP session key with the
+        // Auth Center right after the token exchange succeeds and before
+        // anything is stored. Fail-closed: a registration failure fails the
+        // whole login (with a message that clearly distinguishes it from a
+        // token-exchange failure), so an unenrolled session can never be
+        // stored in the vault or drive an upstream call.
+        let device_receipt = crate::device_registration::register_device(
+            &self.http_client,
+            ready.issuer,
+            &token.access_token,
+            &dpop_handle,
+        )
+        .await?;
         let id_claims = self
             .validate_id_token(
                 &discovery,
@@ -420,7 +435,8 @@ impl AuthCenterProtocolClient {
             is_admin: userinfo_is_admin(&userinfo, ready.app_code),
         };
 
-        let bundle = bundle_from_token_response(token, aionui_common::now_ms());
+        let mut bundle = bundle_from_token_response(token, aionui_common::now_ms());
+        bundle.device_registration = Some(device_receipt);
 
         Ok((stored.return_to, identity, bundle, dpop_handle))
     }
