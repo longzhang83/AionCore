@@ -38,6 +38,7 @@ use crate::auth_center_client::{
     timestamp_rfc3339_to_ms,
 };
 use crate::auth_center_tokens::{AuthCenterTokenVaultKey, IAuthCenterTokenVault};
+use crate::dpop::DpopKeySelector;
 use crate::error::{AuthCenterError, AuthError};
 use crate::extract::extract_token_from_headers;
 use crate::middleware::{AuthIdentityMode, AuthState, CurrentUser, auth_middleware};
@@ -613,6 +614,19 @@ async fn revoke_external_session_handler(
         hook(&response.user_id);
     }
     state.auth_center_token_vault.clear_all_for_user(&response.user_id);
+    // Keys without their vault bundle are inert (no bundle, no proof-able
+    // session), but revoke them anyway. Never block the revocation itself.
+    if let Err(error) = state
+        .schedule_bff_config
+        .dpop_key_store()
+        .clear_all_for_holder(&response.user_id)
+    {
+        tracing::warn!(
+            user_id = %response.user_id,
+            error = %error,
+            "failed to clear DPoP keys for revoked user"
+        );
+    }
     Ok(Json(ApiResponse::ok(response)))
 }
 
@@ -649,8 +663,13 @@ async fn oidc_callback_handler(
     Query(query): Query<RsmOidcCallbackQuery>,
 ) -> Result<Response, ApiError> {
     let client = AuthCenterProtocolClient::new(state.http_client.clone());
-    let (return_to, identity, token_bundle) = client
-        .exchange_callback(&state.rsm_auth_config, &state.rsm_oidc_state_store, query)
+    let (return_to, identity, token_bundle, dpop_handle) = client
+        .exchange_callback(
+            &state.rsm_auth_config,
+            &state.rsm_oidc_state_store,
+            state.schedule_bff_config.dpop_key_store().as_ref(),
+            query,
+        )
         .await?;
     let departments_json = if identity.departments.is_empty() {
         None
@@ -706,6 +725,22 @@ async fn oidc_callback_handler(
     // bundle is never echoed to the browser — only the local JWT crosses
     // the wire.
     let vault_key = AuthCenterTokenVaultKey::from_token(&token, &user.id);
+    // Bind the login's DPoP key (whose thumbprint the Auth Center recorded
+    // as `cnf.jkt` on the new access token) to this session's selector.
+    // Fail-closed: an unbound key would make every later ACP proof fail, so
+    // refuse the login instead of issuing a session that cannot prove
+    // possession.
+    state
+        .schedule_bff_config
+        .dpop_key_store()
+        .bind(
+            dpop_handle,
+            &DpopKeySelector::new(user.id.clone(), vault_key.token_fingerprint.clone()),
+        )
+        .map_err(|error| {
+            tracing::error!(user_id = %user.id, error = %error, "failed to bind login DPoP key");
+            ApiError::Internal("DPoP key binding failed".into())
+        })?;
     let prior = state.auth_center_token_vault.store(vault_key, token_bundle);
     if prior.is_some() {
         tracing::info!(
@@ -813,13 +848,23 @@ async fn logout_handler(State(state): State<AuthRouterState>, headers: HeaderMap
         // source of truth for an authenticated session. We must never log
         // the token, the fingerprint, or any other secret material.
         if let Ok(payload) = state.jwt_service.verify(&token) {
-            let cleared = state
-                .auth_center_token_vault
-                .clear(&AuthCenterTokenVaultKey::from_token(&token, &payload.user_id));
+            let vault_key = AuthCenterTokenVaultKey::from_token(&token, &payload.user_id);
+            let cleared = state.auth_center_token_vault.clear(&vault_key);
             if cleared {
                 tracing::info!(
                     user_id = %payload.user_id,
                     "cleared stored Auth Center token bundle on logout"
+                );
+            }
+            if let Err(error) = state
+                .schedule_bff_config
+                .dpop_key_store()
+                .clear(&DpopKeySelector::new(&payload.user_id, &vault_key.token_fingerprint))
+            {
+                tracing::warn!(
+                    user_id = %payload.user_id,
+                    error = %error,
+                    "failed to clear session DPoP key on logout"
                 );
             }
         }
@@ -1130,10 +1175,11 @@ async fn refresh_handler(
     // from the presented token's fingerprint to the new token's fingerprint
     // atomically so the session is not orphaned. We must never log the
     // tokens, the fingerprints, or the bundle itself.
-    let moved = state.auth_center_token_vault.move_bundle(
-        &AuthCenterTokenVaultKey::from_token(&req.token, &user.id),
-        AuthCenterTokenVaultKey::from_token(&new_token, &user.id),
-    );
+    let old_vault_key = AuthCenterTokenVaultKey::from_token(&req.token, &user.id);
+    let new_vault_key = AuthCenterTokenVaultKey::from_token(&new_token, &user.id);
+    let moved = state
+        .auth_center_token_vault
+        .move_bundle(&old_vault_key, new_vault_key.clone());
     if payload.auth_center_bound && moved.is_none() {
         state.jwt_service.blacklist_token(&req.token);
         return Err(ApiError::Unauthorized("Authentication session must be renewed".into()));
@@ -1143,6 +1189,18 @@ async fn refresh_handler(
             user_id = %user.id,
             "refresh: no Auth Center token bundle to move (new login or first refresh)"
         );
+    }
+    if payload.auth_center_bound && moved.is_some() {
+        // The DPoP key bound to the old fingerprint must follow the bundle,
+        // or every later ACP proof for this session would fail closed.
+        if let Err(error) = state.schedule_bff_config.dpop_key_store().move_key(
+            &DpopKeySelector::new(&user.id, &old_vault_key.token_fingerprint),
+            &DpopKeySelector::new(&user.id, &new_vault_key.token_fingerprint),
+        ) {
+            state.jwt_service.blacklist_token(&new_token);
+            tracing::error!(user_id = %user.id, error = %error, "failed to move DPoP key on refresh");
+            return Err(ApiError::Internal("DPoP key rotation failed".into()));
+        }
     }
     state.jwt_service.blacklist_token(&req.token);
 

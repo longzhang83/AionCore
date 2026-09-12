@@ -5,6 +5,7 @@ mod auth_center_client;
 mod auth_center_tokens;
 mod cookie;
 mod csrf;
+mod dpop;
 mod error;
 mod extract;
 mod jwt;
@@ -74,6 +75,12 @@ pub use auth_center_tokens::{
     AuthCenterTokenFingerprint, AuthCenterTokenResponse, AuthCenterTokenSecret, AuthCenterTokenVaultKey,
     AuthCenterUserTokenBundle, IAuthCenterTokenVault, InMemoryAuthCenterTokenVault, bundle_from_token_response,
     compute_expires_at_ms, fingerprint_token,
+};
+
+// Server-side DPoP (RFC 9449) holder
+pub use dpop::{
+    DpopError, DpopKeySelector, DpopPublicJwk, DpopSigningHandle, IDpopKeyStore, InMemoryDpopKeyStore,
+    build_dpop_proof, dpop_ath, dpop_resource_htu, generate_dpop_jti, jwk_thumbprint,
 };
 
 // Routes

@@ -8,6 +8,7 @@
 
 #![allow(clippy::disallowed_types)] // This module is an HTTP boundary, like routes.rs.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::to_bytes;
@@ -25,6 +26,10 @@ use aionui_common::ApiError;
 
 use crate::auth_center_client::RsmAuthConfig;
 use crate::auth_center_tokens::AuthCenterTokenVaultKey;
+use crate::dpop::{
+    DpopKeySelector, DpopSigningHandle, IDpopKeyStore, InMemoryDpopKeyStore, dpop_ath, dpop_resource_htu,
+    generate_dpop_jti,
+};
 use crate::extract::extract_token_from_headers;
 use crate::middleware::CurrentUser;
 use crate::routes::AuthRouterState;
@@ -53,6 +58,11 @@ const REVIEW_TYPED_DIFF_ROUTE: &str = "/api/review/v1/documents/{document_id}/dr
 pub struct ScheduleBffConfig {
     base_url: Option<Url>,
     timeout: Duration,
+    /// Server-side DPoP holder keys. Keys are generated per OIDC login,
+    /// bound to the session's vault selector, and used to mint the DPoP
+    /// proof that accompanies every ACP-bound access token. Carried here so
+    /// both the OIDC callback and the outbound proxy share one store.
+    dpop_key_store: Arc<dyn IDpopKeyStore>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -78,6 +88,7 @@ impl ScheduleBffConfig {
         Self {
             base_url: None,
             timeout: DEFAULT_TIMEOUT,
+            dpop_key_store: Arc::new(InMemoryDpopKeyStore::new()),
         }
     }
 
@@ -103,7 +114,21 @@ impl ScheduleBffConfig {
         Ok(Self {
             base_url: Some(base_url),
             timeout,
+            dpop_key_store: Arc::new(InMemoryDpopKeyStore::new()),
         })
+    }
+
+    /// The DPoP key store shared by the OIDC callback (token-endpoint proof,
+    /// key binding) and the outbound proxy (resource-side proofs).
+    pub fn dpop_key_store(&self) -> &Arc<dyn IDpopKeyStore> {
+        &self.dpop_key_store
+    }
+
+    /// Replace the DPoP key store (used by tests and by deployments that
+    /// need to inject a durable store implementation).
+    pub fn with_dpop_key_store(mut self, dpop_key_store: Arc<dyn IDpopKeyStore>) -> Self {
+        self.dpop_key_store = dpop_key_store;
+        self
     }
 
     /// Builds an enabled transport from programmatic configuration while
@@ -859,10 +884,35 @@ async fn proxy_acp_inner(
         .is_some_and(|expires_at| expires_at <= chrono::Utc::now().timestamp_millis())
     {
         state.auth_center_token_vault.clear(&vault_key);
+        // The bundle is gone; its DPoP key must follow. Failure to clear is
+        // logged but not fatal — the key alone proves nothing without the
+        // vault bundle, which is already removed.
+        if let Err(error) = state.schedule_bff_config.dpop_key_store().clear(&DpopKeySelector::new(
+            current_user.id.clone(),
+            vault_key.token_fingerprint.clone(),
+        )) {
+            tracing::warn!(
+                domain = error_domain.prefix(),
+                holder = %current_user.id,
+                error = %error,
+                "failed to clear expired session DPoP key"
+            );
+        }
         return Err(auth_center_session_required(error_domain));
     }
 
     let upstream_url = state.schedule_bff_config.upstream_url(&route, query.as_deref())?;
+    // Fail-closed DPoP: every ACP-bound request carries a proof signed with
+    // this session's key. A missing key, a store failure, or a signing
+    // failure aborts here — the upstream call is never made with a bare
+    // Bearer token.
+    let dpop_proof = outbound_dpop_proof(
+        state.schedule_bff_config.dpop_key_store(),
+        &DpopKeySelector::new(current_user.id.clone(), vault_key.token_fingerprint.clone()),
+        &method,
+        &upstream_url,
+        bundle.access_token.expose(),
+    )?;
     let mut request = state
         .http_client
         .request(method, upstream_url)
@@ -870,7 +920,8 @@ async fn proxy_acp_inner(
             header::AUTHORIZATION,
             format!("Bearer {}", bundle.access_token.expose()),
         )
-        .header(header::ACCEPT, "application/json");
+        .header(header::ACCEPT, "application/json")
+        .header(header::HeaderName::from_static("dpop"), dpop_proof);
     if !body.is_empty() {
         request = request.header(header::CONTENT_TYPE, "application/json").body(body);
     }
@@ -944,6 +995,50 @@ async fn proxy_acp_inner(
 enum UpstreamReadError {
     Request(reqwest::Error),
     TooLarge,
+}
+
+/// Mint the DPoP proof protecting one outbound ACP request.
+///
+/// Fail-closed: a key-store failure, an unbound session, or a signing error
+/// all map to the same explicit error — the caller must not send the
+/// upstream request with a bare Bearer token.
+fn outbound_dpop_proof(
+    dpop_key_store: &Arc<dyn IDpopKeyStore>,
+    selector: &DpopKeySelector,
+    method: &Method,
+    upstream_url: &Url,
+    access_token: &str,
+) -> Result<String, ApiError> {
+    let dpop_failure = || {
+        ApiError::coded(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DPOP_PROOF_FAILED",
+            "DPoP proof generation failed; the upstream request was not sent.",
+            None,
+        )
+    };
+    let handle: DpopSigningHandle = dpop_key_store
+        .get(selector)
+        .map_err(|error| {
+            tracing::error!(holder = %selector.holder, error = %error, "DPoP key store lookup failed");
+            dpop_failure()
+        })?
+        .ok_or_else(|| {
+            tracing::error!(holder = %selector.holder, "no DPoP key bound for Auth Center session");
+            dpop_failure()
+        })?;
+    crate::dpop::build_dpop_proof(
+        &handle,
+        method.as_str(),
+        &dpop_resource_htu(upstream_url),
+        chrono::Utc::now().timestamp(),
+        &generate_dpop_jti(),
+        Some(&dpop_ath(access_token)),
+    )
+    .map_err(|error| {
+        tracing::error!(holder = %selector.holder, error = %error, "DPoP proof generation failed");
+        dpop_failure()
+    })
 }
 
 fn upstream_invalid_response(domain: ErrorDomain) -> ApiError {

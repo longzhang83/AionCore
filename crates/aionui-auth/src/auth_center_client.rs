@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use aionui_api_types::AuthConfigResponse;
 
 use crate::auth_center_tokens::{AuthCenterTokenResponse, AuthCenterUserTokenBundle, bundle_from_token_response};
+use crate::dpop::{DpopSigningHandle, IDpopKeyStore};
 use crate::error::AuthCenterError;
 
 const DEFAULT_APP_CODE: &str = "agent";
@@ -325,8 +326,17 @@ impl AuthCenterProtocolClient {
         &self,
         config: &RsmAuthConfig,
         store: &RsmOidcStateStore,
+        dpop_key_store: &dyn IDpopKeyStore,
         query: RsmOidcCallbackQuery,
-    ) -> Result<(String, AuthCenterLoginIdentity, AuthCenterUserTokenBundle), AuthCenterError> {
+    ) -> Result<
+        (
+            String,
+            AuthCenterLoginIdentity,
+            AuthCenterUserTokenBundle,
+            DpopSigningHandle,
+        ),
+        AuthCenterError,
+    > {
         if let Some(error) = query.error {
             let detail = query.error_description.unwrap_or(error);
             return Err(AuthCenterError::Unauthorized(format!(
@@ -350,7 +360,26 @@ impl AuthCenterProtocolClient {
         let discovery = self.discover(ready.issuer).await?;
         validate_discovered_issuer(&discovery, ready.issuer)?;
 
-        let token = self.exchange_token(&discovery, &ready, code, &stored).await?;
+        // DPoP holder: generate this login's ES256 key pair and mint the
+        // token-endpoint proof (htm/htu/iat/jti, no ath). Fail-closed: any
+        // key-store or proof failure aborts before the token request is
+        // sent, so an unbound token can never be issued.
+        let dpop_handle = dpop_key_store
+            .generate()
+            .map_err(|error| AuthCenterError::Internal(format!("DPoP key generation failed: {error}")))?;
+        let dpop_proof = crate::dpop::build_dpop_proof(
+            &dpop_handle,
+            "POST",
+            &discovery.token_endpoint,
+            chrono::Utc::now().timestamp(),
+            &crate::dpop::generate_dpop_jti(),
+            None,
+        )
+        .map_err(|error| AuthCenterError::Internal(format!("DPoP token endpoint proof failed: {error}")))?;
+
+        let token = self
+            .exchange_token(&discovery, &ready, code, &stored, &dpop_proof)
+            .await?;
         let id_claims = self
             .validate_id_token(
                 &discovery,
@@ -393,7 +422,7 @@ impl AuthCenterProtocolClient {
 
         let bundle = bundle_from_token_response(token, aionui_common::now_ms());
 
-        Ok((stored.return_to, identity, bundle))
+        Ok((stored.return_to, identity, bundle, dpop_handle))
     }
 
     pub async fn list_directory_users(
@@ -440,6 +469,7 @@ impl AuthCenterProtocolClient {
         config: &ReadyOidcConfig<'_>,
         code: &str,
         stored: &StoredLoginState,
+        dpop_proof: &str,
     ) -> Result<AuthCenterTokenResponse, AuthCenterError> {
         let form = TokenExchangeForm {
             grant_type: "authorization_code",
@@ -454,6 +484,7 @@ impl AuthCenterProtocolClient {
             .http_client
             .post(&discovery.token_endpoint)
             .form(&form)
+            .header(header::HeaderName::from_static("dpop"), dpop_proof)
             .send()
             .await
             .map_err(|e| AuthCenterError::BadGateway(format!("RSM Auth Center token exchange failed: {e}")))?;

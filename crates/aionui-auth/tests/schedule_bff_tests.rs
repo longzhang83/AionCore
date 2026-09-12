@@ -11,9 +11,10 @@ use wiremock::matchers::{header as wiremock_header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use aionui_auth::{
-    AuthCenterTokenResponse, AuthCenterTokenVaultKey, AuthIdentityMode, AuthRouterState, CookieConfig,
-    IAuthCenterTokenVault, InMemoryAuthCenterTokenVault, JwtService, QrTokenStore, RsmAuthConfig, RsmOidcStateStore,
-    ScheduleBffConfig, auth_routes, bundle_from_token_response,
+    AuthCenterTokenResponse, AuthCenterTokenVaultKey, AuthIdentityMode, AuthRouterState, CookieConfig, DpopError,
+    DpopKeySelector, DpopSigningHandle, IAuthCenterTokenVault, IDpopKeyStore, InMemoryAuthCenterTokenVault, JwtService,
+    QrTokenStore, RsmAuthConfig, RsmOidcStateStore, ScheduleBffConfig, auth_routes, bundle_from_token_response,
+    dpop_ath, fingerprint_token,
 };
 use aionui_db::{IIamRepository, IUserRepository, SqliteIamRepository, SqliteUserRepository, init_database_memory};
 
@@ -22,10 +23,27 @@ const USER_ID: &str = "system_default_user";
 struct TestContext {
     jwt_service: Arc<JwtService>,
     vault: Arc<InMemoryAuthCenterTokenVault>,
+    dpop_key_store: Arc<dyn IDpopKeyStore>,
     _db: aionui_db::Database,
 }
 
 async fn test_app(upstream: &MockServer, timeout: Duration) -> (Router, TestContext) {
+    build_app(upstream, timeout, None).await
+}
+
+async fn test_app_with_dpop_store(
+    upstream: &MockServer,
+    timeout: Duration,
+    dpop_key_store: Arc<dyn IDpopKeyStore>,
+) -> (Router, TestContext) {
+    build_app(upstream, timeout, Some(dpop_key_store)).await
+}
+
+async fn build_app(
+    upstream: &MockServer,
+    timeout: Duration,
+    dpop_key_store: Option<Arc<dyn IDpopKeyStore>>,
+) -> (Router, TestContext) {
     let db = init_database_memory().await.unwrap();
     let user_repo = Arc::new(SqliteUserRepository::new(db.pool().clone())) as Arc<dyn IUserRepository>;
     let iam_repo = Arc::new(SqliteIamRepository::new(db.pool().clone())) as Arc<dyn IIamRepository>;
@@ -42,13 +60,17 @@ async fn test_app(upstream: &MockServer, timeout: Duration) -> (Router, TestCont
         internal_base_url: None,
         internal_token: None,
     };
-    let schedule_bff_config = ScheduleBffConfig::new_with_identity_contract(
+    let mut schedule_bff_config = ScheduleBffConfig::new_with_identity_contract(
         upstream.uri(),
         timeout,
         &rsm_auth_config,
         Some("agent-control-plane"),
     )
     .unwrap();
+    if let Some(store) = dpop_key_store {
+        schedule_bff_config = schedule_bff_config.with_dpop_key_store(store);
+    }
+    let dpop_key_store = schedule_bff_config.dpop_key_store().clone();
     let state = AuthRouterState {
         jwt_service: jwt_service.clone(),
         user_repo,
@@ -75,6 +97,7 @@ async fn test_app(upstream: &MockServer, timeout: Duration) -> (Router, TestCont
         TestContext {
             jwt_service,
             vault,
+            dpop_key_store,
             _db: db,
         },
     )
@@ -97,9 +120,24 @@ fn bind_upstream_token(ctx: &TestContext, upstream_token: &str, expires_in: i64)
         },
         now_ms(),
     );
-    ctx.vault
-        .store(AuthCenterTokenVaultKey::from_token(&local_token, USER_ID), bundle);
+    let vault_key = AuthCenterTokenVaultKey::from_token(&local_token, USER_ID);
+    // Every vault bundle now owns exactly one DPoP key, mirroring the OIDC
+    // callback binding (key store selector = user id + JWT fingerprint).
+    let handle = ctx.dpop_key_store.generate().unwrap();
+    ctx.dpop_key_store
+        .bind(
+            handle,
+            &DpopKeySelector::new(USER_ID, vault_key.token_fingerprint.clone()),
+        )
+        .unwrap();
+    ctx.vault.store(vault_key, bundle);
     local_token
+}
+
+fn bound_session_key(ctx: &TestContext, local_token: &str) -> Option<DpopSigningHandle> {
+    ctx.dpop_key_store
+        .get(&DpopKeySelector::new(USER_ID, fingerprint_token(local_token)))
+        .unwrap()
 }
 
 fn request(method: Method, uri: &str, local_token: &str, body: Body) -> Request<Body> {
@@ -1905,4 +1943,294 @@ async fn review_document_read_bff_upstream_unauthorized_preserves_the_local_toke
     assert!(!body.to_string().contains("private audience details"));
     assert!(!body.to_string().contains("upstream-access"));
     assert!(ctx.vault.get(&vault_key).is_some());
+}
+
+// ---------------------------------------------------------------------------
+// DPoP (RFC 9449) holder behavior on the outbound ACP transport
+// ---------------------------------------------------------------------------
+
+use base64::Engine as _;
+use p256::ecdsa::signature::Verifier;
+
+use aionui_auth::{DpopPublicJwk, jwk_thumbprint};
+
+fn decode_proof_segment(proof: &str, index: usize) -> Value {
+    let segment = proof.split('.').nth(index).expect("DPoP proof has three segments");
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(segment)
+        .expect("DPoP proof segment is base64url");
+    serde_json::from_slice(&bytes).expect("DPoP proof segment is JSON")
+}
+
+/// Rebuild an ES256 signature from the raw 64-byte r||s encoding.
+fn signature_from_r_s(raw: &[u8]) -> p256::ecdsa::Signature {
+    use p256::elliptic_curve::FieldBytes;
+    let (r, s) = raw.split_at(32);
+    p256::ecdsa::Signature::from_scalars(
+        *FieldBytes::<p256::NistP256>::from_slice(r),
+        *FieldBytes::<p256::NistP256>::from_slice(s),
+    )
+    .expect("64 raw bytes are always a valid r||s pair")
+}
+
+/// Self-verify the ES256 signature of a compact proof against the JWK in its
+/// header, and return the RFC 7638 thumbprint of that header JWK.
+fn verify_proof_signature_and_header_jkt(proof: &str) -> String {
+    let segments: Vec<&str> = proof.split('.').collect();
+    assert_eq!(segments.len(), 3);
+    let header = decode_proof_segment(proof, 0);
+    let jwk = &header["jwk"];
+    let x = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(jwk["x"].as_str().unwrap())
+        .unwrap();
+    let y = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(jwk["y"].as_str().unwrap())
+        .unwrap();
+    let mut sec1 = vec![0x04];
+    sec1.extend_from_slice(&x);
+    sec1.extend_from_slice(&y);
+    let verifying_key = p256::ecdsa::VerifyingKey::from_sec1_bytes(&sec1).unwrap();
+    let signature = signature_from_r_s(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(segments[2])
+            .unwrap(),
+    );
+    let signing_input = format!("{}.{}", segments[0], segments[1]);
+    verifying_key
+        .verify(signing_input.as_bytes(), &signature)
+        .expect("DPoP proof signature must verify with the header JWK");
+
+    let header_jwk = DpopPublicJwk {
+        kty: jwk["kty"].as_str().unwrap().to_owned(),
+        crv: jwk["crv"].as_str().unwrap().to_owned(),
+        x: jwk["x"].as_str().unwrap().to_owned(),
+        y: jwk["y"].as_str().unwrap().to_owned(),
+    };
+    jwk_thumbprint(&header_jwk)
+}
+
+async fn assert_dpop_proof_failed(response: axum::response::Response) {
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = json_body(response).await;
+    assert_eq!(body["code"], "DPOP_PROOF_FAILED");
+    assert_eq!(
+        body["error"],
+        "DPoP proof generation failed; the upstream request was not sent."
+    );
+}
+
+#[tokio::test]
+async fn schedule_bff_attaches_dpop_proof_bound_to_the_outbound_access_token() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/schedule/v1/schedules"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items": []})))
+        .mount(&upstream)
+        .await;
+    let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+    let local_token = bind_upstream_token(&ctx, "upstream-access", 3600);
+
+    let response = app
+        .oneshot(request(
+            Method::GET,
+            "/api/schedule/v1/schedules?workspace_id=workspace-1",
+            &local_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let received = upstream.received_requests().await.unwrap();
+    assert_eq!(received.len(), 1);
+    let proof = received[0]
+        .headers
+        .get("dpop")
+        .expect("outbound ACP request must carry a DPoP header")
+        .to_str()
+        .unwrap()
+        .to_owned();
+
+    // Header shape dictated by the Auth Center verifier (dpop+jwt / ES256).
+    let header = decode_proof_segment(&proof, 0);
+    assert_eq!(header["typ"], "dpop+jwt");
+    assert_eq!(header["alg"], "ES256");
+    assert_eq!(header["jwk"]["kty"], "EC");
+    assert_eq!(header["jwk"]["crv"], "P-256");
+    assert_eq!(header["jwk"]["x"].as_str().unwrap().len(), 43);
+    assert_eq!(header["jwk"]["y"].as_str().unwrap().len(), 43);
+
+    // Claims: htm/htu of the proxied request, fresh iat, unique jti, ath.
+    let claims = decode_proof_segment(&proof, 1);
+    assert_eq!(claims["htm"], "GET");
+    // htu strips query and fragment (RFC 9449 §4.3).
+    assert_eq!(claims["htu"], format!("{}/api/schedule/v1/schedules", upstream.uri()));
+    let iat = claims["iat"].as_i64().unwrap();
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+    assert!((iat - now).abs() <= 120, "iat must be within the freshness window");
+    let jti = claims["jti"].as_str().unwrap();
+    assert!(jti.len() >= 16, "jti must satisfy the receiver's minimum length");
+    assert_eq!(
+        claims["ath"],
+        dpop_ath("upstream-access"),
+        "ath must bind the proof to the exact access token on the wire"
+    );
+
+    // Signature self-verifies, and the header JWK is the session's bound key
+    // (thumbprint equals the handle the store issued for this selector).
+    let header_jkt = verify_proof_signature_and_header_jkt(&proof);
+    let handle = bound_session_key(&ctx, &local_token).expect("session DPoP key bound");
+    assert_eq!(header_jkt, handle.jkt());
+}
+
+#[tokio::test]
+async fn schedule_bff_dpop_proof_jti_is_stateless_and_unique_per_request() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/schedule/v1/schedules"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items": []})))
+        .expect(2)
+        .mount(&upstream)
+        .await;
+    let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+    let local_token = bind_upstream_token(&ctx, "upstream-access", 3600);
+
+    for _ in 0..2 {
+        let response = app
+            .clone()
+            .oneshot(request(
+                Method::GET,
+                "/api/schedule/v1/schedules",
+                &local_token,
+                Body::empty(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let received = upstream.received_requests().await.unwrap();
+    assert_eq!(received.len(), 2);
+    let jtis = received
+        .iter()
+        .map(|req| {
+            let proof = req.headers.get("dpop").unwrap().to_str().unwrap();
+            decode_proof_segment(proof, 1)["jti"].as_str().unwrap().to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_ne!(jtis[0], jtis[1], "each request must mint a fresh stateless jti");
+    // The core persists no jti state: replay adjudication happens in the
+    // Auth Center replay ledger, so only generation freshness is asserted.
+    assert!(jtis.iter().all(|jti| jti.len() >= 16));
+}
+
+#[derive(Debug)]
+struct FailingDpopKeyStore;
+
+impl IDpopKeyStore for FailingDpopKeyStore {
+    fn generate(&self) -> Result<DpopSigningHandle, DpopError> {
+        Err(DpopError::StoreUnavailable)
+    }
+
+    fn bind(&self, _: DpopSigningHandle, _: &DpopKeySelector) -> Result<(), DpopError> {
+        Err(DpopError::StoreUnavailable)
+    }
+
+    fn get(&self, _: &DpopKeySelector) -> Result<Option<DpopSigningHandle>, DpopError> {
+        Err(DpopError::StoreUnavailable)
+    }
+
+    fn move_key(&self, _: &DpopKeySelector, _: &DpopKeySelector) -> Result<bool, DpopError> {
+        Err(DpopError::StoreUnavailable)
+    }
+
+    fn clear(&self, _: &DpopKeySelector) -> Result<bool, DpopError> {
+        Err(DpopError::StoreUnavailable)
+    }
+
+    fn clear_all_for_holder(&self, _: &str) -> Result<usize, DpopError> {
+        Err(DpopError::StoreUnavailable)
+    }
+}
+
+#[tokio::test]
+async fn schedule_bff_fails_closed_without_upstream_io_when_dpop_key_store_is_unavailable() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/schedule/v1/schedules"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items": []})))
+        .mount(&upstream)
+        .await;
+    let (app, ctx) = test_app_with_dpop_store(&upstream, Duration::from_secs(2), Arc::new(FailingDpopKeyStore)).await;
+    // Bind the vault bundle directly (NOT via bind_upstream_token, which
+    // would itself hit the failing store) so the failure under test is
+    // exclusively the proxy's outbound proof lookup.
+    let local_token = ctx.jwt_service.sign_auth_center_bound(USER_ID, "admin", 0).unwrap();
+    let bundle = bundle_from_token_response(
+        AuthCenterTokenResponse {
+            access_token: "upstream-access".to_owned(),
+            refresh_token: None,
+            id_token: None,
+            token_type: Some("Bearer".to_owned()),
+            scope: None,
+            expires_in: Some(3600),
+        },
+        now_ms(),
+    );
+    ctx.vault
+        .store(AuthCenterTokenVaultKey::from_token(&local_token, USER_ID), bundle);
+
+    let response = app
+        .oneshot(request(
+            Method::GET,
+            "/api/schedule/v1/schedules",
+            &local_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_dpop_proof_failed(response).await;
+    assert!(
+        upstream.received_requests().await.unwrap().is_empty(),
+        "fail-closed: the upstream call must never be sent without a DPoP proof"
+    );
+}
+
+#[tokio::test]
+async fn schedule_bff_fails_closed_without_upstream_io_when_session_has_no_dpop_key() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/schedule/v1/schedules"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items": []})))
+        .mount(&upstream)
+        .await;
+    let (app, ctx) = test_app(&upstream, Duration::from_secs(2)).await;
+    // Bind the vault bundle WITHOUT a DPoP key (simulates a session whose
+    // key binding was lost) and confirm the proxy refuses to send.
+    let local_token = ctx.jwt_service.sign_auth_center_bound(USER_ID, "admin", 0).unwrap();
+    let bundle = bundle_from_token_response(
+        AuthCenterTokenResponse {
+            access_token: "upstream-access".to_owned(),
+            refresh_token: None,
+            id_token: None,
+            token_type: Some("Bearer".to_owned()),
+            scope: None,
+            expires_in: Some(3600),
+        },
+        now_ms(),
+    );
+    ctx.vault
+        .store(AuthCenterTokenVaultKey::from_token(&local_token, USER_ID), bundle);
+
+    let response = app
+        .oneshot(request(
+            Method::GET,
+            "/api/schedule/v1/schedules",
+            &local_token,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_dpop_proof_failed(response).await;
+    assert!(upstream.received_requests().await.unwrap().is_empty());
 }
