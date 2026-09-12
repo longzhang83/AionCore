@@ -148,6 +148,223 @@ async fn mint_fails_when_source_is_missing() {
     assert!(matches!(err, RunDirError::MissingSource(_)), "got: {err:?}");
 }
 
+// ── Snapshot boundary (P1-1 / P1-2) ─────────────────────────────────
+
+#[tokio::test]
+async fn mint_rejects_parent_dir_escape_fail_closed() {
+    let root = tempfile::tempdir().unwrap();
+    let src = root.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("inside.txt"), b"inside").unwrap();
+    // Lexically carries `..` past the common parent `src/`; the real file sits
+    // OUTSIDE the would-be snapshot (at the workspace root).
+    std::fs::write(root.path().join("escaped.txt"), b"victim").unwrap();
+    let escape = src.join("..").join("escaped.txt");
+
+    let files = vec![
+        src.join("inside.txt").to_string_lossy().to_string(),
+        escape.to_string_lossy().to_string(),
+    ];
+    let err = mint_run_dir(root.path(), &row("aionrs", serde_json::json!({})), "turn_t1", &files)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, RunDirError::Escape(_)), "got: {err:?}");
+    let run_path = root
+        .path()
+        .join("conversation-runs")
+        .join("conv-1")
+        .join("aionrs-run-turn_t1");
+    assert!(
+        !run_path.join("input").join("escaped.txt").exists() && !run_path.join("escaped.txt").exists(),
+        "no copy may land outside input/"
+    );
+    assert!(!run_path.exists(), "failed mint leaves no run dir behind");
+    assert_eq!(
+        std::fs::read(root.path().join("escaped.txt")).unwrap(),
+        b"victim",
+        "source file bytes untouched"
+    );
+}
+
+#[tokio::test]
+async fn mixed_relative_and_absolute_inputs_fall_back_to_leaf_names() {
+    let root = tempfile::tempdir().unwrap();
+    let abs_dir = tempfile::tempdir().unwrap();
+    let abs_file = abs_dir.path().join("absolute.txt");
+    std::fs::write(&abs_file, b"abs-bytes").unwrap();
+    // A cwd-relative source: its parent ([]) shares no components with the
+    // absolute parent ([RootDir, ...]) → no common parent → leaf fallback.
+    let rel_dir = std::path::Path::new("run-dir-test-mixed");
+    std::fs::create_dir_all(rel_dir).unwrap();
+    let rel_file = rel_dir.join("relative.txt");
+    std::fs::write(&rel_file, b"rel-bytes").unwrap();
+
+    let files = vec![
+        abs_file.to_string_lossy().to_string(),
+        rel_file.to_string_lossy().to_string(),
+    ];
+    let run = mint_run_dir(root.path(), &row("aionrs", serde_json::json!({})), "turn_t1", &files)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        std::fs::read(run.path.join("input/absolute.txt")).unwrap(),
+        b"abs-bytes",
+        "absolute source lands at its leaf name"
+    );
+    assert_eq!(
+        std::fs::read(run.path.join("input/relative.txt")).unwrap(),
+        b"rel-bytes",
+        "relative source lands at its leaf name"
+    );
+    assert!(
+        !run.path.join("input").join("run-dir-test-mixed").exists(),
+        "no nested structure from the mixed pair"
+    );
+    std::fs::remove_dir_all(rel_dir).unwrap();
+}
+
+#[tokio::test]
+async fn disjoint_relative_trees_fall_back_to_leaf_names() {
+    let root = tempfile::tempdir().unwrap();
+    let dir_a = std::path::Path::new("run-dir-test-disjoint-a");
+    let dir_b = std::path::Path::new("run-dir-test-disjoint-b");
+    std::fs::create_dir_all(dir_a).unwrap();
+    std::fs::create_dir_all(dir_b).unwrap();
+    std::fs::write(dir_a.join("one.txt"), b"one").unwrap();
+    std::fs::write(dir_b.join("two.txt"), b"two").unwrap();
+
+    let files = vec![
+        dir_a.join("one.txt").to_string_lossy().to_string(),
+        dir_b.join("two.txt").to_string_lossy().to_string(),
+    ];
+    let run = mint_run_dir(root.path(), &row("aionrs", serde_json::json!({})), "turn_t1", &files)
+        .await
+        .unwrap();
+
+    assert_eq!(std::fs::read(run.path.join("input/one.txt")).unwrap(), b"one");
+    assert_eq!(std::fs::read(run.path.join("input/two.txt")).unwrap(), b"two");
+
+    std::fs::remove_dir_all(dir_a).unwrap();
+    std::fs::remove_dir_all(dir_b).unwrap();
+}
+
+#[tokio::test]
+async fn leaf_name_collision_without_common_parent_fails_closed() {
+    let root = tempfile::tempdir().unwrap();
+    let dir_a = std::path::Path::new("run-dir-test-collide-a");
+    let dir_b = std::path::Path::new("run-dir-test-collide-b");
+    std::fs::create_dir_all(dir_a).unwrap();
+    std::fs::create_dir_all(dir_b).unwrap();
+    std::fs::write(dir_a.join("dup.txt"), b"a").unwrap();
+    std::fs::write(dir_b.join("dup.txt"), b"b").unwrap();
+
+    let files = vec![
+        dir_a.join("dup.txt").to_string_lossy().to_string(),
+        dir_b.join("dup.txt").to_string_lossy().to_string(),
+    ];
+    let err = mint_run_dir(root.path(), &row("aionrs", serde_json::json!({})), "turn_t1", &files)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, RunDirError::Collision(_)), "got: {err:?}");
+    std::fs::remove_dir_all(dir_a).unwrap();
+    std::fs::remove_dir_all(dir_b).unwrap();
+}
+
+// ── Label resilience (P2-3) ─────────────────────────────────────────
+
+#[tokio::test]
+async fn corrupt_extra_json_still_mints_with_agent_type_label() {
+    let root = tempfile::tempdir().unwrap();
+    let mut broken = row("aionrs", serde_json::json!({}));
+    broken.extra = "{not valid json".to_string();
+
+    let run = mint_run_dir(root.path(), &broken, "turn_t1", &[]).await.unwrap();
+
+    assert_eq!(
+        run.path.file_name().unwrap(),
+        "aionrs-run-turn_t1",
+        "label falls back to the agent serde name"
+    );
+}
+
+#[test]
+fn run_dir_path_falls_back_to_serde_name_on_corrupt_extra() {
+    // Acp rows read `extra.backend`; a corrupt extra yields the agent serde
+    // name instead of failing the run dir path computation.
+    let mut broken = row("acp", serde_json::json!({ "backend": "claude" }));
+    broken.extra = "]]]".to_string();
+    let path = run_dir_path(Path::new("/tmp"), &broken, "turn_t1").unwrap();
+    assert_eq!(path.file_name().unwrap(), "acp-run-turn_t1");
+}
+
+// ── Orphan cleanup on partial mint (P2-5) ───────────────────────────
+
+#[tokio::test]
+async fn failed_mint_after_partial_copy_leaves_no_orphan_run_dir() {
+    let root = tempfile::tempdir().unwrap();
+    let src = root.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("good.txt"), b"good").unwrap();
+    // Named so the good source sorts (and copies) first.
+    let missing = root.path().join("z-missing.txt");
+
+    let files = vec![
+        src.join("good.txt").to_string_lossy().to_string(),
+        missing.to_string_lossy().to_string(),
+    ];
+    let err = mint_run_dir(root.path(), &row("aionrs", serde_json::json!({})), "turn_t1", &files)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, RunDirError::MissingSource(_)), "got: {err:?}");
+    let run_path = root
+        .path()
+        .join("conversation-runs")
+        .join("conv-1")
+        .join("aionrs-run-turn_t1");
+    assert!(!run_path.exists(), "partially minted run dir must be removed");
+    assert_eq!(std::fs::read(src.join("good.txt")).unwrap(), b"good");
+}
+
+// ── Cleanup gate validation (P2-4) ──────────────────────────────────
+
+#[tokio::test]
+async fn cleanup_rejects_corrupt_manifest_and_keeps_dir() {
+    let root = tempfile::tempdir().unwrap();
+    let run = mint_run_dir(root.path(), &row("aionrs", serde_json::json!({})), "turn_t1", &[])
+        .await
+        .unwrap();
+    std::fs::write(run.path.join(RUN_MANIFEST_FILE), "{ corrupt json").unwrap();
+
+    assert!(!remove_collected_run_dir(&run.path).await.unwrap());
+    assert!(run.path.is_dir(), "corrupt manifest must not authorize removal");
+    assert!(run.path.join("input").is_dir());
+}
+
+#[tokio::test]
+async fn cleanup_rejects_foreign_manifest_fields_and_keeps_dir() {
+    let root = tempfile::tempdir().unwrap();
+    let run = mint_run_dir(root.path(), &row("aionrs", serde_json::json!({})), "turn_t1", &[])
+        .await
+        .unwrap();
+
+    for foreign in [
+        r#"{"schemaVersion": 99, "status": "completed"}"#,
+        r#"{"schemaVersion": 1, "status": "purged"}"#,
+        r#"{"schemaVersion": 1}"#,
+    ] {
+        std::fs::write(run.path.join(RUN_MANIFEST_FILE), foreign).unwrap();
+        assert!(
+            !remove_collected_run_dir(&run.path).await.unwrap(),
+            "foreign manifest must not authorize removal: {foreign}"
+        );
+        assert!(run.path.is_dir());
+    }
+}
+
 #[test]
 fn run_dir_path_fails_on_unknown_agent_type() {
     let root = Path::new("/tmp");

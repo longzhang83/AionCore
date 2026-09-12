@@ -22,9 +22,10 @@
 //!    and never affects the conversation.
 //! 3. `remove_collected_run_dir` — retention helper, NOT wired to any timer yet
 //!    (the service-side entry is `ConversationService::cleanup_collected_run_dir`).
-//!    Gated: only a run whose `manifest.json` exists may be removed. A run that
-//!    was never collected still holds the only copy of the turn's input snapshot;
-//!    deleting it would destroy evidence.
+//!    Gated: only a run whose `manifest.json` exists AND parses as a collected
+//!    manifest (known schema version + terminal status) may be removed. A run
+//!    that was never collected still holds the only copy of the turn's input
+//!    snapshot; deleting it would destroy evidence.
 //!
 //! ## Terminal status is a conversation-side heuristic
 //!
@@ -54,11 +55,12 @@
 //!   FINAL attempt's outcome; attempt-1 failures are not separately recorded.
 
 use std::collections::HashSet;
+use std::io::{BufReader, Read};
 use std::path::{Component, Path, PathBuf};
 
 use aionui_common::AgentType;
 use aionui_db::models::ConversationRow;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::{error, info, warn};
 use walkdir::WalkDir;
@@ -82,11 +84,13 @@ pub(crate) enum RunDirError {
     MissingSource(String),
     #[error("attachment relative path collision: {0}")]
     Collision(String),
+    #[error("attachment path escapes the input snapshot boundary: {0}")]
+    Escape(String),
 }
 
 /// Conversation-side terminal classification for a run — see the module docs
 /// for why this is a heuristic rather than a relay-enriched signal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum RunTerminalStatus {
     Completed,
@@ -136,9 +140,24 @@ pub(crate) fn run_dir_path(
 fn run_label(row: &ConversationRow) -> Result<String, RunDirError> {
     let agent_type: AgentType =
         string_to_enum(&row.r#type).map_err(|err| RunDirError::Row(format!("agent type {}: {err}", row.r#type)))?;
-    let extra: serde_json::Value =
-        serde_json::from_str(&row.extra).map_err(|err| RunDirError::Row(format!("invalid extra JSON: {err}")))?;
-    Ok(crate::service::conversation_label(&agent_type, extra.get("backend")))
+    // The label only needs the OPTIONAL `backend` field. A corrupt `extra`
+    // must not permanently brick every send for this conversation, so fall
+    // back to the agent type's serde name instead of failing the mint.
+    let extra: Option<serde_json::Value> = match serde_json::from_str(&row.extra) {
+        Ok(value) => Some(value),
+        Err(err) => {
+            warn!(
+                conversation_id = %row.id,
+                error = %err,
+                "Run dir label: unreadable conversation extra; using agent type label"
+            );
+            None
+        }
+    };
+    Ok(crate::service::conversation_label(
+        &agent_type,
+        extra.as_ref().and_then(|value| value.get("backend")),
+    ))
 }
 
 /// Mint the run directory for this turn and copy the message attachments into
@@ -147,7 +166,10 @@ fn run_label(row: &ConversationRow) -> Result<String, RunDirError> {
 /// fall back to their leaf names; a leaf collision is an error. With no
 /// attachments the empty `input/` dir is still minted.
 ///
-/// Failure of any step is returned — the caller fails the turn closed.
+/// Failure of any step is returned — the caller fails the turn closed. A run
+/// dir this call created is removed again on failure (best-effort, never
+/// masking the original error): the caller neither collects nor cleans up a
+/// failed mint, so a partial run dir would otherwise linger forever.
 pub(crate) async fn mint_run_dir(
     workspace_root: &Path,
     row: &ConversationRow,
@@ -156,18 +178,21 @@ pub(crate) async fn mint_run_dir(
 ) -> Result<TurnRunDir, RunDirError> {
     let run_path = run_dir_path(workspace_root, row, turn_id)?;
     let input_dir = run_path.join(INPUT_DIR);
+    let created = !run_path.exists();
     tokio::fs::create_dir_all(&input_dir).await?;
 
     let sources: Vec<PathBuf> = files.iter().map(PathBuf::from).collect();
-    for (src, relative) in plan_input_layout(&sources)? {
-        if !src.is_file() {
-            return Err(RunDirError::MissingSource(src.display().to_string()));
+    if let Err(err) = copy_attachments(&input_dir, &sources).await {
+        if created && let Err(cleanup_err) = tokio::fs::remove_dir_all(&run_path).await {
+            warn!(
+                conversation_id = %row.id,
+                turn_id,
+                run_dir = %run_path.display(),
+                error = %cleanup_err,
+                "Failed to clean up partially minted run dir"
+            );
         }
-        let target = input_dir.join(&relative);
-        if let Some(parent) = target.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-        tokio::fs::copy(&src, &target).await?;
+        return Err(err);
     }
 
     info!(
@@ -184,23 +209,54 @@ pub(crate) async fn mint_run_dir(
     })
 }
 
-/// Map each attachment source to its `input/`-relative destination.
+/// Copy each attachment into `input_dir` at its planned relative destination.
+async fn copy_attachments(input_dir: &Path, sources: &[PathBuf]) -> Result<(), RunDirError> {
+    for (src, relative) in plan_input_layout(sources)? {
+        if !src.is_file() {
+            return Err(RunDirError::MissingSource(src.display().to_string()));
+        }
+        let target = input_dir.join(&relative);
+        // Defense in depth behind plan_input_layout: the joined target must
+        // stay inside the snapshot directory.
+        if !target.starts_with(input_dir) {
+            return Err(RunDirError::Escape(src.display().to_string()));
+        }
+        if let Some(parent) = target.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::copy(&src, &target).await?;
+    }
+    Ok(())
+}
+
+/// Map each attachment source to its `input/`-relative destination. Sources
+/// under a shared common parent keep their relative structure; sources with no
+/// common parent (mixed relative/absolute input, or unrelated relative trees)
+/// fall back to their leaf names. Any planned relative path carrying `..` or
+/// `.` components would escape the snapshot boundary and fails closed.
 fn plan_input_layout(sources: &[PathBuf]) -> Result<Vec<(PathBuf, PathBuf)>, RunDirError> {
     let mut unique = sources.to_vec();
     unique.sort();
     unique.dedup();
 
     let common = common_parent(&unique);
+    let has_common = !common.as_os_str().is_empty();
     let mut seen: HashSet<String> = HashSet::new();
     let mut layout = Vec::with_capacity(unique.len());
     for src in &unique {
-        let relative = match src.strip_prefix(&common) {
-            Ok(rel) if !rel.as_os_str().is_empty() => rel.to_path_buf(),
-            _ => src
-                .file_name()
-                .map(PathBuf::from)
-                .ok_or_else(|| RunDirError::Row(format!("attachment path has no file name: {}", src.display())))?,
+        let relative = if has_common {
+            match src.strip_prefix(&common) {
+                Ok(rel) if !rel.as_os_str().is_empty() => rel.to_path_buf(),
+                _ => leaf_name(src)?,
+            }
+        } else {
+            leaf_name(src)?
         };
+        for component in relative.components() {
+            if matches!(component, Component::ParentDir | Component::CurDir) {
+                return Err(RunDirError::Escape(src.display().to_string()));
+            }
+        }
         let key = relative.to_string_lossy().into_owned();
         if !seen.insert(key) {
             return Err(RunDirError::Collision(src.display().to_string()));
@@ -208,6 +264,13 @@ fn plan_input_layout(sources: &[PathBuf]) -> Result<Vec<(PathBuf, PathBuf)>, Run
         layout.push((src.clone(), relative));
     }
     Ok(layout)
+}
+
+/// Leaf fallback destination for a source with no usable common parent.
+fn leaf_name(src: &Path) -> Result<PathBuf, RunDirError> {
+    src.file_name()
+        .map(PathBuf::from)
+        .ok_or_else(|| RunDirError::Row(format!("attachment path has no file name: {}", src.display())))
 }
 
 /// Longest directory shared by every source's parent (empty when the sources
@@ -284,7 +347,11 @@ pub(crate) async fn collect_run_manifest(run: &TurnRunDir, status: RunTerminalSt
             return;
         }
     };
-    match std::fs::write(run.path.join(RUN_MANIFEST_FILE), json) {
+    // Atomic write (temp + rename): a torn manifest.json must never look like
+    // a collected run to the cleanup gate.
+    let manifest_path = run.path.join(RUN_MANIFEST_FILE);
+    let tmp_path = run.path.join(format!("{RUN_MANIFEST_FILE}.tmp"));
+    match std::fs::write(&tmp_path, json).and_then(|()| std::fs::rename(&tmp_path, &manifest_path)) {
         Ok(()) => info!(
             conversation_id = %run.conversation_id,
             turn_id = %run.turn_id,
@@ -292,12 +359,15 @@ pub(crate) async fn collect_run_manifest(run: &TurnRunDir, status: RunTerminalSt
             collection_error,
             "Run dir manifest collected"
         ),
-        Err(err) => error!(
-            conversation_id = %run.conversation_id,
-            turn_id = %run.turn_id,
-            error = %err,
-            "Failed to write run dir manifest"
-        ),
+        Err(err) => {
+            let _ = std::fs::remove_file(&tmp_path);
+            error!(
+                conversation_id = %run.conversation_id,
+                turn_id = %run.turn_id,
+                error = %err,
+                "Failed to write run dir manifest"
+            )
+        }
     }
 }
 
@@ -347,19 +417,32 @@ fn collect_entries(run_root: &Path) -> (Vec<RunManifestEntry>, Option<String>) {
     (entries, collection_error)
 }
 
+/// Stream the file in chunks so arbitrarily large inputs never load fully
+/// into memory; returns the hex sha256 and the byte count.
 fn hash_file(path: &Path) -> std::io::Result<(String, u64)> {
-    let bytes = std::fs::read(path)?;
-    let digest = Sha256::digest(&bytes);
-    Ok((hex::encode(digest), bytes.len() as u64))
+    let file = std::fs::File::open(path)?;
+    let mut reader = BufReader::new(file);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    let mut total: u64 = 0;
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        total += read as u64;
+    }
+    Ok((hex::encode(hasher.finalize()), total))
 }
 
-/// Remove a run directory — but ONLY if its manifest was collected (see the
-/// module docs for the gate's rationale). After removing the run dir, the
-/// conversation's run bucket is pruned when empty (same parent-pruning pattern
-/// as `cleanup_empty_date_workspace_parents` in service.rs). Returns whether
-/// the run dir was actually removed.
+/// Remove a run directory — but ONLY if its manifest was collected AND
+/// validates (see the module docs for the gate's rationale). After removing
+/// the run dir, the conversation's run bucket is pruned when empty (same
+/// parent-pruning pattern as `cleanup_empty_date_workspace_parents` in
+/// service.rs). Returns whether the run dir was actually removed.
 pub(crate) async fn remove_collected_run_dir(run_dir: &Path) -> std::io::Result<bool> {
-    if !run_dir.join(RUN_MANIFEST_FILE).is_file() {
+    if !is_collected_manifest(&run_dir.join(RUN_MANIFEST_FILE)) {
         return Ok(false);
     }
     tokio::fs::remove_dir_all(run_dir).await?;
@@ -368,4 +451,26 @@ pub(crate) async fn remove_collected_run_dir(run_dir: &Path) -> std::io::Result<
         let _ = tokio::fs::remove_dir(bucket).await;
     }
     Ok(true)
+}
+
+/// The subset of the manifest schema the cleanup gate insists on. Anything
+/// that does not parse into this — a corrupt, truncated, or foreign
+/// `manifest.json` — keeps the run dir alive: the gate must never authorize
+/// deleting a run on mere existence of a same-named file.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CollectedManifestGate {
+    schema_version: u8,
+    /// Deserializing into [`RunTerminalStatus`] IS the status validation —
+    /// an unknown status string fails the whole parse; the parsed value is
+    /// intentionally not read further.
+    #[expect(dead_code)]
+    status: RunTerminalStatus,
+}
+
+fn is_collected_manifest(manifest_path: &Path) -> bool {
+    std::fs::read_to_string(manifest_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<CollectedManifestGate>(&raw).ok())
+        .is_some_and(|gate| gate.schema_version == RUN_MANIFEST_SCHEMA_VERSION)
 }
