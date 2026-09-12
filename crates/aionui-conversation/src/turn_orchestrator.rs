@@ -10,6 +10,7 @@ use tokio::sync::oneshot;
 use tracing::{debug, error, info, warn};
 
 use crate::agent_health_policy::{AgentHealthAction, AgentHealthPolicy};
+use crate::run_dir::{collect_run_manifest, map_terminal_status, mint_run_dir};
 use crate::runtime_state::RuntimeLifecycleState;
 use crate::runtime_state::TurnClaim;
 use crate::service::{
@@ -18,7 +19,7 @@ use crate::service::{
 use crate::stream_relay::{RelayOutcome, StreamRelay, SupersedingTipTotals, TurnAttemptSummary};
 use crate::turn_continuation_policy::{ContinuationDecision, TurnContinuationPolicy};
 use crate::turn_recovery_policy::{TurnRecoveryDecision, TurnRecoveryPolicy};
-use aionui_api_types::AgentErrorCode;
+use aionui_api_types::{AgentErrorCode, AgentErrorOwnership};
 
 fn acp_backend_from_build_options(options: &BuildTaskOptions) -> Option<&str> {
     match &options.context.kind {
@@ -433,6 +434,50 @@ impl ConversationTurnOrchestrator {
         let runtime_state = self.service.runtime_state();
         let allowed_skill_names = input.build_options.context.skills.clone();
         let first_turn_msg_id = ConversationService::mint_msg_id();
+        let mut replayed = false;
+        let superseding_tips = SupersedingTipTotals::default();
+        let mut replay_started_at = None;
+        let mut final_error_message = None;
+        let mut auth_failure = false;
+
+        // G02-b: mint the per-turn isolated input run directory BEFORE dispatch.
+        // The run boundary is the TURN (`turn_id`), not the attempt — the
+        // auto-replay below reuses the same run dir. Mint/copy failure fails the
+        // turn closed: a prompt whose input snapshot cannot be captured is never
+        // dispatched.
+        let turn_run = match mint_run_dir(
+            self.service.workspace_root(),
+            &input.conversation,
+            &turn_id,
+            &input.files,
+        )
+        .await
+        {
+            Ok(run) => Some(run),
+            Err(err) => {
+                error!(
+                    conversation_id = %conv_id,
+                    turn_id = %turn_id,
+                    error = %err,
+                    "Per-turn run dir mint failed; failing the turn closed"
+                );
+                let send_error = RuntimeSendError::new(
+                    "AionUI failed to prepare this turn's isolated input snapshot",
+                    AgentErrorCode::AionuiInternalError,
+                    AgentErrorOwnership::Aionui,
+                    Some(err.to_string()),
+                    true,
+                    true,
+                    None,
+                );
+                self.service
+                    .persist_and_broadcast_send_failure_tip(&input.user_id, &conv_id, &turn_id, &send_error, None)
+                    .await;
+                final_error_message = Some(send_error_display_message(&send_error));
+                None
+            }
+        };
+
         let initial_send = SendMessageData {
             content: input.content,
             msg_id: first_turn_msg_id.clone(),
@@ -440,150 +485,150 @@ impl ConversationTurnOrchestrator {
             files: input.files,
             inject_skills: input.inject_skills,
         };
-        let mut replayed = false;
-        let superseding_tips = SupersedingTipTotals::default();
-        let mut replay_started_at = None;
-        let mut final_error_message;
-        let mut auth_failure = false;
 
         info!(conversation_id = %conv_id, turn_id = %turn_id, "conversation turn orchestrator started");
 
-        let final_failed = loop {
-            let attempt_number = if replayed { 2 } else { 1 };
-            let attempt_result = match self
-                .run_attempt(TurnAttemptInput {
-                    conv_id: conv_id.clone(),
-                    turn_id: turn_id.clone(),
-                    user_id: input.user_id.clone(),
-                    build_options: input.build_options.clone(),
-                    stored_workspace: input.stored_workspace.clone(),
-                    send: initial_send.clone(),
-                    msg_id: first_turn_msg_id.clone(),
-                    allowed_skill_names: allowed_skill_names.clone(),
-                    required_runtime_mode: input.required_runtime_mode.clone(),
-                    continuation_count: 0,
-                    defer_clean_terminal_errors: !replayed,
-                    superseding_tips: superseding_tips.clone(),
-                })
-                .await
-            {
-                Ok(result) => result,
-                Err(result) => {
-                    final_error_message = result.error_message;
-                    break result.status == ConversationTurnStatus::Failed;
+        let final_failed = if turn_run.is_some() {
+            loop {
+                let attempt_number = if replayed { 2 } else { 1 };
+                let attempt_result = match self
+                    .run_attempt(TurnAttemptInput {
+                        conv_id: conv_id.clone(),
+                        turn_id: turn_id.clone(),
+                        user_id: input.user_id.clone(),
+                        build_options: input.build_options.clone(),
+                        stored_workspace: input.stored_workspace.clone(),
+                        send: initial_send.clone(),
+                        msg_id: first_turn_msg_id.clone(),
+                        allowed_skill_names: allowed_skill_names.clone(),
+                        required_runtime_mode: input.required_runtime_mode.clone(),
+                        continuation_count: 0,
+                        defer_clean_terminal_errors: !replayed,
+                        superseding_tips: superseding_tips.clone(),
+                    })
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(result) => {
+                        final_error_message = result.error_message;
+                        break result.status == ConversationTurnStatus::Failed;
+                    }
+                };
+
+                // Track the final attempt's auth signal so the post-loop availability
+                // write-back can reflect "needs sign-in" (last iteration wins).
+                auth_failure = terminal_is_auth_failure(&attempt_result.outcome);
+
+                let lifecycle = runtime_state.lifecycle_for(&conv_id);
+                if !attempt_result.outcome.terminal.is_error() {
+                    final_error_message = None;
+                    if replayed {
+                        info!(
+                            conversation_id = %conv_id,
+                            turn_id = %turn_id,
+                            attempt = attempt_number,
+                            elapsed_ms = replay_started_at
+                                .map(|started_at| now_ms().saturating_sub(started_at))
+                                .unwrap_or_default(),
+                            "conversation turn auto replay completed"
+                        );
+                    }
+                    break false;
                 }
-            };
-
-            // Track the final attempt's auth signal so the post-loop availability
-            // write-back can reflect "needs sign-in" (last iteration wins).
-            auth_failure = terminal_is_auth_failure(&attempt_result.outcome);
-
-            let lifecycle = runtime_state.lifecycle_for(&conv_id);
-            if !attempt_result.outcome.terminal.is_error() {
-                final_error_message = None;
+                final_error_message = turn_attempt_error_message(&attempt_result.summary);
                 if replayed {
-                    info!(
+                    warn!(
                         conversation_id = %conv_id,
                         turn_id = %turn_id,
                         attempt = attempt_number,
-                        elapsed_ms = replay_started_at
-                            .map(|started_at| now_ms().saturating_sub(started_at))
-                            .unwrap_or_default(),
-                        "conversation turn auto replay completed"
-                    );
-                }
-                break false;
-            }
-            final_error_message = turn_attempt_error_message(&attempt_result.summary);
-            if replayed {
-                warn!(
-                    conversation_id = %conv_id,
-                    turn_id = %turn_id,
-                    attempt = attempt_number,
-                    error_code = ?attempt_result.outcome.terminal.code(),
-                    retryable = ?attempt_result.outcome.terminal.retryable(),
-                    "conversation turn auto replay failed"
-                );
-            }
-
-            let mut recovery_outcome = attempt_result.outcome.clone();
-            recovery_outcome.attempt = attempt_result.summary.clone();
-            let decision = TurnRecoveryPolicy::decide(
-                attempt_result.agent_type,
-                attempt_result.backend.as_deref(),
-                &recovery_outcome,
-                lifecycle,
-                replayed,
-            );
-
-            match decision {
-                TurnRecoveryDecision::AutoReplayOnce { reason, .. } => {
-                    replay_started_at = Some(now_ms());
-                    info!(
-                        conversation_id = %conv_id,
-                        turn_id = %turn_id,
-                        attempt = attempt_number,
-                        next_attempt = attempt_number + 1,
-                        backend = attempt_result.backend.as_deref().unwrap_or("unknown"),
                         error_code = ?attempt_result.outcome.terminal.code(),
                         retryable = ?attempt_result.outcome.terminal.retryable(),
-                        ?reason,
-                        "conversation turn auto replay starting"
+                        "conversation turn auto replay failed"
                     );
-                    self.service
-                        .evict_acp_task_after_terminal_error(
-                            &input.user_id,
-                            &conv_id,
-                            attempt_result.agent_type,
-                            &attempt_result.outcome,
-                            &self.task_manager,
-                        )
-                        .await;
-                    // ELECTRON-3Q0: attempt 1's dead-anchor self-heal cleared
-                    // `acp_session.session_id` mid-turn (persist_side_effects runs
-                    // BEFORE the terminal reaches this loop). The turn-start
-                    // snapshot still holds the stale anchor — refresh ONLY the
-                    // anchor fields so the rebuilt task opens Fresh instead of
-                    // re-resuming the same dead session.
-                    self.service
-                        .refresh_resume_anchor_for_replay(&conv_id, &mut input.build_options)
-                        .await;
-                    replayed = true;
-                    continue;
                 }
-                TurnRecoveryDecision::None => {
-                    if attempt_result.outcome.attempt.terminal_error_deferred
-                        && let Some(data) = attempt_result.outcome.attempt.terminal_error.clone()
-                    {
-                        let send_error = RuntimeSendError::from_stream_error_data(data);
+
+                let mut recovery_outcome = attempt_result.outcome.clone();
+                recovery_outcome.attempt = attempt_result.summary.clone();
+                let decision = TurnRecoveryPolicy::decide(
+                    attempt_result.agent_type,
+                    attempt_result.backend.as_deref(),
+                    &recovery_outcome,
+                    lifecycle,
+                    replayed,
+                );
+
+                match decision {
+                    TurnRecoveryDecision::AutoReplayOnce { reason, .. } => {
+                        replay_started_at = Some(now_ms());
+                        info!(
+                            conversation_id = %conv_id,
+                            turn_id = %turn_id,
+                            attempt = attempt_number,
+                            next_attempt = attempt_number + 1,
+                            backend = attempt_result.backend.as_deref().unwrap_or("unknown"),
+                            error_code = ?attempt_result.outcome.terminal.code(),
+                            retryable = ?attempt_result.outcome.terminal.retryable(),
+                            ?reason,
+                            "conversation turn auto replay starting"
+                        );
                         self.service
-                            .persist_and_broadcast_send_failure_tip(
+                            .evict_acp_task_after_terminal_error(
                                 &input.user_id,
                                 &conv_id,
-                                &turn_id,
-                                &send_error,
-                                None,
+                                attempt_result.agent_type,
+                                &attempt_result.outcome,
+                                &self.task_manager,
                             )
                             .await;
+                        // ELECTRON-3Q0: attempt 1's dead-anchor self-heal cleared
+                        // `acp_session.session_id` mid-turn (persist_side_effects runs
+                        // BEFORE the terminal reaches this loop). The turn-start
+                        // snapshot still holds the stale anchor — refresh ONLY the
+                        // anchor fields so the rebuilt task opens Fresh instead of
+                        // re-resuming the same dead session.
+                        self.service
+                            .refresh_resume_anchor_for_replay(&conv_id, &mut input.build_options)
+                            .await;
+                        replayed = true;
+                        continue;
                     }
-
-                    match AgentHealthPolicy::decide(attempt_result.agent_type, &attempt_result.outcome, lifecycle) {
-                        AgentHealthAction::Keep => {}
-                        AgentHealthAction::EvictAcpTask { .. } => {
+                    TurnRecoveryDecision::None => {
+                        if attempt_result.outcome.attempt.terminal_error_deferred
+                            && let Some(data) = attempt_result.outcome.attempt.terminal_error.clone()
+                        {
+                            let send_error = RuntimeSendError::from_stream_error_data(data);
                             self.service
-                                .evict_acp_task_after_terminal_error(
+                                .persist_and_broadcast_send_failure_tip(
                                     &input.user_id,
                                     &conv_id,
-                                    attempt_result.agent_type,
-                                    &attempt_result.outcome,
-                                    &self.task_manager,
+                                    &turn_id,
+                                    &send_error,
+                                    None,
                                 )
                                 .await;
                         }
+
+                        match AgentHealthPolicy::decide(attempt_result.agent_type, &attempt_result.outcome, lifecycle) {
+                            AgentHealthAction::Keep => {}
+                            AgentHealthAction::EvictAcpTask { .. } => {
+                                self.service
+                                    .evict_acp_task_after_terminal_error(
+                                        &input.user_id,
+                                        &conv_id,
+                                        attempt_result.agent_type,
+                                        &attempt_result.outcome,
+                                        &self.task_manager,
+                                    )
+                                    .await;
+                            }
+                        }
+                        break true;
                     }
-                    break true;
                 }
             }
+        } else {
+            // Mint already failed closed above — no dispatch, no attempt loop.
+            true
         };
 
         if auth_failure {
@@ -609,10 +654,20 @@ impl ConversationTurnOrchestrator {
             .await;
         }
 
+        // G02-b: capture the conversation-side terminal mapping BEFORE the claim
+        // release — releasing the turn claim clears the conversation's cancelling
+        // flag, after which Cancelled and Failed are no longer distinguishable.
+        // See run_dir.rs for this heuristic's known limits.
+        let run_status = map_terminal_status(final_failed, runtime_state.is_cancelling(&conv_id));
+
         let was_deleting = turn_claim.release_for_turn(&turn_id);
         self.service
             .complete_released_turn(&input.user_id, &conv_id, &turn_id, was_deleting)
             .await;
+
+        if let Some(run) = turn_run.as_ref() {
+            collect_run_manifest(run, run_status).await;
+        }
 
         ConversationTurnResult {
             status: if final_failed {
