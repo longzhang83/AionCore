@@ -11,6 +11,7 @@ mod message_persistence;
 pub mod response_middleware;
 pub mod routes;
 pub mod routes_aux;
+pub mod run_acp_transport;
 pub mod run_admission_listener;
 pub mod run_admission_receive;
 mod run_dir;
