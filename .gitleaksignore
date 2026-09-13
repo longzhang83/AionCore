@@ -1,1 +1,4 @@
 crates/aionui-auth/src/run_face.rs:private-key:472
+crates/aionui-auth/src/acp_service_token_test.rs:private-key:45
+crates/aionui-auth/src/acp_service_token_test.rs:private-key:65
+crates/aionui-auth/src/acp_service_token_test.rs:private-key:72

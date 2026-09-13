@@ -512,6 +512,7 @@ dependencies = [
  "jsonwebtoken 9.3.1",
  "p256",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "sha2 0.10.9",

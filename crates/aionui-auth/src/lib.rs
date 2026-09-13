@@ -1,6 +1,7 @@
 #![warn(clippy::disallowed_types)]
 
 //! JWT authentication, password hashing, CSRF protection, rate limiting, and auth middleware.
+mod acp_service_token;
 mod auth_center_client;
 mod auth_center_tokens;
 mod cookie;
@@ -104,3 +105,9 @@ pub use run_face::{
 };
 
 pub use service::{AuthProvisionService, ProvisionError, SystemDefaultFilesystemAdopter};
+
+// ACP service-token verification for the run-admission receive face (RFC 9068 + mTLS binding)
+pub use acp_service_token::{
+    AcpServicePrincipal, AcpServiceTokenConfig, AcpServiceTokenConfigError, AcpServiceTokenError,
+    AcpServiceTokenVerifier, DEFAULT_JWKS_CACHE_TTL, RUN_ADMISSION_RECEIVE_AUDIENCE, VerifiedClientLeaf,
+};
