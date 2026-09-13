@@ -38,6 +38,9 @@ http-body-util.workspace = true
 tower = { workspace = true, features = ["util"] }
 rustls.workspace = true
 tokio-rustls.workspace = true
+# Output manifest assembly (T0-RUN-EXECUTOR E2): NFC check for the
+# rsm-portable-relative-path-v1 canonical path (locked 0.1.25, already in tree).
+unicode-normalization = "0.1.25"
 rustls-pemfile.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true

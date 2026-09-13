@@ -17,6 +17,7 @@ mod run_dir;
 pub mod run_input_downlink;
 pub mod run_input_materialization;
 pub mod run_manifest_digest;
+pub mod run_output_assembly;
 pub mod run_output_uplink;
 mod runtime_completion;
 mod runtime_persistence;

@@ -28,6 +28,12 @@ use sha2::{Digest, Sha256};
 use crate::run_input_downlink::RunInputManifestMember;
 use crate::run_output_uplink::RunOutputManifest;
 
+/// The frozen ACP workspace-content-manifest format
+/// (`run_authority.WorkspaceManifestFormatV1`).
+pub const WORKSPACE_MANIFEST_FORMAT_V1: &str = "rsm-workspace-content-manifest-v1";
+/// The frozen ACP output-manifest format (`run_authority.OutputManifestFormatV1`).
+pub const OUTPUT_MANIFEST_FORMAT_V1: &str = "rsm-output-manifest-v1";
+
 /// A closed canonical value model covering exactly the shapes the manifest
 /// projections produce (the wire types carry no bools, nulls, or floats).
 /// Every variant has a canonical rendering, so canonicalization is
