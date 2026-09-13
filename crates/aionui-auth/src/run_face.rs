@@ -438,6 +438,42 @@ impl RunFaceClient {
             max_object_bytes: self.max_object_bytes,
         }))
     }
+
+    /// POST the executor-minted run output manifest to the run-terminal
+    /// uplink as a JSON exchange. Core is the authority here: ACP verifies
+    /// and persists, returning 201 with its persisted echo; a duplicate
+    /// identity is a 409, never an idempotent success. Every status is
+    /// surfaced with the raw body so the adapter can map the ACP error
+    /// envelope classes (404 unknown admission vs 404 referenced manifest
+    /// vs 409 duplicate vs 422 invalid) without the transport guessing.
+    pub async fn submit_output_manifest<S: serde::Serialize>(
+        &self,
+        manifest: &S,
+    ) -> Result<RunFaceJsonResponse, RunFaceTransportError> {
+        let mut url = self.base_url.clone();
+        {
+            let mut segments = url
+                .path_segments_mut()
+                .map_err(|_| RunFaceTransportError::Unavailable)?;
+            segments.pop_if_empty();
+            segments.push("api");
+            segments.push("team-workspace");
+            segments.push("v1");
+            segments.push("run-output-manifests");
+        }
+        let response = self
+            .authorize(self.http.post(url).json(manifest))
+            .send()
+            .await
+            .map_err(|_| RunFaceTransportError::Unavailable)?;
+        let status = response.status();
+        let body = response
+            .bytes()
+            .await
+            .map_err(|_| RunFaceTransportError::Unavailable)?
+            .to_vec();
+        Ok(RunFaceJsonResponse { status, body })
+    }
 }
 
 #[cfg(test)]
@@ -833,5 +869,141 @@ IUrSHo+XiZVMSDbjo6zFUsK/lMTCxmP7xiQh2htrRk7pvlyIOUzkQHlX
             url.as_str(),
             "https://acp.example/internal/api/team-workspace/v1/run-admissions/admission-1/input-objects/documents/input.txt"
         );
+    }
+
+    #[tokio::test]
+    async fn output_manifest_submits_exact_route_token_and_body_and_echoes_201() {
+        let seen = std::sync::Arc::new(Mutex::new(None::<(String, String, Option<String>)>));
+        let seen_for_route = seen.clone();
+        let app = axum::Router::new().route(
+            "/internal/api/team-workspace/v1/run-output-manifests",
+            axum::routing::post(move |headers: axum::http::HeaderMap, body: String| {
+                let seen = seen_for_route.clone();
+                async move {
+                    seen.lock().unwrap().replace((
+                        "output-manifest".to_owned(),
+                        body,
+                        headers
+                            .get(axum::http::header::AUTHORIZATION)
+                            .and_then(|value| value.to_str().ok().map(str::to_owned)),
+                    ));
+                    (
+                        axum::http::StatusCode::CREATED,
+                        axum::Json(serde_json::json!({
+                            "output_manifest_id": "om-1",
+                            "manifest_format": "rsm.run.output.v1",
+                            "run_admission_id": "admission-1",
+                            "admission_version": 1,
+                            "run_id": "run-1",
+                            "attempt_id": "attempt-1",
+                            "owner_epoch": 1,
+                            "tenant_id": "tenant-1",
+                            "resource_organization_id": "org-1",
+                            "workspace_id": "ws-1",
+                            "input_base": {"kind": "workspace_manifest", "manifest_sha256": "a".repeat(64)},
+                            "input_manifest_sha256": "a".repeat(64),
+                            "captured_output_snapshot_sha256": "a".repeat(64),
+                            "members": [],
+                            "captured_at_ms": 1_760_000_000_000i64,
+                            "state": "persisted",
+                            "manifest_sha256": "a".repeat(64)
+                        })),
+                    )
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_test_identity(&dir);
+        let loopback = RunFaceClient::new(
+            RunFaceClientConfig::new_with_material(
+                format!("http://{addr}/internal"),
+                Duration::from_secs(2),
+                cert,
+                key,
+                AuthCenterTokenSecret::new("run-face-token"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let submission = serde_json::json!({
+            "output_manifest_id": "om-1",
+            "manifest_format": "rsm.run.output.v1",
+            "run_admission_id": "admission-1",
+            "admission_version": 1,
+            "run_id": "run-1",
+            "attempt_id": "attempt-1",
+            "owner_epoch": 1,
+            "tenant_id": "tenant-1",
+            "resource_organization_id": "org-1",
+            "workspace_id": "ws-1",
+            "input_base": {"kind": "workspace_manifest", "manifest_sha256": "a".repeat(64)},
+            "input_manifest_sha256": "a".repeat(64),
+            "captured_output_snapshot_sha256": "a".repeat(64),
+            "members": [],
+            "captured_at_ms": 1_760_000_000_000i64,
+            "state": "terminal",
+            "manifest_sha256": "a".repeat(64)
+        });
+        let response = match loopback.submit_output_manifest(&submission).await {
+            Ok(response) => response,
+            Err(error) => panic!("submission failed: {error}"),
+        };
+        assert_eq!(response.status, StatusCode::CREATED);
+        let echoed: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(echoed["state"], "persisted");
+        assert_eq!(echoed["output_manifest_id"], "om-1");
+
+        let (route, body, authorization) = seen.lock().unwrap().take().unwrap();
+        assert_eq!(route, "output-manifest");
+        let received: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(received, submission, "submission body must arrive verbatim");
+        assert_eq!(authorization.as_deref(), Some("Bearer run-face-token"));
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn output_manifest_rejection_carries_envelope_status_and_body() {
+        let app = axum::Router::new().route(
+            "/internal/api/team-workspace/v1/run-output-manifests",
+            axum::routing::post(|| async {
+                (
+                    axum::http::StatusCode::CONFLICT,
+                    axum::Json(serde_json::json!({"code": "run_output_manifest_conflict"})),
+                )
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_test_identity(&dir);
+        let loopback = RunFaceClient::new(
+            RunFaceClientConfig::new_with_material(
+                format!("http://{addr}/internal"),
+                Duration::from_secs(2),
+                cert,
+                key,
+                AuthCenterTokenSecret::new("run-face-token"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let response = match loopback.submit_output_manifest(&serde_json::json!({"x": 1})).await {
+            Ok(response) => response,
+            Err(error) => panic!("submission failed: {error}"),
+        };
+        assert_eq!(response.status, StatusCode::CONFLICT);
+        let envelope: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(envelope["code"], "run_output_manifest_conflict");
+
+        server.abort();
     }
 }
