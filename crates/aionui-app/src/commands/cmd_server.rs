@@ -246,6 +246,11 @@ pub(crate) async fn run_server(
     let addr = bound.addr;
     info!(elapsed_ms = boot.elapsed().as_millis(), "Server listening on {addr}");
 
+    // The ACP run admission receive face (opt-in, fail-closed env family) is
+    // started before the readiness marker: if it is enabled but cannot start,
+    // startup aborts and AionUi never observes a false "ready".
+    super::run_admission_receive::start_run_admission_receive_face(&services).await?;
+
     let runtime_prepare_service = RuntimePrepareService::new(services.event_bus.clone());
     tokio::spawn(async move {
         let scope = RuntimeStatusScope {

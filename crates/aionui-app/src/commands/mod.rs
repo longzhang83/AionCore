@@ -16,6 +16,7 @@ pub(crate) mod cmd_team_stdio;
 pub(crate) mod config_capabilities;
 pub(crate) mod diagnose_capabilities;
 pub(crate) mod error;
+pub(crate) mod run_admission_receive;
 pub(crate) mod team_capabilities;
 
 pub(crate) use cmd_antigravity_hook::run_antigravity_hook;

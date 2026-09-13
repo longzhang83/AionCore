@@ -2,7 +2,8 @@ crates/aionui-auth/src/run_face.rs:private-key:472
 crates/aionui-auth/src/acp_service_token_test.rs:private-key:45
 crates/aionui-auth/src/acp_service_token_test.rs:private-key:65
 crates/aionui-auth/src/acp_service_token_test.rs:private-key:72
-crates/aionui-conversation/src/run_admission_receive_test.rs:private-key:40
 crates/aionui-db/tests/run_admission_repository.rs:generic-api-key:20
 crates/aionui-db/tests/run_admission_repository.rs:generic-api-key:44
-crates/aionui-conversation/src/run_admission_receive_test.rs:generic-api-key:613
+crates/aionui-conversation/src/run_admission_test_support.rs:private-key:95
+crates/aionui-conversation/src/run_admission_test_support.rs:private-key:115
+crates/aionui-conversation/src/run_admission_test_support.rs:private-key:126

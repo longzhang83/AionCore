@@ -33,14 +33,20 @@ hex.workspace = true
 # UUIDv4 idempotency-key validation + bounded body reads.
 uuid.workspace = true
 http-body-util.workspace = true
+# B2b dedicated internal mTLS listener: TLS accept loop + per-connection
+# HTTP/1.1 serving of the receive-face router.
+tower = { workspace = true, features = ["util"] }
+rustls.workspace = true
+tokio-rustls.workspace = true
+rustls-pemfile.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
 tracing-subscriber.workspace = true
 sqlx.workspace = true
-# Router-level tests drive the service directly through tower::ServiceExt.
-tower = { workspace = true, features = ["util"] }
 wiremock.workspace = true
 # Admission tests mint RS256 ACP service tokens like the B1 verifier tests.
 jsonwebtoken.workspace = true
