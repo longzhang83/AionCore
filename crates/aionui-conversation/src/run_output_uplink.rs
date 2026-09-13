@@ -14,7 +14,7 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
-use crate::run_input_downlink::RunContentIdentity;
+use crate::run_input_downlink::{RunContentIdentity, RunInputManifestMember};
 
 /// One endpoint of a content diff (`run_authority.ContentState`): a kind plus
 /// the pinned content identity when the state references actual content.
@@ -100,8 +100,113 @@ pub trait RunOutputUplink: Send + Sync {
     ) -> Result<RunOutputManifest, RunOutputUplinkError>;
 }
 
+/// Compute the exact output delta between the admission-bound input manifest
+/// and the captured output snapshot (T0-RUN-EXECUTOR Slice E1).
+///
+/// This is the mint-side mirror of the ACP acceptor's
+/// `validateExactDelta`: members appear in byte-order-sorted resource-path
+/// order, and every member is exactly one of —
+/// - `add`/`upsert` (absent → present): a path only in the snapshot;
+/// - `delete`/`delete` (present → absent): a path only in the input;
+/// - `modify`/`upsert` (present → present, differing content identity).
+///
+/// A path present on both sides with identical content produces no member.
+/// Duplicate resource paths follow the Go map semantics (last entry wins for
+/// content) — but the input materialization adapter rejects duplicates
+/// upstream, so verified manifests never exercise that branch. The caller
+/// supplies the `output_member_id` minter because member ids enter the
+/// canonical digest; production mints crypto-random UUIDv4 ids.
+pub fn compute_exact_output_members_with_ids(
+    input: &[RunInputManifestMember],
+    captured: &[RunInputManifestMember],
+    member_id: impl FnMut() -> String,
+) -> Vec<RunOutputManifestMember> {
+    let mut input_by_path: std::collections::HashMap<&str, &RunContentIdentity> =
+        std::collections::HashMap::with_capacity(input.len());
+    let mut captured_by_path: std::collections::HashMap<&str, &RunContentIdentity> =
+        std::collections::HashMap::with_capacity(captured.len());
+    let mut paths: Vec<&str> = Vec::with_capacity(input.len() + captured.len());
+    for member in input {
+        input_by_path.insert(member.resource_path.as_str(), &member.content);
+        paths.push(member.resource_path.as_str());
+    }
+    for member in captured {
+        captured_by_path.insert(member.resource_path.as_str(), &member.content);
+        if !input_by_path.contains_key(member.resource_path.as_str()) {
+            paths.push(member.resource_path.as_str());
+        }
+    }
+    // Byte-order comparison — the Go acceptor sorts with strings.Compare,
+    // and member order is part of the canonical digest.
+    paths.sort_unstable();
+
+    let mut member_id = member_id;
+    paths
+        .into_iter()
+        .filter_map(|path| {
+            let base = input_by_path.get(path).copied();
+            let current = captured_by_path.get(path).copied();
+            let change = match (base, current) {
+                (None, Some(current)) => RunOutputMemberChange {
+                    change_kind: "add".to_owned(),
+                    operation: "upsert".to_owned(),
+                    base_content: RunContentState {
+                        kind: "absent".to_owned(),
+                        content: None,
+                    },
+                    output_content: RunContentState {
+                        kind: "present".to_owned(),
+                        content: Some(current.clone()),
+                    },
+                },
+                (Some(base), None) => RunOutputMemberChange {
+                    change_kind: "delete".to_owned(),
+                    operation: "delete".to_owned(),
+                    base_content: RunContentState {
+                        kind: "present".to_owned(),
+                        content: Some(base.clone()),
+                    },
+                    output_content: RunContentState {
+                        kind: "absent".to_owned(),
+                        content: None,
+                    },
+                },
+                (Some(base), Some(current)) if base != current => RunOutputMemberChange {
+                    change_kind: "modify".to_owned(),
+                    operation: "upsert".to_owned(),
+                    base_content: RunContentState {
+                        kind: "present".to_owned(),
+                        content: Some(base.clone()),
+                    },
+                    output_content: RunContentState {
+                        kind: "present".to_owned(),
+                        content: Some(current.clone()),
+                    },
+                },
+                _ => return None,
+            };
+            Some(RunOutputManifestMember {
+                output_member_id: member_id(),
+                resource_path: path.to_owned(),
+                change,
+            })
+        })
+        .collect()
+}
+
+/// [`compute_exact_output_members_with_ids`] with crypto-random UUIDv4
+/// member ids (the production minter).
+pub fn compute_exact_output_members(
+    input: &[RunInputManifestMember],
+    captured: &[RunInputManifestMember],
+) -> Vec<RunOutputManifestMember> {
+    compute_exact_output_members_with_ids(input, captured, || uuid::Uuid::new_v4().to_string())
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
     const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -257,5 +362,111 @@ mod tests {
         let reserialized = serde_json::to_value(&parsed).unwrap();
         assert_eq!(reserialized["state"], "persisted");
         assert!(reserialized["input_base"].get("revision_id").is_none());
+    }
+
+    fn ws_member(resource_path: &str, digest: &str, size: i64) -> RunInputManifestMember {
+        RunInputManifestMember {
+            resource_path: resource_path.to_owned(),
+            content: RunContentIdentity {
+                content_id: resource_path.to_owned(),
+                plaintext_sha256: digest.to_owned(),
+                plaintext_size: size,
+            },
+        }
+    }
+
+    #[test]
+    fn exact_delta_emits_add_delete_modify_and_skips_noop() {
+        let input = vec![
+            ws_member("kept.txt", SHA_B, 5),
+            ws_member("removed.txt", SHA_B, 5),
+            ws_member("changed.txt", SHA_B, 5),
+        ];
+        let captured = vec![
+            ws_member("kept.txt", SHA_B, 5),
+            ws_member("changed.txt", SHA_A, 9),
+            ws_member("reports/new.txt", SHA_B, 5),
+        ];
+
+        let members = compute_exact_output_members_with_ids(&input, &captured, || next_id().to_string());
+
+        // Byte-order path order: "removed.txt" < "reports/new.txt" ('m' < 'p').
+        // kept.txt is identical on both sides: no member, not a no-op modify.
+        let paths: Vec<&str> = members.iter().map(|m| m.resource_path.as_str()).collect();
+        assert_eq!(paths, vec!["changed.txt", "removed.txt", "reports/new.txt"]);
+
+        assert_eq!(members[0].change.change_kind, "modify");
+        assert_eq!(members[0].change.operation, "upsert");
+        assert_eq!(
+            members[0]
+                .change
+                .base_content
+                .content
+                .as_ref()
+                .unwrap()
+                .plaintext_sha256,
+            SHA_B
+        );
+        assert_eq!(
+            members[0]
+                .change
+                .output_content
+                .content
+                .as_ref()
+                .unwrap()
+                .plaintext_sha256,
+            SHA_A
+        );
+
+        assert_eq!(members[1].change.change_kind, "delete");
+        assert_eq!(members[1].change.operation, "delete");
+        assert!(members[1].change.base_content.content.is_some());
+        assert!(members[1].change.output_content.content.is_none());
+
+        assert_eq!(members[2].change.change_kind, "add");
+        assert_eq!(members[2].change.operation, "upsert");
+        assert!(members[2].change.base_content.content.is_none());
+        assert_eq!(members[2].change.output_content.kind, "present");
+
+        // Every member got a distinct id from the minter (ids enter the digest).
+        let ids: HashSet<&str> = members.iter().map(|m| m.output_member_id.as_str()).collect();
+        assert_eq!(ids.len(), 3);
+    }
+
+    fn next_id() -> u32 {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(1);
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    }
+
+    #[test]
+    fn exact_delta_matches_the_go_acceptor_sort_semantics() {
+        // paths.sort uses byte order (strings.Compare), NOT UTF-16 order.
+        // "a/b" < "a.txt" in byte order ('/' 0x2F < '.' 0x2E is FALSE —
+        // actually '.' 0x2E < '/' 0x2F, so "a.txt" sorts first), and this is
+        // the order the ACP acceptor expects member-by-member.
+        let input = Vec::new();
+        let captured = vec![ws_member("a/b", SHA_B, 5), ws_member("a.txt", SHA_B, 5)];
+        let members = compute_exact_output_members_with_ids(&input, &captured, || "m".to_owned());
+        let paths: Vec<&str> = members.iter().map(|m| m.resource_path.as_str()).collect();
+        assert_eq!(paths, vec!["a.txt", "a/b"]);
+    }
+
+    #[test]
+    fn exact_delta_last_wins_for_duplicate_captured_paths() {
+        // Go mirror semantics: a duplicated captured path keeps the last
+        // content for the map, but every paths entry emits a member — the
+        // materialization adapter rejects duplicates upstream, so verified
+        // manifests never exercise this branch.
+        let input = Vec::new();
+        let captured = vec![ws_member("dup.txt", SHA_A, 1), ws_member("dup.txt", SHA_B, 2)];
+        let members = compute_exact_output_members_with_ids(&input, &captured, || "m".to_owned());
+        assert_eq!(members.len(), 2);
+        for member in &members {
+            assert_eq!(
+                member.change.output_content.content.as_ref().unwrap().plaintext_sha256,
+                SHA_B
+            );
+        }
     }
 }
