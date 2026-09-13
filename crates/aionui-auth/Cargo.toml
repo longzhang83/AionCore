@@ -31,3 +31,4 @@ chrono.workspace = true
 http-body-util.workspace = true
 tower = { workspace = true, features = ["util"] }
 wiremock.workspace = true
+tempfile.workspace = true

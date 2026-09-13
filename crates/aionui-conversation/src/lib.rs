@@ -12,6 +12,7 @@ pub mod response_middleware;
 pub mod routes;
 pub mod routes_aux;
 mod run_dir;
+pub mod run_input_downlink;
 mod runtime_completion;
 mod runtime_persistence;
 pub mod runtime_state;

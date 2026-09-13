@@ -15,6 +15,7 @@ mod password;
 pub mod qr_token;
 mod rate_limit;
 mod routes;
+mod run_face;
 mod schedule_bff;
 mod security;
 mod service;
@@ -95,5 +96,11 @@ pub use device_registration::{
 pub use routes::{AuthRouterState, SessionRevokedHook, auth_routes};
 
 pub use schedule_bff::{ScheduleBffConfig, ScheduleBffConfigError};
+
+// Agent Control Plane run-face machine client (mTLS + service token)
+pub use run_face::{
+    MAX_OBJECT_BYTES, RunFaceClient, RunFaceClientConfig, RunFaceConfigError, RunFaceJsonResponse, RunFaceObjectStream,
+    RunFaceTransportError,
+};
 
 pub use service::{AuthProvisionService, ProvisionError, SystemDefaultFilesystemAdopter};
