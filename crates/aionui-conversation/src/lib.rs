@@ -11,6 +11,7 @@ mod message_persistence;
 pub mod response_middleware;
 pub mod routes;
 pub mod routes_aux;
+pub mod run_admission_receive;
 mod run_dir;
 pub mod run_input_downlink;
 pub mod run_output_uplink;
@@ -48,3 +49,7 @@ mod service_test;
 #[cfg(test)]
 #[path = "run_dir_test.rs"]
 mod run_dir_test;
+
+#[cfg(test)]
+#[path = "run_admission_receive_test.rs"]
+mod run_admission_receive_test;

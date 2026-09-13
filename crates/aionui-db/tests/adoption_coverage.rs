@@ -44,6 +44,10 @@ const GLOBAL_TABLES: &[(&str, &str)] = &[
         "auth_center_directory_sync_states",
         "machine-level directory sync state",
     ),
+    // Run admissions pushed by the Agent Control Plane (T0-ACP-ADMISSION-
+    // DELIVERY): immutable authority records addressed to the Core service
+    // principal, not to any Core user — adoption must not touch them.
+    ("acp_run_admissions", "machine-level ACP-pushed run authority records"),
 ];
 
 /// Tables whose `user_id` column is NOT a Core-user ownership column — it

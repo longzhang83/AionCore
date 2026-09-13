@@ -596,6 +596,8 @@ dependencies = [
  "chrono",
  "futures-util",
  "hex",
+ "http-body-util",
+ "jsonwebtoken 9.3.1",
  "regex",
  "serde",
  "serde_json",
@@ -604,9 +606,12 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "walkdir",
+ "wiremock",
 ]
 
 [[package]]

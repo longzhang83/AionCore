@@ -29,12 +29,21 @@ thiserror.workspace = true
 walkdir.workspace = true
 sha2.workspace = true
 hex.workspace = true
+# Run admission receive face (T0-ACP-ADMISSION-DELIVERY B2a): canonical
+# UUIDv4 idempotency-key validation + bounded body reads.
+uuid.workspace = true
+http-body-util.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
 tracing-subscriber.workspace = true
 sqlx.workspace = true
+# Router-level tests drive the service directly through tower::ServiceExt.
+tower = { workspace = true, features = ["util"] }
+wiremock.workspace = true
+# Admission tests mint RS256 ACP service tokens like the B1 verifier tests.
+jsonwebtoken.workspace = true
 # Enable the `AgentInstance::Mock` variant so tests can build fake agents
 # through the trait-object escape hatch without spawning real CLI processes.
 aionui-ai-agent = { workspace = true, features = ["test-support"] }
