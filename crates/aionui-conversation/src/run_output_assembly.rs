@@ -161,7 +161,10 @@ pub fn assemble_run_output(
 /// which is what Rust's `to_lowercase` implements; exotic-codepoint
 /// divergence fails closed (ACP re-canonicalizes with its own authority and
 /// rejects what this pre-screen wrongly passed).
-fn canonical_resource_path(value: &str) -> Result<String, ()> {
+/// Shared pre-mirror of `run_authority.CanonicalResourcePath`. Returns the
+/// lowercased alias (the dedup identity); callers that author members keep
+/// their original canonical string and use the `Ok` value only for aliasing.
+pub(crate) fn canonical_resource_path(value: &str) -> Result<String, ()> {
     if value.is_empty()
         || value.len() > MAX_CANONICAL_PATH_BYTES
         || value.starts_with('/')
