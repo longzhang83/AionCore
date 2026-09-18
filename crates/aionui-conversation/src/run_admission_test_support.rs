@@ -15,12 +15,17 @@ use wiremock::{Mock, ResponseTemplate};
 
 use crate::run_admission_receive::RunAdmissionRecord;
 use aionui_auth::VerifiedClientLeaf;
-use aionui_db::{DbError, IRunAdmissionRepository, NewRunAdmission, RunAdmissionOutcome};
+use aionui_db::{DbError, IRunAdmissionRepository, NewRunAdmission, RunAdmissionOutcome, StoredRunAdmission};
 
 /// In-memory write-once admission store shared by the receive-face tests.
 #[derive(Default)]
 pub(crate) struct MemoryAdmissionStore {
     pub(crate) held: StdMutex<HashMap<String, String>>,
+    /// Insertion order of `held` identities — `list` mirrors the SQLite
+    /// store's delivery-order contract. (The fake's read surface is
+    /// `record_json`; `idempotency_key` round-tripping is covered by the
+    /// SQLite integration tests.)
+    pub(crate) delivery_order: StdMutex<Vec<String>>,
     pub(crate) fail_admissions: AtomicBool,
 }
 
@@ -35,7 +40,24 @@ impl IRunAdmissionRepository for MemoryAdmissionStore {
             return Ok(RunAdmissionOutcome::Duplicate);
         }
         held.insert(admission.run_admission_id.clone(), admission.record_json.clone());
+        self.delivery_order
+            .lock()
+            .expect("store lock")
+            .push(admission.run_admission_id.clone());
         Ok(RunAdmissionOutcome::Admitted)
+    }
+
+    async fn list(&self) -> Result<Vec<StoredRunAdmission>, DbError> {
+        let order = self.delivery_order.lock().expect("store lock");
+        let held = self.held.lock().expect("store lock");
+        Ok(order
+            .iter()
+            .map(|run_admission_id| StoredRunAdmission {
+                run_admission_id: run_admission_id.clone(),
+                idempotency_key: String::new(),
+                record_json: held[run_admission_id].clone(),
+            })
+            .collect())
     }
 }
 

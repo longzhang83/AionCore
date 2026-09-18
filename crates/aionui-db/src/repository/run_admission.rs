@@ -32,13 +32,28 @@ pub enum RunAdmissionOutcome {
     Duplicate,
 }
 
+/// A stored admission row exposed to read paths (run-consumer discovery,
+/// T0-RUN-CONSUMER Slice R2). `record_json` is the verbatim canonical
+/// projection persisted at admit time — the wire truth, re-parsed by readers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredRunAdmission {
+    pub run_admission_id: String,
+    pub idempotency_key: String,
+    pub record_json: String,
+}
+
 /// Run admission persistence for the Core receive face of the ACP
 /// admission push (T0-ACP-ADMISSION-DELIVERY).
 ///
-/// The store is write-once: admissions are immutable authority records and a
-/// repeated `run_admission_id` is a duplicate outcome, not an update.
+/// Admissions are immutable authority records: a repeated `run_admission_id`
+/// is a duplicate outcome, not an update, and stored records never change.
 #[async_trait::async_trait]
 pub trait IRunAdmissionRepository: Send + Sync {
     /// Attempts to persist the admission atomically.
     async fn admit(&self, admission: &NewRunAdmission) -> Result<RunAdmissionOutcome, DbError>;
+
+    /// Lists all stored admissions in delivery order (insertion order).
+    /// Consumers filter by their own progress state — the store records
+    /// delivery, not consumption.
+    async fn list(&self) -> Result<Vec<StoredRunAdmission>, DbError>;
 }

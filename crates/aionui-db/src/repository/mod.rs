@@ -61,7 +61,7 @@ pub use oauth_token::IOAuthTokenRepository;
 pub use project::IProjectStore;
 pub use provider::IProviderRepository;
 pub use remote_agent::IRemoteAgentRepository;
-pub use run_admission::{IRunAdmissionRepository, NewRunAdmission, RunAdmissionOutcome};
+pub use run_admission::{IRunAdmissionRepository, NewRunAdmission, RunAdmissionOutcome, StoredRunAdmission};
 pub use settings::ISettingsRepository;
 pub use skill::ISkillRepository;
 pub use sqlite_acp_session::SqliteAcpSessionRepository;

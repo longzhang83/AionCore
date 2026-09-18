@@ -7,12 +7,26 @@
 //! uncapturable state fails typed and local instead of producing a manifest
 //! the ACP acceptor would reject.
 //!
-//! content_id contract (frozen in the coordination doc's card-split record):
-//! Core mints time-ordered UUIDv7 ids at capture time; the ACP
-//! captured-snapshot registration card accepts them as opaque ids (shape
-//! validation only) and never re-derives object keys from them. Content
-//! identity is carried by `plaintext_sha256` + `plaintext_size`; two captures
-//! of identical bytes intentionally mint distinct ids.
+//! content_id contract (amended in the coordination doc's R2 record): the
+//! exact delta (E1) and its ACP mirror (`validator.go` `validateExactDelta`)
+//! compare full content identity INCLUDING content_id — Go struct equality.
+//! Two consequences for capture:
+//!
+//! 1. Unchanged content must keep the input manifest's content_id. Capture
+//!    therefore reuses the pinned input member's content_id whenever a
+//!    captured file's `(plaintext_sha256, plaintext_size)` matches an input
+//!    member's; otherwise the file is genuinely new content and gets a
+//!    CONTENT-ADDRESSED id (`content_id = plaintext_sha256`). Without the
+//!    reuse rule, id-namespace drift (ACP object keys on the input side vs
+//!    Core minted ids on the capture side) would report every untouched
+//!    file as a modify and the manifest would misrepresent every run.
+//! 2. The minted digest ids make the S card's
+//!    `captured-objects/{content_id}` route digest-verifiable by
+//!    construction and let ACP's content-addressed pool dedup identical
+//!    bytes. (If an input manifest carried two members with equal
+//!    (sha, size) under different ids, reuse resolves last-wins in manifest
+//!    order — the registered snapshot pins the choice, so the ACP delta
+//!    recompute stays consistent.)
 //!
 //! Fail-closed posture:
 //! - symlinks and other non-regular entries are rejected — the ACP manifest
@@ -29,8 +43,9 @@ use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Component, Path};
 
+use std::collections::HashMap;
+
 use sha2::{Digest, Sha256};
-use uuid::Uuid;
 use walkdir::WalkDir;
 
 use crate::run_input_downlink::{RunContentIdentity, RunInputManifestMember};
@@ -58,12 +73,27 @@ const READ_BUFFER_BYTES: usize = 64 * 1024;
 
 /// Captures the full current state of `root` as the member list
 /// `assemble_run_output` turns into the registered snapshot and the exact
-/// delta. Members come back sorted by path byte order — the order the
-/// assembly re-validates. Scope enforcement is NOT capture's job: the whole
-/// state is captured truthfully and `assemble_run_output` pre-mirrors
+/// delta. `input` is the admission's pinned input manifest members — the
+/// reuse source for unchanged content identities (see the module docs).
+/// Members come back sorted by path byte order — the order the assembly
+/// re-validates. Scope enforcement is NOT capture's job: the whole state is
+/// captured truthfully and `assemble_run_output` pre-mirrors
 /// `validateOutputScope` (including the rule that a deleted out-of-scope file
 /// is an out-of-scope change and must fail the run).
-pub fn capture_workspace_state(root: &Path) -> Result<Vec<RunInputManifestMember>, RunCaptureError> {
+pub fn capture_workspace_state(
+    root: &Path,
+    input: &[RunInputManifestMember],
+) -> Result<Vec<RunInputManifestMember>, RunCaptureError> {
+    // (digest, size) → the pinned object id that already holds this content
+    // in ACP's store. Last member wins in manifest order (Go map semantics).
+    let mut input_content_ids: HashMap<(&str, i64), &str> = HashMap::with_capacity(input.len());
+    for member in input {
+        input_content_ids.insert(
+            (member.content.plaintext_sha256.as_str(), member.content.plaintext_size),
+            member.content.content_id.as_str(),
+        );
+    }
+
     let metadata = std::fs::metadata(root).map_err(|error| match error.kind() {
         std::io::ErrorKind::NotFound => RunCaptureError::Root(root.display().to_string()),
         _ => RunCaptureError::Io(error),
@@ -121,10 +151,16 @@ pub fn capture_workspace_state(root: &Path) -> Result<Vec<RunInputManifestMember
         let (plaintext_sha256, size) = digest_file(path)?;
         let plaintext_size =
             i64::try_from(size).map_err(|_| RunCaptureError::SizeOverflow(path.display().to_string()))?;
+        // Unchanged content keeps the pinned object id; new content is
+        // content-addressed. Either way the exact delta compares truthfully.
+        let content_id = match input_content_ids.get(&(plaintext_sha256.as_str(), plaintext_size)) {
+            Some(pinned) => (*pinned).to_owned(),
+            None => plaintext_sha256.clone(),
+        };
         members.push(RunInputManifestMember {
             resource_path: canonical,
             content: RunContentIdentity {
-                content_id: Uuid::now_v7().to_string(),
+                content_id,
                 plaintext_sha256,
                 plaintext_size,
             },
@@ -176,7 +212,7 @@ mod tests {
         create_file(dir.path(), ".hidden", b"dot");
         create_file(dir.path(), "a.txt", b"alpha");
 
-        let members = capture_workspace_state(dir.path()).expect("capture should succeed");
+        let members = capture_workspace_state(dir.path(), &[]).expect("capture should succeed");
 
         let paths: Vec<&str> = members.iter().map(|m| m.resource_path.as_str()).collect();
         assert_eq!(paths, vec![".hidden", "a.txt", "reports/summary.txt"]);
@@ -186,29 +222,27 @@ mod tests {
         assert_eq!(members[1].content.plaintext_sha256, expected_digest(b"alpha"));
         assert_eq!(members[2].content.plaintext_size, 7);
         assert_eq!(members[2].content.plaintext_sha256, expected_digest(b"summary"));
-        // content_id: opaque, bounded, a parseable UUID (v7 mint contract).
+        // content_id: content-addressed — equal to the plaintext digest.
         for member in &members {
-            let id = member.content.content_id.as_str();
-            assert!(!id.trim().is_empty() && id.len() <= 255);
-            Uuid::parse_str(id).expect("content_id must be a UUID");
+            assert_eq!(member.content.content_id, member.content.plaintext_sha256);
         }
     }
 
     #[test]
     fn empty_workspace_captures_an_empty_member_list() {
         let dir = tempfile::tempdir().unwrap();
-        let members = capture_workspace_state(dir.path()).expect("capture should succeed");
+        let members = capture_workspace_state(dir.path(), &[]).expect("capture should succeed");
         assert!(members.is_empty());
     }
 
     #[test]
     fn missing_or_non_directory_root_fails_closed() {
-        let error = capture_workspace_state(Path::new("/nonexistent-capture-root")).unwrap_err();
+        let error = capture_workspace_state(Path::new("/nonexistent-capture-root"), &[]).unwrap_err();
         assert!(matches!(error, RunCaptureError::Root(_)));
         let file = tempfile::tempdir().unwrap();
         let path = file.path().join("plain.txt");
         std::fs::write(&path, b"x").unwrap();
-        let error = capture_workspace_state(&path).unwrap_err();
+        let error = capture_workspace_state(&path, &[]).unwrap_err();
         assert!(matches!(error, RunCaptureError::Root(_)));
     }
 
@@ -219,7 +253,7 @@ mod tests {
         create_file(dir.path(), "real.txt", b"real");
         std::os::unix::fs::symlink("real.txt", dir.path().join("link.txt")).unwrap();
 
-        let error = capture_workspace_state(dir.path()).unwrap_err();
+        let error = capture_workspace_state(dir.path(), &[]).unwrap_err();
         assert!(matches!(error, RunCaptureError::UnsupportedEntry(_)));
     }
 
@@ -231,7 +265,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         create_file(dir.path(), "e\u{301}.txt", b"nfd");
 
-        let error = capture_workspace_state(dir.path()).unwrap_err();
+        let error = capture_workspace_state(dir.path(), &[]).unwrap_err();
         assert!(matches!(error, RunCaptureError::NonCanonicalPath(_)));
     }
 
@@ -248,24 +282,65 @@ mod tests {
         let path = dir.path().join(OsStr::from_bytes(b"\xff.txt"));
         std::fs::write(path, b"raw").unwrap();
 
-        let error = capture_workspace_state(dir.path()).unwrap_err();
+        let error = capture_workspace_state(dir.path(), &[]).unwrap_err();
         assert!(matches!(error, RunCaptureError::NonUtf8Path(_)));
     }
 
     #[test]
-    fn repeated_capture_keeps_content_identity_and_mints_fresh_ids() {
-        // Two captures of an unchanged tree mint distinct content_ids (the
-        // object identity is per capture) while digests, sizes and paths —
-        // the content identity — stay identical.
+    fn repeated_capture_is_fully_identity_stable() {
+        // Two captures of an unchanged tree agree on the FULL member
+        // identity — path, digest, size, and the content-addressed id. This
+        // is what keeps the exact delta's no-op suppression truthful across
+        // captures (and what the consumer's drift check relies on).
         let dir = tempfile::tempdir().unwrap();
         create_file(dir.path(), "out/result.bin", &[1u8, 2, 3, 4]);
 
-        let first = capture_workspace_state(dir.path()).unwrap();
-        let second = capture_workspace_state(dir.path()).unwrap();
+        let first = capture_workspace_state(dir.path(), &[]).unwrap();
+        let second = capture_workspace_state(dir.path(), &[]).unwrap();
 
-        assert_eq!(first[0].resource_path, second[0].resource_path);
-        assert_eq!(first[0].content.plaintext_sha256, second[0].content.plaintext_sha256);
-        assert_eq!(first[0].content.plaintext_size, second[0].content.plaintext_size);
-        assert_ne!(first[0].content.content_id, second[0].content.content_id);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn different_content_yields_different_content_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        create_file(dir.path(), "a.txt", b"one");
+        create_file(dir.path(), "b.txt", b"two");
+
+        let members = capture_workspace_state(dir.path(), &[]).unwrap();
+
+        assert_eq!(members.len(), 2);
+        assert_ne!(members[0].content.content_id, members[1].content.content_id);
+    }
+
+    #[test]
+    fn unchanged_content_reuses_the_pinned_input_identity() {
+        // The exact delta compares full identity including content_id, so an
+        // unchanged file MUST keep the input manifest's object id — otherwise
+        // an untouched file reports as a modify. A genuinely new file gets
+        // the content-addressed digest id.
+        let dir = tempfile::tempdir().unwrap();
+        create_file(dir.path(), "docs/a.txt", b"alpha");
+        create_file(dir.path(), "out/new.txt", b"new");
+
+        let pinned = vec![ws_member("docs/a.txt", "obj-a", &expected_digest(b"alpha"), 5)];
+        let members = capture_workspace_state(dir.path(), &pinned).unwrap();
+
+        assert_eq!(members.len(), 2);
+        let unchanged = members.iter().find(|m| m.resource_path == "docs/a.txt").unwrap();
+        assert_eq!(unchanged.content.content_id, "obj-a");
+        let added = members.iter().find(|m| m.resource_path == "out/new.txt").unwrap();
+        assert_eq!(added.content.content_id, added.content.plaintext_sha256);
+    }
+
+    fn ws_member(resource_path: &str, content_id: &str, digest: &str, size: i64) -> RunInputManifestMember {
+        RunInputManifestMember {
+            resource_path: resource_path.to_owned(),
+            content: RunContentIdentity {
+                content_id: content_id.to_owned(),
+                plaintext_sha256: digest.to_owned(),
+                plaintext_size: size,
+            },
+        }
     }
 }

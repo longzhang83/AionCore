@@ -66,3 +66,18 @@ async fn distinct_identities_are_independent() {
         RunAdmissionOutcome::Duplicate
     );
 }
+
+#[tokio::test]
+async fn list_returns_stored_admissions_in_delivery_order() {
+    let r = repo().await;
+    assert!(r.list().await.unwrap().is_empty());
+
+    r.admit(&admission("adm-2")).await.unwrap();
+    r.admit(&admission("adm-1")).await.unwrap();
+
+    let rows = r.list().await.unwrap();
+    let ids: Vec<&str> = rows.iter().map(|row| row.run_admission_id.as_str()).collect();
+    assert_eq!(ids, vec!["adm-2", "adm-1"]);
+    // The stored projection is the verbatim wire truth, not a re-rendering.
+    assert_eq!(rows[0].record_json, r#"{"run_admission_id":"adm-2"}"#);
+}

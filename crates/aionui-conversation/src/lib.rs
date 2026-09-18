@@ -15,6 +15,7 @@ pub mod run_acp_transport;
 pub mod run_admission_listener;
 pub mod run_admission_receive;
 pub mod run_capture;
+pub mod run_consumer;
 mod run_dir;
 pub mod run_input_downlink;
 pub mod run_input_materialization;

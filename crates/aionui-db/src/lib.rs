@@ -61,8 +61,8 @@ pub use repository::{
     SqliteChannelRepository, SqliteClientPreferenceRepository, SqliteConversationRepository, SqliteCronRepository,
     SqliteFeedbackDiagnosticsRepository, SqliteIamRepository, SqliteMcpServerRepository, SqliteOAuthTokenRepository,
     SqliteProjectStore, SqliteProviderRepository, SqliteRemoteAgentRepository, SqliteRunAdmissionRepository,
-    SqliteSettingsRepository, SqliteSkillRepository, SqliteTeamRepository, SqliteUserRepository, SyncCounts,
-    UpdateOrganizationParams, UpdateUserParams, UpsertExternalOrganizationParams, UpsertExternalUserParams,
+    SqliteSettingsRepository, SqliteSkillRepository, SqliteTeamRepository, SqliteUserRepository, StoredRunAdmission,
+    SyncCounts, UpdateOrganizationParams, UpdateUserParams, UpsertExternalOrganizationParams, UpsertExternalUserParams,
 };
 
 // Re-export sqlx pool type for downstream crates

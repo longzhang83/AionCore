@@ -1,7 +1,9 @@
 use sqlx::SqlitePool;
 
 use crate::error::DbError;
-use crate::repository::run_admission::{IRunAdmissionRepository, NewRunAdmission, RunAdmissionOutcome};
+use crate::repository::run_admission::{
+    IRunAdmissionRepository, NewRunAdmission, RunAdmissionOutcome, StoredRunAdmission,
+};
 
 /// SQLite-backed implementation of [`IRunAdmissionRepository`].
 #[derive(Clone, Debug)]
@@ -49,5 +51,23 @@ impl IRunAdmissionRepository for SqliteRunAdmissionRepository {
             }
             Err(error) => Err(error.into()),
         }
+    }
+
+    async fn list(&self) -> Result<Vec<StoredRunAdmission>, DbError> {
+        let rows = sqlx::query_as::<_, (String, String, String)>(
+            "SELECT run_admission_id, idempotency_key, record_json \
+             FROM acp_run_admissions ORDER BY rowid",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(run_admission_id, idempotency_key, record_json)| StoredRunAdmission {
+                run_admission_id,
+                idempotency_key,
+                record_json,
+            })
+            .collect())
     }
 }
